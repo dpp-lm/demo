@@ -473,6 +473,7 @@ function renderTable() {
 // ---------------------------------------------------------------- live mode
 let worker = null;
 function runLive() {
+  navigator.storage?.persist?.().catch(() => {}); // ask the browser not to evict downloaded models
   worker ??= new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   const N = clampInt($('#live-N').value, 2, 200), Tp = Math.min(2, Math.max(0.2, +$('#live-Tp').value || 1));
   const maxNewTokens = clampInt($('#live-max').value, 8, 256);
@@ -503,6 +504,7 @@ function runLive() {
       markExample(null);
       setPool(data.pool, phi);
       done();
+      window.__refreshCache?.();
     }
   };
   const done = () => { $('#live-go').hidden = false; $('#live-stop').hidden = true; };
@@ -533,21 +535,51 @@ function wire() {
   // Model picker: default to Gemma 3 1B with WebGPU, the small Qwen without; remember the choice.
   // Models marked cpu: null need a GPU with float16 support (WebGPU 'shader-f16').
   let hasGPU = false;
+  let cached = new Set();
   const fillModels = () => {
-    $('#model').innerHTML = MODELS.map((m) => `<option value="${m.key}" ${!hasGPU && !m.cpu ? 'disabled' : ''}>${m.name} · ${(m.gpu / 1000).toFixed(1)} GB${m.cpu ? '' : ' · GPU only'}</option>`).join('');
+    const keep = $('#model').value;
+    $('#model').innerHTML = MODELS.map((m) => `<option value="${m.key}" ${!hasGPU && !m.cpu ? 'disabled' : ''}>${m.name} · ${cached.has(m.repo) ? 'downloaded' : `${(m.gpu / 1000).toFixed(1)} GB`}${m.cpu ? '' : ' · GPU only'}</option>`).join('');
+    if (keep && usable(keep)) { $('#model').value = keep; advSum(); modelNote(); return; }
     let saved = null;
     try { saved = localStorage.getItem('dpp-lm-model'); } catch {}
-    const usable = (k) => MODELS.some((m) => m.key === k && (hasGPU || m.cpu));
     $('#model').value = usable(saved) ? saved : hasGPU ? 'qwen3-1.7b' : 'qwen2.5-0.5b';
     advSum(); modelNote();
   };
+  const usable = (k) => MODELS.some((m) => m.key === k && (hasGPU || m.cpu));
   const modelNote = () => {
     const m = modelByKey($('#model').value);
-    $('#model-note').textContent = `Runs on your ${hasGPU ? 'GPU' : 'CPU'}. First use downloads about ${(m.gpu / 1000).toFixed(1)} GB; it is cached after that.`;
+    $('#model-note').textContent = cached.has(m.repo)
+      ? `Runs on your ${hasGPU ? 'GPU' : 'CPU'}. Already downloaded to this browser.`
+      : `Runs on your ${hasGPU ? 'GPU' : 'CPU'}. First use downloads about ${(m.gpu / 1000).toFixed(1)} GB; this browser keeps it for next time.`;
   };
+  // Which models are already in the browser's cache (transformers.js stores files under their URL).
+  const refreshCache = async () => {
+    try {
+      const keys = await (await caches.open('transformers-cache')).keys();
+      cached = new Set(MODELS.filter((m) => keys.some((r) => r.url.includes(`/${m.repo}/resolve/`) && /\/onnx\/model[^/]*\.onnx$/.test(r.url))).map((m) => m.repo));
+      const est = await navigator.storage?.estimate?.();
+      const gb = est?.usage ? est.usage / 1e9 : 0;
+      $('#cache-info').textContent = cached.size ? `${cached.size} model${cached.size > 1 ? 's' : ''} downloaded (${gb.toFixed(1)} GB).` : '';
+      $('#cache-clear').hidden = !cached.size;
+    } catch { cached = new Set(); }
+    fillModels();
+  };
+  // Two-step clear: the first click asks, the second deletes.
+  let armed = false;
+  $('#cache-clear').onclick = async (e) => {
+    e.stopPropagation();
+    if (!armed) { armed = true; $('#cache-clear').textContent = 'Click again to delete them'; setTimeout(() => { armed = false; $('#cache-clear').textContent = 'Clear'; }, 4000); return; }
+    armed = false; $('#cache-clear').textContent = 'Clear';
+    try { await caches.delete('transformers-cache'); } catch {}
+    worker?.terminate(); worker = null; // drop models held in memory too
+    await refreshCache();
+    $('#cache-info').textContent = 'Downloaded models deleted.';
+  };
+  window.__refreshCache = refreshCache;
   const advSum = () => ($('#adv-sum').textContent = `${modelByKey($('#model').value).short} · ${$('#live-N').value} samples`);
   $('#model').addEventListener('change', () => { try { localStorage.setItem('dpp-lm-model', $('#model').value); } catch {} advSum(); modelNote(); });
   fillModels();
+  refreshCache();
   navigator.gpu?.requestAdapter().then((a) => { hasGPU = !!a?.features.has('shader-f16'); fillModels(); }).catch(() => {});
   ['#live-N', '#live-Tp', '#live-max'].forEach((id) => $(id).addEventListener('input', advSum));
   advSum();
