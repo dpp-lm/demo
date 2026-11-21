@@ -75,7 +75,7 @@
           <span class="lab" id="K-lab">Subset size K</span>
           <div class="stepper" role="group" aria-labelledby="K-lab">
             <button class="btn icon" id="K-minus" aria-label="Decrease K">−</button>
-            <input id="K" type="number" min="1" max="20" value="10" aria-labelledby="K-lab">
+            <input id="K" type="number" min="1" max="20" value="3" aria-labelledby="K-lab">
             <button class="btn icon" id="K-plus" aria-label="Increase K">+</button>
           </div>
         </div>
@@ -97,6 +97,7 @@
     <div class="plot-wrap">
       <div id="plot" class="plot" aria-label="Projection of the completions' embeddings"></div>
       <div id="eigbars" class="eigbars" title="Variance captured by each principal axis. Click 1–3 to change the view."></div>
+      <div id="inspect" class="inspect" aria-live="polite" hidden></div>
     </div>
     <div class="stage-foot">
       <div class="legend">

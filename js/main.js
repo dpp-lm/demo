@@ -19,7 +19,8 @@ const S = {
   dims: 3,
   mode: 'sample',
   T: { sample: 1, map: 20 },
-  K: 10,
+  K: 3,
+  pinned: -1,      // point shown in the inspector
   rng: mulberry32(12345),
   sel: [], spec: null, L: null, c: null, pi: null, logP: NaN,
   hover: -1,
@@ -63,6 +64,7 @@ async function loadGalleryItem(id) {
 }
 
 function setPool(pool, phi) {
+  S.pinned = -1;
   S.pool = pool;
   S.phi = phi;
   S.logp = pool.samples.map((s) => s.logp);
@@ -108,7 +110,7 @@ function render() {
   document.querySelectorAll('input[name=dims]').forEach((r) => (r.checked = +r.value === S.dims));
   const distinct = new Set(S.pool.samples.map((x) => x.text)).size;
   const N = S.pool.samples.length;
-  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate, hover to read' : 'hover a point to read it'}`;
+  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate, tap a point to read it' : 'tap a point to read it'}`;
   $('#subset-meta').textContent = `K = ${S.sel.length} · ${S.mode === 'map' ? 'greedy MAP' : 'K-DPP sample'} at T = ${fmtT(S.T[S.mode])}`;
   $('#T-out').textContent = fmtT(S.T[S.mode]);
   plot.update();
@@ -116,6 +118,7 @@ function render() {
   renderReadout();
   renderCards();
   renderVolHint();
+  renderInspect();
   if ($('.pool-table').open) renderTable();
 }
 
@@ -174,6 +177,7 @@ function renderCards() {
   $('#selected').querySelectorAll('.card').forEach((el) => {
     el.onmouseenter = () => plot.highlight(+el.dataset.i);
     el.onmouseleave = () => plot.highlight(-1);
+    el.onclick = () => inspect(+el.dataset.i);
   });
 }
 
@@ -241,13 +245,19 @@ class Plot2D {
     this.gDot = svg.append('g');
     this.svg = svg;
     this.jit = S.proj.coords.map((_, i) => ((i * 0.6180339887) % 1) - 0.5);
-    svg.on('pointermove', (ev) => {
+    const nearest = (ev, r) => {
       const [px, py] = d3.pointer(ev);
-      let best = -1, bd = 18 * 18;
+      let best = -1, bd = r * r;
       this.pos.forEach(([a, b], i) => { const d = (a - px) ** 2 + (b - py) ** 2; if (d < bd) { bd = d; best = i; } });
+      return best;
+    };
+    svg.on('pointermove', (ev) => {
+      if (ev.pointerType !== 'mouse') return;
+      const best = nearest(ev, 18);
       this.highlight(best);
       showTip(best, ev.clientX, ev.clientY);
-    }).on('pointerleave', () => { this.highlight(-1); showTip(-1); });
+    }).on('pointerleave', () => { this.highlight(-1); showTip(-1); })
+      .on('click', (ev) => inspect(nearest(ev, ev.pointerType === 'mouse' ? 18 : 32)));
   }
   // Data-space position of item i (scale = 1 for the unit embedding).
   dataXY(i, scale) {
@@ -325,6 +335,7 @@ class Plot2D {
   }
   highlight(i) {
     if (!this.svg) return;
+    if (i < 0) i = S.pinned;
     S.hover = i;
     this.gDot.selectAll('circle').attr('stroke', (j) => (j === i ? css('--text') : S.sel.includes(j) ? selColor(j) : css('--surface')));
     document.querySelectorAll('.card').forEach((c) => c.classList.toggle('hl', +c.dataset.i === i));
@@ -343,7 +354,10 @@ const plot = {
     if (S.dims === 3) {
       if (!this.p3) {
         $('#plot').innerHTML = '';
-        this.p3 = new Plot3D($('#plot'), { onHover: (i, x, y) => { showTip(i, x, y); this.highlightCards(i); } });
+        this.p3 = new Plot3D($('#plot'), {
+          onHover: (i, x, y) => { showTip(i, x, y); this.highlightCards(i < 0 ? S.pinned : i); },
+          onTap: (i) => inspect(i),
+        });
       }
       this.p3.update({
         coords: S.proj.coords, c: S.c, sel: S.sel, scaled: $('#scale-toggle').checked,
@@ -352,10 +366,34 @@ const plot = {
     } else this.p2.update();
   },
   highlight(i) {
+    if (i < 0) i = S.pinned;
     if (S.dims === 3) { this.p3?.highlight(i); this.highlightCards(i); } else this.p2.highlight(i);
   },
   highlightCards(i) { document.querySelectorAll('.card').forEach((c) => c.classList.toggle('hl', +c.dataset.i === i)); },
 };
+
+// ---------------------------------------------------------------- inspector
+// Tap or click a point (or a card) to pin its text and numbers under the plot.
+function inspect(i) {
+  S.pinned = i;
+  showTip(-1);
+  renderInspect();
+  plot.highlight(i);
+}
+function renderInspect() {
+  const el = $('#inspect');
+  const i = S.pinned;
+  if (i < 0 || !S.pool || i >= S.pool.samples.length) { el.hidden = true; return; }
+  const s = S.pool.samples[i];
+  const lw = s.logp / S.T.sample - s.logq;
+  const inSel = S.sel.includes(i);
+  el.hidden = false;
+  el.innerHTML = `<div class="ins-txt">${escapeHtml(s.text)}${s.ended ? '' : ' …'}</div>
+    <div class="ins-meta">${inSel ? `<span class="pill" style="background:${selColor(i)}">selected</span>` : ''}
+      <span>log p ${fmt(s.logp, 2)}</span><span>log q ${fmt(s.logq, 2)}</span><span>log w ${fmt(lw, 2)}</span><span>P(in set) ${fmt(S.pi[i], 3)}</span></div>
+    <button class="ins-close" aria-label="Close">×</button>`;
+  el.querySelector('.ins-close').onclick = () => inspect(-1);
+}
 
 // ---------------------------------------------------------------- pool table
 let sortKey = 'logp', sortDir = -1;

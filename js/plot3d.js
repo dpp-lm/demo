@@ -12,9 +12,10 @@ function rod(a, b, r, color) {
 }
 
 export class Plot3D {
-  constructor(el, { onHover }) {
+  constructor(el, { onHover, onTap }) {
     this.el = el;
     this.onHover = onHover;
+    this.onTap = onTap;
     const W = el.clientWidth || 600, H = el.clientHeight || 450;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
@@ -39,8 +40,17 @@ export class Plot3D {
     this.hovered = -1;
     this.targets = null;
     this.current = null;
-    this.renderer.domElement.addEventListener('pointermove', (e) => this.pick(e));
-    this.renderer.domElement.addEventListener('pointerleave', () => { this.hovered = -1; this.onHover(-1); });
+    // Hover tooltips for mice; a tap (pointer down and up without dragging) inspects
+    // the nearest point on screen within a finger-sized radius.
+    const cv = this.renderer.domElement;
+    cv.addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse') this.pick(e); });
+    cv.addEventListener('pointerleave', () => { this.hovered = -1; this.onHover(-1); });
+    let down = null;
+    cv.addEventListener('pointerdown', (e) => (down = [e.clientX, e.clientY]));
+    cv.addEventListener('pointerup', (e) => {
+      if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6) return;
+      this.onTap?.(this.nearest(e.clientX, e.clientY, e.pointerType === 'mouse' ? 16 : 32));
+    });
     this.alive = true;
     const loop = () => {
       if (!this.alive) return;
@@ -67,7 +77,9 @@ export class Plot3D {
       this.camSet = true;
       const cx = o.coords.reduce((a, c) => a + c[0], 0) / N * this.scale;
       this.controls.target.set(cx / 2, 0, 0);
-      this.camera.position.set(cx / 2 + 1.1, 0.8, 1.55);
+      // Pull back on tall, narrow screens so the whole volume stays in frame.
+      const k = Math.max(1, Math.sqrt(1.7 / this.camera.aspect));
+      this.camera.position.set(cx / 2 + 1.1 * k, 0.8 * k, 1.55 * k);
     }
     const s = this.scale;
     this.targets = o.coords.map((c, i) => {
@@ -190,6 +202,21 @@ export class Plot3D {
     const i = hit ? hit.instanceId : -1;
     if (i !== this.hovered) { this.hovered = i; this.layout(); }
     this.onHover(i, e.clientX, e.clientY);
+  }
+
+  // Index of the point drawn nearest to a screen position, or -1 if none within r px.
+  nearest(x, y, r) {
+    if (!this.current) return -1;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    let best = -1, bd = r * r, bz = Infinity;
+    const v = new THREE.Vector3();
+    this.current.forEach((p, i) => {
+      v.copy(p).project(this.camera);
+      const sx = rect.left + ((v.x + 1) / 2) * rect.width, sy = rect.top + ((1 - v.y) / 2) * rect.height;
+      const d = (sx - x) ** 2 + (sy - y) ** 2;
+      if (d < bd || (d === bd && v.z < bz)) { bd = d; bz = v.z; best = i; }
+    });
+    return best;
   }
 
   highlight(i) { this.hovered = i; this.layout(); }
