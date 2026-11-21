@@ -403,7 +403,7 @@ function renderTable() {
   const rows = S.pool.samples.map((s, i) => ({ i, text: s.text + (s.ended ? '' : '…'), logp: s.logp, logq: s.logq, logw: s.logp / T - s.logq, pi: S.pi[i] }));
   rows.sort((a, b) => sortDir * (typeof a[sortKey] === 'string' ? a[sortKey].localeCompare(b[sortKey]) : a[sortKey] - b[sortKey]));
   const cols = [['i', '#'], ['text', 'string'], ['logp', 'log p'], ['logq', 'log q'], ['logw', 'log w'], ['pi', 'P(i∈S)']];
-  $('#pool-table').innerHTML = `<div class="wrap"><table><thead><tr>${cols.map(([k, n]) => `<th data-k="${k}">${n}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr class="${sel.has(r.i) ? 'sel' : ''}"><td class="num">${r.i}</td><td>${escapeHtml(r.text)}</td><td class="num">${fmt(r.logp, 2)}</td><td class="num">${fmt(r.logq, 2)}</td><td class="num">${fmt(r.logw, 2)}</td><td class="num">${fmt(r.pi, 3)}</td></tr>`).join('')}</tbody></table></div>`;
+  $('#pool-table').innerHTML = `<div class="wrap"><table><thead><tr>${cols.map(([k, n]) => `<th data-k="${k}">${n}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr class="${sel.has(r.i) ? 'sel' : ''}"><td class="num" data-k="#">${r.i}</td><td class="str">${escapeHtml(r.text)}</td><td class="num" data-k="log p">${fmt(r.logp, 2)}</td><td class="num" data-k="log q">${fmt(r.logq, 2)}</td><td class="num" data-k="log w">${fmt(r.logw, 2)}</td><td class="num" data-k="P(in set)">${fmt(r.pi, 3)}</td></tr>`).join('')}</tbody></table></div>`;
   $('#pool-table').querySelectorAll('th').forEach((th) => (th.onclick = () => {
     const k = th.dataset.k;
     if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = k === 'text' || k === 'i' ? 1 : -1; }
