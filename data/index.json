@@ -1,0 +1,37 @@
+[
+ {
+  "id": "sort",
+  "prompt": "Write a one-line Python expression that sorts a list `xs`. Reply with code only.",
+  "N": 100,
+  "Tprime": 1,
+  "model": "onnx-community/Qwen2.5-0.5B-Instruct"
+ },
+ {
+  "id": "story",
+  "prompt": "Write the opening sentence of a short story. Reply with one sentence only.",
+  "N": 100,
+  "Tprime": 1,
+  "model": "onnx-community/Qwen2.5-0.5B-Instruct"
+ },
+ {
+  "id": "bike",
+  "prompt": "Give one creative use for an old bicycle, in one sentence.",
+  "N": 100,
+  "Tprime": 1,
+  "model": "onnx-community/Qwen2.5-0.5B-Instruct"
+ },
+ {
+  "id": "bank",
+  "prompt": "What does \"bank\" mean? Answer in one sentence.",
+  "N": 100,
+  "Tprime": 1,
+  "model": "onnx-community/Qwen2.5-0.5B-Instruct"
+ },
+ {
+  "id": "language",
+  "prompt": "What is the best way to learn a new language? Answer in one sentence.",
+  "N": 100,
+  "Tprime": 1,
+  "model": "onnx-community/Qwen2.5-0.5B-Instruct"
+ }
+]

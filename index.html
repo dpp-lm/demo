@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PoolDPP Demo</title>
+<meta name="description" content="PoolDPP demo (arXiv:2611.25003): sample a pool of completions, embed them, and pick a diverse subset with a K-DPP. Runs in your browser.">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+  "d3": "https://cdn.jsdelivr.net/npm/d3@7.9.0/+esm"
+} }
+</script>
+</head>
+<body>
+<main>
+<header class="bar">
+  <h1>PoolDPP</h1>
+  <a href="https://arxiv.org/abs/2611.25003">arXiv:2611.25003</a>
+</header>
+
+<section id="hero" class="widget">
+  <div class="controls">
+    <label for="prompt">Prompt</label>
+    <textarea id="prompt" rows="4"></textarea>
+    <div class="row3">
+      <label>Samples N<input id="live-N" type="number" min="10" max="200" step="10" value="30"></label>
+      <label>Temp. T′<input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0"></label>
+      <label>Max tokens<input id="live-max" type="number" min="8" max="256" step="8" value="64"></label>
+    </div>
+    <div class="row-buttons">
+      <button id="live-go" class="primary">Generate</button>
+      <button id="live-stop" hidden>Stop</button>
+    </div>
+    <p id="live-status" class="status" aria-live="polite">Runs Qwen2.5-0.5B-Instruct and MiniLM-L6 in your browser (~0.5&nbsp;GB download, cached afterwards).</p>
+    <label for="gallery-select">Or load a precomputed pool (N = 100)</label>
+    <select id="gallery-select"></select>
+
+    <hr>
+    <fieldset class="mode">
+      <legend>Select a subset</legend>
+      <label><input type="radio" name="mode" value="sample" checked> Sample (K-DPP)</label>
+      <label><input type="radio" name="mode" value="map"> Most likely (greedy MAP)</label>
+    </fieldset>
+    <label for="T-slider" class="slider-label">Quality ↔ diversity, T <output id="T-out">1.00</output></label>
+    <input id="T-slider" type="range" min="0" max="1000" step="1" value="500">
+    <p class="help"><span>← quality</span><span>diversity →</span></p>
+    <div class="row2">
+      <label>Subset size K<input id="K" type="number" min="1" max="20" value="10"></label>
+      <button id="resample">Resample</button>
+    </div>
+  </div>
+
+  <div class="viz">
+    <div class="plot-wrap">
+      <div id="plot" class="plot" aria-label="Projection of the completions' embeddings"></div>
+      <div id="eigbars" class="eigbars" title="Click a bar to choose 1D, 2D or 3D"></div>
+    </div>
+    <div class="legend-row">
+      <span class="lg"><span class="sw ramp"></span>log p(y), darker = more likely</span>
+      <span class="lg"><span class="sw sel"></span>selected</span>
+      <label class="lg"><input type="checkbox" id="scale-toggle" checked> scale by quality</label>
+    </div>
+    <div id="readout" class="readout"></div>
+  </div>
+</section>
+
+<section id="selected" class="cards" aria-label="Selected subset"></section>
+
+<details class="pool-table">
+  <summary>All completions</summary>
+  <div id="pool-table"></div>
+</details>
+</main>
+<div id="tooltip" class="tooltip" hidden></div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
