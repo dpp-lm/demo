@@ -46,13 +46,13 @@ const EXAMPLE_LABELS = { sort: 'Sort a list', story: 'Story opening', bike: 'Old
 async function loadGallery() {
   const idx = await (await fetch('data/index.json')).json();
   const el = $('#examples');
-  el.innerHTML = '<option value="">Examples</option>' + idx.map((g) => `<option value="${g.id}">${escapeHtml(EXAMPLE_LABELS[g.id] ?? g.id)}</option>`).join('');
-  el.onchange = () => el.value && loadGalleryItem(el.value);
+  el.innerHTML = '<div class="menu-head">Example prompts</div>' + idx.map((g) => `<button type="button" role="menuitem" data-id="${g.id}"><b>${escapeHtml(EXAMPLE_LABELS[g.id] ?? g.id)}</b><span>${escapeHtml(g.prompt)}</span></button>`).join('');
+  el.querySelectorAll('button').forEach((b) => (b.onclick = () => { $('#exmenu').open = false; loadGalleryItem(b.dataset.id); }));
   await loadGalleryItem(idx.find((g) => g.id === 'story')?.id ?? idx[0].id);
 }
 
 function markExample(id) {
-  $('#examples').value = id ?? '';
+  document.querySelectorAll('#examples button').forEach((b) => b.toggleAttribute('aria-current', b.dataset.id === id));
 }
 
 async function loadGalleryItem(id) {
@@ -525,7 +525,7 @@ function setK(v) {
 function wire() {
   initExplainers();
   // Collapsed sampling settings: the summary line shows the current values.
-  const advSum = () => ($('#adv-sum').textContent = `${$('#live-N').value} · T′ ${(+$('#live-Tp').value).toFixed(1)} · ${$('#live-max').value} tok`);
+  const advSum = () => ($('#adv-sum').textContent = `Qwen 0.5B · ${$('#live-N').value} samples`);
   ['#live-N', '#live-Tp', '#live-max'].forEach((id) => $(id).addEventListener('input', advSum));
   advSum();
   $('#resample').disabled = S.mode === 'map';
@@ -558,7 +558,9 @@ function wire() {
   });
   syncGo();
   // Close the settings menu on an outside click.
-  document.addEventListener('click', (e) => { const m = $('#adv'); if (m.open && !m.contains(e.target)) m.open = false; });
+  document.addEventListener('click', (e) => { for (const m of [$('#adv'), $('#exmenu')]) if (m.open && !m.contains(e.target)) m.open = false; });
+  // Only one composer menu open at a time.
+  for (const [a, b] of [['#adv', '#exmenu'], ['#exmenu', '#adv']]) $(a).addEventListener('toggle', () => { if ($(a).open) $(b).open = false; });
   $('#live-stop').onclick = () => worker?.postMessage({ type: 'stop' });
   let rt = 0;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { plot.reset(); render(); }, 200); });
