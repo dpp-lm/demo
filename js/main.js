@@ -39,19 +39,26 @@ function decodeEmb(b64, N, D) {
   return Array.from({ length: N }, (_, i) => f.subarray(i * D, (i + 1) * D));
 }
 
+const EXAMPLE_LABELS = { sort: 'Sort a list', story: 'Story opening', bike: 'Old bicycle', bank: 'What is a bank?', language: 'Learn a language' };
+
 async function loadGallery() {
   const idx = await (await fetch('data/index.json')).json();
-  const sel = $('#gallery-select');
-  sel.innerHTML = '<option value="" disabled>choose…</option>' + idx.map((g) => `<option value="${g.id}">${escapeHtml(g.prompt)}</option>`).join('');
-  sel.onchange = () => sel.value && loadGalleryItem(sel.value);
-  sel.value = idx[0].id;
-  await loadGalleryItem(idx[0].id);
+  const el = $('#examples');
+  el.innerHTML = idx.map((g) => `<button role="listitem" data-id="${g.id}" aria-pressed="false" title="${escapeHtml(g.prompt)}">${escapeHtml(EXAMPLE_LABELS[g.id] ?? g.id)}</button>`).join('');
+  el.querySelectorAll('button').forEach((b) => (b.onclick = () => loadGalleryItem(b.dataset.id)));
+  await loadGalleryItem(idx.find((g) => g.id === 'story')?.id ?? idx[0].id);
+}
+
+function markExample(id) {
+  document.querySelectorAll('#examples button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.id === id)));
 }
 
 async function loadGalleryItem(id) {
   const rec = await (await fetch(`data/${id}.json`)).json();
   $('#prompt').value = rec.prompt;
-  $('#live-status').textContent = `Loaded ${rec.N} precomputed completions (T′ = ${rec.Tprime}). Edit the prompt and press Generate to make your own.`;
+  markExample(id);
+  $('#progress').hidden = true;
+  $('#live-status').textContent = `Showing an example pool of ${rec.N} precomputed completions. Edit the prompt and press Generate to sample your own.`;
   setPool(rec, decodeEmb(rec.emb, rec.N, rec.D));
 }
 
@@ -98,6 +105,11 @@ function recompute({ newDraw = true } = {}) {
 
 // ---------------------------------------------------------------- rendering: hero
 function render() {
+  document.querySelectorAll('input[name=dims]').forEach((r) => (r.checked = +r.value === S.dims));
+  const distinct = new Set(S.pool.samples.map((x) => x.text)).size;
+  const N = S.pool.samples.length;
+  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate, hover to read' : 'hover a point to read it'}`;
+  $('#subset-meta').textContent = `K = ${S.sel.length} · ${S.mode === 'map' ? 'greedy MAP' : 'K-DPP sample'} at T = ${fmtT(S.T[S.mode])}`;
   $('#T-out').textContent = fmtT(S.T[S.mode]);
   plot.update();
   renderEigbars();
@@ -113,50 +125,51 @@ function renderEigbars() {
   const el = $('#eigbars');
   const f = S.proj.frac;
   const max = f[0];
-  el.innerHTML = f.map((v, k) => `
-    <div class="bar ${k < S.dims ? 'on' : ''}" data-k="${k + 1}" role="button" tabindex="${k < 3 ? 0 : -1}"
-      aria-label="Show ${k + 1}D" title="${k < 3 ? `Show ${k + 1}D · ` : ''}${(100 * v).toFixed(1)}%">
-      <span>${k + 1}</span><span class="fill" style="width:${(100 * v) / max}%"></span>
-    </div>`).join('') +
-    `<div class="pct">${(100 * f.slice(0, S.dims).reduce((a, b) => a + b, 0)).toFixed(0)}%<br>shown</div>`;
-  el.querySelectorAll('.bar').forEach((b) => {
-    const k = +b.dataset.k;
-    if (k > 3) { b.style.cursor = 'default'; return; }
-    const go = () => { S.dims = k; plot.reset(); render(); };
+  el.innerHTML = `<div class="cap">PCA</div>` + f.map((v, k) => {
+    const click = k < 3;
+    return `<div class="bar ${k < S.dims ? 'on' : ''}" data-k="${k + 1}" ${click ? `role="button" tabindex="0" aria-label="Show ${k + 1}D"` : ''}
+      title="Axis ${k + 1}: ${(100 * v).toFixed(1)}% of variance${click ? ` · click for ${k + 1}D` : ''}">
+      <span>${k + 1}</span><span class="fill" style="width:${(100 * v) / max}%"></span></div>`;
+  }).join('') + `<div class="pct">${(100 * f.slice(0, S.dims).reduce((a, b) => a + b, 0)).toFixed(0)}% shown</div>`;
+  el.querySelectorAll('.bar[role=button]').forEach((b) => {
+    const go = () => setDims(+b.dataset.k);
     b.onclick = go;
     b.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
   });
 }
 
+function setDims(k) { S.dims = k; plot.reset(); render(); }
+
 function renderReadout() {
   const N = S.logp.length;
   const ok = S.sel.length === S.K;
   const e = ess(logWeights(S.logp, S.logq, S.T.sample));
+  const stat = (k, v, title) => `<span class="stat" title="${title}">${k} <span class="v">${v}</span></span>`;
   $('#readout').innerHTML = !ok
-    ? `<div class="stat"><div class="k">No subset</div><div class="s">Fewer than K distinct directions in the pool (kernel rank &lt; K). Lower K or generate more completions.</div></div>`
-    : `
-    <div class="stat"><div class="k">log P(S)</div><div class="v">${fmt(S.logP)}</div><div class="s">under the pool ${S.K}-DPP</div></div>
-    <div class="stat"><div class="k">Quality (mean log p)</div><div class="v">${fmt(quality(S.logp, S.sel))}</div></div>
-    <div class="stat"><div class="k">Diversity (log det ΦᵀΦ)</div><div class="v">${fmt(diversity(S.G, N, S.sel))}</div></div>
-    ${S.mode === 'sample' ? `<div class="stat"><div class="k">Weight ESS</div><div class="v">${e.toFixed(1)} / ${N}</div><div class="s">w = p^(1/T) / q</div></div>` : ''}`;
+    ? `<span class="stat">No subset of size ${S.K}: the pool has fewer distinct directions. Lower K or sample more.</span>`
+    : stat('log P(S)', fmt(S.logP), `Log-probability of this subset under the pool ${S.K}-DPP`) +
+      stat('quality', fmt(quality(S.logp, S.sel)), 'Mean log p(y) of the subset') +
+      stat('diversity', fmt(diversity(S.G, N, S.sel)), 'log det of the subset\'s embedding Gram matrix (0 = orthogonal)') +
+      (S.mode === 'sample' ? stat('ESS', `${e.toFixed(0)}/${N}`, 'Effective sample size of the importance weights w = p^(1/T)/q') : '');
 }
 
 function renderVolHint() {
   const el = $('#vol-hint');
   if (S.dims === 1) { el.innerHTML = ''; return; }
   el.innerHTML = S.sel.length <= 3 && S.sel.length >= 2
-    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg>volume spanned by the selected set (det L_S = volume²)`
-    : `<button id="vol-btn" class="link">Draw the spanned volume (K = 3)</button>`;
+    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg>spanned volume (det L<sub>S</sub> = volume²)`
+    : `<button id="vol-btn" class="link">Show the spanned volume (K = 3)</button>`;
   const b = $('#vol-btn');
-  if (b) b.onclick = () => { $('#K').value = 3; $('#K').onchange(); };
+  if (b) b.onclick = () => setK(3);
 }
 
 function renderCards() {
   const order = S.sel.slice().sort((a, b) => S.logp[b] - S.logp[a]);
   $('#selected').innerHTML = order.map((i) => {
     const s = S.pool.samples[i];
-    return `<div class="card" data-i="${i}" style="border-left-color:${selColor(i)}">${escapeHtml(s.text)}${s.ended ? '' : '…'}
-      <div class="meta">#${i} · log p ${fmt(s.logp, 1)} · P(i∈S) ${fmt(S.pi[i], 2)}</div></div>`;
+    return `<li class="card${s.ended ? '' : ' cut'}" data-i="${i}">
+      <div class="txt">${escapeHtml(s.text)}</div>
+      <div class="meta"><span class="dot" style="background:${selColor(i)}"></span>log p ${fmt(s.logp, 1)}<span>·</span>P(in set) ${fmt(S.pi[i], 2)}</div></li>`;
   }).join('');
   $('#selected').querySelectorAll('.card').forEach((el) => {
     el.onmouseenter = () => plot.highlight(+el.dataset.i);
@@ -370,14 +383,23 @@ function runLive() {
   if (!prompt) return;
   $('#live-go').disabled = true;
   $('#live-stop').hidden = false;
+  $('#progress').hidden = false;
+  $('#progress-fill').style.width = '0%';
+  $('#progress-last').textContent = '';
   worker.onmessage = ({ data }) => {
     if (data.type === 'status' || data.type === 'progress') $('#live-status').textContent = data.text;
+    if (data.type === 'progress') {
+      $('#progress').hidden = false;
+      $('#progress-fill').style.width = `${(100 * data.n) / data.N}%`;
+      if (data.last?.length) $('#progress-last').textContent = '“' + data.last[data.last.length - 1] + '”';
+    }
     if (data.type === 'error') { $('#live-status').textContent = 'Error: ' + data.text; done(); }
     if (data.type === 'done') {
       const D = data.pool.D;
       const phi = Array.from({ length: data.pool.N }, (_, i) => data.emb.subarray(i * D, (i + 1) * D));
-      $('#live-status').textContent = `Drew ${data.pool.N} strings on ${data.device}. Drag T, or draw again.`;
-      $('#gallery-select').value = '';
+      $('#live-status').textContent = `Sampled ${data.pool.N} completions on ${data.device === 'webgpu' ? 'your GPU' : 'your CPU'}. Drag T to change the subset.`;
+      $('#progress').hidden = true;
+      markExample(null);
       setPool(data.pool, phi);
       done();
     }
@@ -391,13 +413,26 @@ const clampInt = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(+v || lo)))
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
+const MODE_HINT = {
+  sample: 'An exact random draw from the K-DPP over the pool. Resample for another.',
+  map: 'Greedy approximation to the most likely subset. Deterministic.',
+};
 function setMode(m) {
   S.mode = m;
+  $('#mode-hint').textContent = MODE_HINT[m];
+  $('#resample').disabled = m === 'map';
   $('#T-slider').value = tToSlider(S.T[m]);
   recompute({ newDraw: true });
 }
 
+function setK(v) {
+  S.K = clampInt(v, 1, Math.min(20, S.logp.length - 1));
+  $('#K').value = S.K;
+  recompute({ newDraw: true });
+}
+
 function wire() {
+  $('#mode-hint').textContent = MODE_HINT[S.mode];
   $('#T-slider').value = tToSlider(S.T[S.mode]);
   let raf = 0;
   $('#T-slider').addEventListener('input', (e) => {
@@ -407,7 +442,10 @@ function wire() {
     raf = requestAnimationFrame(() => recompute({ newDraw: true }));
   });
   document.querySelectorAll('input[name=mode]').forEach((r) => (r.onchange = () => setMode(r.value)));
-  $('#K').onchange = () => { S.K = clampInt($('#K').value, 1, Math.min(20, S.logp.length - 1)); $('#K').value = S.K; recompute({ newDraw: true }); };
+  $('#K').onchange = () => setK($('#K').value);
+  $('#K-minus').onclick = () => setK(S.K - 1);
+  $('#K-plus').onclick = () => setK(S.K + 1);
+  document.querySelectorAll('input[name=dims]').forEach((r) => (r.onchange = () => setDims(+r.value)));
   $('#resample').onclick = () => recompute({ newDraw: true });
   $('#scale-toggle').onchange = () => plot.update();
   $('.pool-table').addEventListener('toggle', () => { if ($('.pool-table').open) renderTable(); });

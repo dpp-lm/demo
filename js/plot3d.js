@@ -25,7 +25,7 @@ export class Plot3D {
     this.camera.position.set(1.6, 1.2, 2.2);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
-    this.controls.autoRotate = true;
+    this.controls.autoRotate = !matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.controls.autoRotateSpeed = 0.6;
     this.renderer.domElement.addEventListener('pointerdown', () => (this.controls.autoRotate = false));
     this.group = new THREE.Group();
@@ -67,7 +67,7 @@ export class Plot3D {
       this.camSet = true;
       const cx = o.coords.reduce((a, c) => a + c[0], 0) / N * this.scale;
       this.controls.target.set(cx / 2, 0, 0);
-      this.camera.position.set(cx / 2 + 1.4, 1.0, 2.0);
+      this.camera.position.set(cx / 2 + 1.1, 0.8, 1.55);
     }
     const s = this.scale;
     this.targets = o.coords.map((c, i) => {

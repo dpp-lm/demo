@@ -2,9 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>PoolDPP Demo</title>
-<meta name="description" content="PoolDPP demo (arXiv:2611.25003): sample a pool of completions, embed them, and pick a diverse subset with a K-DPP. Runs in your browser.">
+<meta name="description" content="Sample a pool of language-model completions, embed them, and pick a diverse subset with a K-DPP (arXiv:2611.25003). Runs in your browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600&display=swap">
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
 { "imports": {
@@ -15,66 +18,114 @@
 </script>
 </head>
 <body>
-<main>
-<header class="bar">
-  <h1>PoolDPP</h1>
-  <a href="https://arxiv.org/abs/2611.25003">arXiv:2611.25003</a>
+<div class="shell">
+<header class="top">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><path d="M5 25 L13 8 L27 11 L19 28 Z"/><path d="M5 25 L13 8 M5 25 L19 28" class="edge"/></svg>
+    <div>
+      <h1>PoolDPP</h1>
+      <p class="tag">Diverse sets of language-model samples</p>
+    </div>
+  </div>
+  <nav class="links">
+    <span class="chip-quiet">Runs in your browser</span>
+    <a href="https://arxiv.org/abs/2611.25003" target="_blank" rel="noopener">Paper ↗</a>
+    <a href="https://github.com/timvieira/dpp-lm-demo" target="_blank" rel="noopener">Code ↗</a>
+  </nav>
 </header>
 
-<section id="hero" class="widget">
-  <div class="controls">
-    <label for="prompt">Prompt</label>
-    <textarea id="prompt" rows="4"></textarea>
-    <div class="row3">
-      <label>Samples N<input id="live-N" type="number" min="10" max="200" step="10" value="30"></label>
-      <label>Temp. T′<input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0"></label>
-      <label>Max tokens<input id="live-max" type="number" min="8" max="256" step="8" value="64"></label>
-    </div>
-    <div class="row-buttons">
-      <button id="live-go" class="primary">Generate</button>
-      <button id="live-stop" hidden>Stop</button>
-    </div>
-    <p id="live-status" class="status" aria-live="polite">Runs Qwen2.5-0.5B-Instruct and MiniLM-L6 in your browser (~0.5&nbsp;GB download, cached afterwards).</p>
-    <label for="gallery-select">Or load a precomputed pool (N = 100)</label>
-    <select id="gallery-select"></select>
+<main class="app">
+  <aside class="controls" aria-label="Controls">
+    <section class="step">
+      <h2><span class="num">1</span>Sample a pool</h2>
+      <div class="examples" id="examples" role="list" aria-label="Example prompts"></div>
+      <label class="field">
+        <span class="lab">Prompt</span>
+        <textarea id="prompt" rows="3" spellcheck="false"></textarea>
+      </label>
+      <div class="grid3">
+        <label class="field"><span class="lab" title="How many completions to draw">Samples</span><input id="live-N" type="number" min="10" max="200" step="10" value="30" inputmode="numeric"></label>
+        <label class="field"><span class="lab" title="Local (proposal) temperature T′">Temp T′</span><input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0" inputmode="decimal"></label>
+        <label class="field"><span class="lab">Max tokens</span><input id="live-max" type="number" min="8" max="256" step="8" value="64" inputmode="numeric"></label>
+      </div>
+      <div class="actions">
+        <button id="live-go" class="btn primary">Generate</button>
+        <button id="live-stop" class="btn" hidden>Stop</button>
+      </div>
+      <div class="progress" id="progress" hidden><div class="bar"><span id="progress-fill"></span></div><p id="progress-last" class="last"></p></div>
+      <p id="live-status" class="status" aria-live="polite">Qwen2.5-0.5B-Instruct and MiniLM-L6 run on your device. The first run downloads about 0.5 GB.</p>
+    </section>
 
-    <hr>
-    <fieldset class="mode">
-      <legend>Select a subset</legend>
-      <label><input type="radio" name="mode" value="sample" checked> Sample (K-DPP)</label>
-      <label><input type="radio" name="mode" value="map"> Most likely (greedy MAP)</label>
-    </fieldset>
-    <label for="T-slider" class="slider-label">Quality ↔ diversity, T <output id="T-out">1.00</output></label>
-    <input id="T-slider" type="range" min="0" max="1000" step="1" value="500">
-    <p class="help"><span>← quality</span><span>diversity →</span></p>
-    <div class="row2">
-      <label>Subset size K<input id="K" type="number" min="1" max="20" value="10"></label>
-      <button id="resample">Resample</button>
-    </div>
-  </div>
+    <section class="step">
+      <h2><span class="num">2</span>Pick a subset</h2>
+      <div class="seg" role="radiogroup" aria-label="Selection rule">
+        <label><input type="radio" name="mode" value="sample" checked><span>Sample</span></label>
+        <label><input type="radio" name="mode" value="map"><span>Most likely</span></label>
+      </div>
+      <p class="hint" id="mode-hint">An exact draw from the K-DPP over the pool.</p>
 
-  <div class="viz">
+      <div class="field">
+        <div class="lab row"><label for="T-slider">Global temperature T</label><output id="T-out" class="val">1.00</output></div>
+        <input id="T-slider" type="range" min="0" max="1000" step="1" value="500">
+        <div class="ends"><span>quality</span><span>diversity</span></div>
+      </div>
+
+      <div class="row-between">
+        <div class="field">
+          <span class="lab" id="K-lab">Subset size K</span>
+          <div class="stepper" role="group" aria-labelledby="K-lab">
+            <button class="btn icon" id="K-minus" aria-label="Decrease K">−</button>
+            <input id="K" type="number" min="1" max="20" value="10" aria-labelledby="K-lab">
+            <button class="btn icon" id="K-plus" aria-label="Increase K">+</button>
+          </div>
+        </div>
+        <button id="resample" class="btn">Resample</button>
+      </div>
+    </section>
+  </aside>
+
+  <section class="stage" aria-label="Embeddings">
+    <div class="stage-bar">
+      <div class="seg small" role="radiogroup" aria-label="Dimensions">
+        <label><input type="radio" name="dims" value="1"><span>1D</span></label>
+        <label><input type="radio" name="dims" value="2"><span>2D</span></label>
+        <label><input type="radio" name="dims" value="3" checked><span>3D</span></label>
+      </div>
+      <span id="stage-note" class="note"></span>
+      <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale by quality</span></label>
+    </div>
     <div class="plot-wrap">
       <div id="plot" class="plot" aria-label="Projection of the completions' embeddings"></div>
-      <div id="eigbars" class="eigbars" title="Click a bar to choose 1D, 2D or 3D"></div>
+      <div id="eigbars" class="eigbars" title="Variance captured by each principal axis. Click 1–3 to change the view."></div>
     </div>
-    <div class="legend-row">
-      <span class="lg"><span class="sw ramp"></span>log p(y), darker = more likely</span>
-      <span class="lg"><span class="sw sel"></span>selected</span>
-      <label class="lg"><input type="checkbox" id="scale-toggle" checked> scale by quality</label>
-      <span id="vol-hint" class="lg"></span>
+    <div class="stage-foot">
+      <div class="legend">
+        <span class="lg"><span class="sw ramp"></span>more likely</span>
+        <span class="lg"><span class="sw sel"></span>selected</span>
+        <span id="vol-hint" class="lg"></span>
+      </div>
+      <div id="readout" class="readout"></div>
     </div>
-    <div id="readout" class="readout"></div>
+  </section>
+</main>
+
+<section class="subset">
+  <div class="subset-head">
+    <h2>Selected subset</h2>
+    <span id="subset-meta" class="note"></span>
   </div>
+  <ol id="selected" class="cards" aria-label="Selected subset"></ol>
 </section>
 
-<section id="selected" class="cards" aria-label="Selected subset"></section>
-
 <details class="pool-table">
-  <summary>All completions</summary>
+  <summary>All completions in the pool</summary>
   <div id="pool-table"></div>
 </details>
-</main>
+
+<footer class="foot">
+  <p>Completions are drawn from the proposal <i>q</i> = <i>p</i>°<sub><i>T′</i></sub> with full-vocabulary sampling, and each is weighted by <i>w</i> = <i>p</i><sup>1/<i>T</i></sup>/<i>q</i>. <b>Sample</b> draws an exact K-DPP sample on columns √(<i>w</i>/<i>N</i>)·φ. <b>Most likely</b> runs greedy MAP on columns √κ·φ with κ = <i>p</i><sup>1/<i>T</i></sup>. The plot is an uncentered PCA of the unit embeddings φ, so arrows start where the volume is measured from.</p>
+</footer>
+</div>
 <div id="tooltip" class="tooltip" hidden></div>
 <script type="module" src="js/main.js"></script>
 </body>
