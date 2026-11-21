@@ -8,7 +8,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400..800;1,400..800&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
 <link rel="stylesheet" href="css/style.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -35,42 +38,42 @@
 <main class="app">
   <aside class="controls" aria-label="Controls">
     <section class="step step-1">
-      <h2><span class="num">1</span>Sample a pool</h2>
-      <div class="examples" id="examples" role="list" aria-label="Example prompts"></div>
-      <label class="field">
-        <span class="lab">Prompt</span>
-        <textarea id="prompt" rows="3" spellcheck="false"></textarea>
-      </label>
-      <details class="adv" id="adv">
-        <summary><span>Settings</span><span id="adv-sum" class="adv-sum"></span></summary>
-        <div class="grid3">
-          <label class="field"><span class="lab" title="How many completions to draw">Samples N</span><input id="live-N" type="number" min="10" max="200" step="10" value="30" inputmode="numeric"></label>
-          <label class="field"><span class="lab" title="Local (proposal) temperature T′">Temperature T′</span><input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0" inputmode="decimal"></label>
-          <label class="field"><span class="lab">Max tokens</span><input id="live-max" type="number" min="8" max="256" step="8" value="64" inputmode="numeric"></label>
+      <div class="step-head">
+        <h2><span class="num">1</span>Sample a pool</h2>
+        <select id="examples" aria-label="Example prompts"><option value="">Examples…</option></select>
+      </div>
+      <textarea id="prompt" rows="2" spellcheck="false" aria-label="Prompt"></textarea>
+      <div class="gen-row">
+        <details class="adv" id="adv">
+          <summary><span>Settings</span><span id="adv-sum" class="adv-sum"></span></summary>
+          <div class="grid3">
+            <label class="field"><span class="lab">Samples N</span><input id="live-N" type="number" min="10" max="200" step="10" value="30" inputmode="numeric"></label>
+            <label class="field"><span class="lab">Temp. T′ <button type="button" class="xbtn" data-x="Tprime" aria-label="What is T′?">?</button></span><input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0" inputmode="decimal"></label>
+            <label class="field"><span class="lab">Max tokens</span><input id="live-max" type="number" min="8" max="256" step="8" value="64" inputmode="numeric"></label>
+          </div>
+        </details>
+        <div class="actions">
+          <button id="live-stop" class="btn" hidden>Stop</button>
+          <button id="live-go" class="btn primary">Generate</button>
         </div>
-      </details>
-      <div class="actions">
-        <button id="live-go" class="btn primary">Generate</button>
-        <button id="live-stop" class="btn" hidden>Stop</button>
       </div>
       <div class="progress" id="progress" hidden><div class="bar"><span id="progress-fill"></span></div><p id="progress-last" class="last"></p></div>
-      <p id="live-status" class="status" aria-live="polite">Qwen2.5-0.5B-Instruct and MiniLM-L6 run on your device. The first run downloads about 0.5 GB.</p>
+      <p id="live-status" class="status" aria-live="polite">Runs on your device; the first run downloads ~0.5&nbsp;GB.</p>
     </section>
 
     <section class="step step-2">
       <h2><span class="num">2</span>Pick a subset</h2>
-      <div class="seg" role="radiogroup" aria-label="Selection rule">
-        <label><input type="radio" name="mode" value="map" checked><span>Most likely</span></label>
-        <label><input type="radio" name="mode" value="sample"><span>Sample</span></label>
+      <div class="mode-row">
+        <div class="seg" role="radiogroup" aria-label="Selection rule">
+          <label><input type="radio" name="mode" value="map" checked><span>Most likely</span></label>
+          <label><input type="radio" name="mode" value="sample"><span>Sample</span></label>
+        </div>
+        <button type="button" class="xbtn" data-x="subset" aria-label="How is the subset chosen?">?</button>
       </div>
-      <p class="hint" id="mode-hint"></p>
-
-      <div class="field">
-        <div class="lab row"><label for="T-slider">Global temperature T</label><output id="T-out" class="val">1.00</output></div>
-        <input id="T-slider" type="range" min="0" max="1000" step="1" value="500">
-        <div class="ends"><span>quality</span><span>diversity</span></div>
+      <div class="field tfield">
+        <div class="lab row"><span><label for="T-slider">Temperature T</label> <button type="button" class="xbtn" data-x="T" aria-label="What does T do?">?</button></span><output id="T-out" class="val">1.00</output></div>
+        <div class="trow"><span>quality</span><input id="T-slider" type="range" min="0" max="1000" step="1" value="500"><span>diversity</span></div>
       </div>
-
       <div class="row-between">
         <div class="field">
           <span class="lab" id="K-lab">Subset size K</span>
@@ -97,7 +100,7 @@
         <summary>View</summary>
         <div class="menu">
           <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Label selected points</span></label>
-          <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale points by quality</span></label>
+          <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale points by quality</span> <button type="button" class="xbtn" data-x="scale" aria-label="What does scaling do?">?</button></label>
         </div>
       </details>
     </div>
@@ -106,7 +109,7 @@
         <div id="plot" class="plot" aria-label="Projection of the completions' embeddings"></div>
         <div id="labels" class="labels" aria-hidden="true"></div>
       </div>
-      <div id="eigbars" class="eigbars" title="Variance captured by each principal axis. Click 1–3 to change the view."></div>
+      <div id="eigbars" class="eigbars"></div>
       <div id="inspect" class="inspect" aria-live="polite" hidden></div>
     </div>
     <div class="stage-foot">
@@ -133,11 +136,9 @@
   <div id="pool-table"></div>
 </details>
 
-<footer class="foot">
-  <p>Completions are drawn from the proposal <i>q</i> = <i>p</i>°<sub><i>T′</i></sub> with full-vocabulary sampling, and each is weighted by <i>w</i> = <i>p</i><sup>1/<i>T</i></sup>/<i>q</i>. <b>Sample</b> draws an exact K-DPP sample on columns √(<i>w</i>/<i>N</i>)·φ. <b>Most likely</b> runs greedy MAP on columns √κ·φ with κ = <i>p</i><sup>1/<i>T</i></sup>. The plot is an uncentered PCA of the unit embeddings φ, so arrows start where the volume is measured from.</p>
-</footer>
 </div>
 <div id="tooltip" class="tooltip" hidden></div>
+<div id="xpop" class="xpop" role="dialog" aria-modal="false" hidden></div>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

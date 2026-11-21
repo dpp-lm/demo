@@ -4,6 +4,7 @@ import {
   columnLogScale, logWeights, ess, quality, diversity, mulberry32,
 } from './dpp.js';
 import { Plot3D } from './plot3d.js';
+import { initExplainers } from './explain.js';
 
 const $ = (s) => document.querySelector(s);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -45,13 +46,13 @@ const EXAMPLE_LABELS = { sort: 'Sort a list', story: 'Story opening', bike: 'Old
 async function loadGallery() {
   const idx = await (await fetch('data/index.json')).json();
   const el = $('#examples');
-  el.innerHTML = idx.map((g) => `<button role="listitem" data-id="${g.id}" aria-pressed="false" title="${escapeHtml(g.prompt)}">${escapeHtml(EXAMPLE_LABELS[g.id] ?? g.id)}</button>`).join('');
-  el.querySelectorAll('button').forEach((b) => (b.onclick = () => loadGalleryItem(b.dataset.id)));
+  el.innerHTML = '<option value="">Examples…</option>' + idx.map((g) => `<option value="${g.id}">${escapeHtml(EXAMPLE_LABELS[g.id] ?? g.id)}</option>`).join('');
+  el.onchange = () => el.value && loadGalleryItem(el.value);
   await loadGalleryItem(idx.find((g) => g.id === 'story')?.id ?? idx[0].id);
 }
 
 function markExample(id) {
-  document.querySelectorAll('#examples button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.id === id)));
+  $('#examples').value = id ?? '';
 }
 
 async function loadGalleryItem(id) {
@@ -59,7 +60,7 @@ async function loadGalleryItem(id) {
   $('#prompt').value = rec.prompt;
   markExample(id);
   $('#progress').hidden = true;
-  $('#live-status').textContent = `Showing an example pool of ${rec.N} precomputed completions. Edit the prompt and press Generate to sample your own.`;
+  $('#live-status').textContent = `Example pool of ${rec.N} completions. Edit the prompt to make your own.`;
   setPool(rec, decodeEmb(rec.emb, rec.N, rec.D));
 }
 
@@ -130,7 +131,7 @@ function renderEigbars() {
   const el = $('#eigbars');
   const f = S.proj.frac;
   const max = f[0];
-  el.innerHTML = `<div class="cap">PCA</div>` + f.map((v, k) => {
+  el.innerHTML = `<div class="cap">PCA <button type="button" class="xbtn" data-x="pca" aria-label="About the projection">?</button></div>` + f.map((v, k) => {
     const click = k < 3;
     return `<div class="bar ${k < S.dims ? 'on' : ''}" data-k="${k + 1}" ${click ? `role="button" tabindex="0" aria-label="Show ${k + 1}D"` : ''}
       title="Axis ${k + 1}: ${(100 * v).toFixed(1)}% of variance${click ? ` · click for ${k + 1}D` : ''}">
@@ -149,20 +150,20 @@ function renderReadout() {
   const N = S.logp.length;
   const ok = S.sel.length === S.K;
   const e = ess(logWeights(S.logp, S.logq, S.T.sample));
-  const stat = (k, v, title) => `<span class="stat" title="${title}">${k} <span class="v">${v}</span></span>`;
+  const stat = (k, v, x) => `<span class="stat">${k} <button type="button" class="xbtn" data-x="${x}" aria-label="What is ${k}?">?</button> <span class="v">${v}</span></span>`;
   $('#readout').innerHTML = !ok
     ? `<span class="stat">No subset of size ${S.K}: the pool has fewer distinct directions. Lower K or sample more.</span>`
-    : stat('log P(S)', fmt(S.logP), `Log-probability of this subset under the pool ${S.K}-DPP`) +
-      stat('quality', fmt(quality(S.logp, S.sel)), 'Mean log p(y) of the subset') +
-      stat('diversity', fmt(diversity(S.G, N, S.sel)), 'log det of the subset\'s embedding Gram matrix (0 = orthogonal)') +
-      (S.mode === 'sample' ? stat('ESS', `${e.toFixed(0)}/${N}`, 'Effective sample size of the importance weights w = p^(1/T)/q') : '');
+    : stat('log P(S)', fmt(S.logP), 'logp') +
+      stat('quality', fmt(quality(S.logp, S.sel)), 'quality') +
+      stat('diversity', fmt(diversity(S.G, N, S.sel)), 'diversity') +
+      (S.mode === 'sample' ? stat('ESS', `${e.toFixed(0)}/${N}`, 'ess') : '');
 }
 
 function renderVolHint() {
   const el = $('#vol-hint');
   if (S.dims === 1) { el.innerHTML = ''; return; }
   el.innerHTML = S.sel.length <= 3 && S.sel.length >= 2
-    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg>spanned volume (det L(S) = volume²)`
+    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg>spanned volume <button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button>`
     : `<button id="vol-btn" class="link">Show the spanned volume (K = 3)</button>`;
   const b = $('#vol-btn');
   if (b) b.onclick = () => setK(3);
@@ -507,13 +508,8 @@ const clampInt = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(+v || lo)))
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
-const MODE_HINT = {
-  sample: 'An exact random draw from the K-DPP over the pool. Resample for another.',
-  map: 'Greedy approximation to the most likely subset. Deterministic.',
-};
 function setMode(m) {
   S.mode = m;
-  $('#mode-hint').textContent = MODE_HINT[m];
   $('#resample').disabled = m === 'map';
   $('#T-slider').value = tToSlider(S.T[m]);
   recompute({ newDraw: true });
@@ -526,11 +522,11 @@ function setK(v) {
 }
 
 function wire() {
+  initExplainers();
   // Collapsed sampling settings: the summary line shows the current values.
-  const advSum = () => ($('#adv-sum').textContent = `${$('#live-N').value} samples · T′ ${(+$('#live-Tp').value).toFixed(1)} · ${$('#live-max').value} tokens`);
+  const advSum = () => ($('#adv-sum').textContent = `${$('#live-N').value} · T′ ${(+$('#live-Tp').value).toFixed(1)} · ${$('#live-max').value} tok`);
   ['#live-N', '#live-Tp', '#live-max'].forEach((id) => $(id).addEventListener('input', advSum));
   advSum();
-  $('#mode-hint').textContent = MODE_HINT[S.mode];
   $('#resample').disabled = S.mode === 'map';
   $('#T-slider').value = tToSlider(S.T[S.mode]);
   let raf = 0;
