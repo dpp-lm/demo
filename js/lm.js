@@ -24,6 +24,8 @@ export const MODELS = [
   { key: 'smollm2-1.7b', repo: 'HuggingFaceTB/SmolLM2-1.7B-Instruct', name: 'SmolLM2 1.7B', short: 'SmolLM2 1.7B', gpu: 1110, cpu: 'q4' },
   { key: 'qwen2.5-1.5b', repo: 'onnx-community/Qwen2.5-1.5B-Instruct', name: 'Qwen2.5 1.5B', short: 'Qwen 1.5B', gpu: 1220, cpu: 'q4' },
   { key: 'qwen3-1.7b', repo: 'onnx-community/Qwen3-1.7B-ONNX', name: 'Qwen3 1.7B', short: 'Qwen3 1.7B', gpu: 1430, cpu: 'q4', chat: { enable_thinking: false } },
+  { key: 'qwen2.5-coder-1.5b', repo: 'onnx-community/Qwen2.5-Coder-1.5B-Instruct', name: 'Qwen2.5 Coder 1.5B', short: 'Coder 1.5B', gpu: 1340, cpu: 'q4' },
+  { key: 'qwen2.5-coder-3b', repo: 'onnx-community/Qwen2.5-Coder-3B-Instruct', name: 'Qwen2.5 Coder 3B', short: 'Coder 3B', gpu: 2370, cpu: 'q4' },
   { key: 'qwen3-4b', repo: 'onnx-community/Qwen3-4B-ONNX', name: 'Qwen3 4B', short: 'Qwen3 4B', gpu: 2160, cpu: null, chat: { enable_thinking: false } },
   { key: 'phi-3.5-mini', repo: 'onnx-community/Phi-3.5-mini-instruct-onnx-web', name: 'Phi-3.5 mini (3.8B)', short: 'Phi-3.5 mini', gpu: 2320, cpu: null },
 ];
