@@ -13,7 +13,7 @@ const Tprime = 1.0;
 const DTYPE = M.cpu; // 4-bit weights, float32 activations: log p is exact (tests/check-lm.mjs)
 
 export const PROMPTS = [
-  { id: 'sort', prompt: 'Write a one-line Python expression that sorts a list `xs`. Reply with code only.' },
+  { id: 'sort', prompt: 'Write a short Python function that sorts a list without using sorted() or .sort(). Reply with code only.' },
   { id: 'story', prompt: 'Write the opening sentence of a short story. Reply with one sentence only.' },
   { id: 'bike', prompt: 'Give one creative use for an old bicycle, in one sentence.' },
   { id: 'bank', prompt: 'What does "bank" mean? Answer in one sentence.' },

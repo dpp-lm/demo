@@ -485,6 +485,10 @@ function runLive() {
   $('#progress-last').textContent = '';
   worker.onmessage = ({ data }) => {
     if (data.type === 'status' || data.type === 'progress') $('#live-status').textContent = data.text;
+    // Fill the bar during downloads too ("Downloading X… a / b MB").
+    const dl = data.type === 'status' && /(\d+) \/ (\d+) MB/.exec(data.text);
+    if (dl) { $('#progress').hidden = false; $('#progress-fill').style.width = `${(100 * +dl[1]) / Math.max(1, +dl[2])}%`; $('#progress-last').textContent = ''; }
+    if (data.type === 'status' && /^Sampling 0\//.test(data.text)) $('#progress-fill').style.width = '0%';
     if (data.type === 'progress') {
       $('#progress').hidden = false;
       $('#progress-fill').style.width = `${(100 * data.n) / data.N}%`;

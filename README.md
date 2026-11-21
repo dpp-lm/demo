@@ -1,4 +1,4 @@
-# A Model of Diverse Sampling from Language Models: demo
+# PoolDPP demo
 
 An interactive companion to *A Model of Diverse Sampling from Language Models*
 ([arXiv:2611.25003](https://arxiv.org/abs/2611.25003)). It is a static site:
@@ -29,7 +29,7 @@ npm install --onnxruntime-node-install-cuda=skip
 npm test                                       # DPP maths vs brute force
 python3 -m http.server 8000                    # then open http://localhost:8000
 NODE_USE_ENV_PROXY=1 node tests/check-lm.mjs 1.5 q4   # log p / log q vs teacher forcing (downloads the model)
-NODE_USE_ENV_PROXY=1 node scripts/build-gallery.mjs 100 128 # rebuild data/ (a few minutes per prompt on CPU)
+NODE_USE_ENV_PROXY=1 node scripts/build-gallery.mjs 100 128 all qwen3-1.7b   # rebuild data/ (a few minutes per prompt on CPU)
 ```
 
 `NODE_USE_ENV_PROXY=1` is only needed behind an HTTPS proxy.
@@ -41,7 +41,7 @@ disagree by tens of nats; the weights would still be self-consistent, but
 
 ## Deploy
 
-`.github/workflows/pages.yml` runs the unit tests and publishes
+`.github/workflows/pooldpp-pages.yml` runs the unit tests and publishes
 `index.html`, `css/`, `js/` and `data/` to GitHub Pages on pushes to `main`
 (or by hand via *Run workflow*). Enable it once under
 *Settings → Pages → Source: GitHub Actions*.
