@@ -16,7 +16,7 @@ const S = {
   G: null,           // Gram ΦᵀΦ
   logp: null, logq: null,
   proj: null,        // { coords: [N][3], frac: number[] }
-  dims: 2,
+  dims: 3,
   mode: 'sample',
   T: { sample: 1, map: 20 },
   K: 10,
