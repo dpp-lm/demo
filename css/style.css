@@ -243,6 +243,53 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .pool-table tr.sel td:first-child { box-shadow: none; }
   .pool-table tr.sel { box-shadow: inset 3px 0 0 var(--accent); padding-left: 8px; }
 }
+/* ---------- touch screens: finger-sized targets, no zoom-on-focus ---------- */
+@media (pointer: coarse), (max-width: 600px) {
+  input[type=number], textarea { font-size: 16px; }
+  input[type=number] { min-height: 44px; }
+  .btn { min-height: 44px; }
+  .btn.icon { width: 44px; font-size: 20px; }
+  .stepper input { width: 56px; }
+  .seg span { padding: 11px 10px; font-size: 14px; }
+  .seg.small span { padding: 10px 13px; font-size: 13px; }
+  .examples button { padding: 11px 14px; font-size: 14px; }
+  .adv summary { padding: 12px 0; font-size: 14px; }
+  .viewmenu summary { padding: 10px 12px; font-size: 13.5px; }
+  .viewmenu .menu { gap: 0; padding: 4px 6px; }
+  .viewmenu .menu .toggle { padding: 10px 6px; font-size: 14px; }
+  .toggle input { width: 20px; height: 20px; }
+  input[type=range] { height: 32px; margin: 0; }
+  .pool-table summary { padding: 12px 0; }
+  .ins-close { width: 44px; height: 44px; top: 0; right: 0; }
+}
+
+/* ---------- phones ---------- */
+@media (max-width: 600px) {
+  /* Example prompts: one swipeable row instead of a block of chips. */
+  .examples { flex-wrap: nowrap; overflow-x: auto; margin: 0 -16px; padding: 2px 16px; scrollbar-width: none; scroll-snap-type: x proximity; }
+  .examples::-webkit-scrollbar { display: none; }
+  .examples button { flex: none; scroll-snap-align: start; }
+
+  /* "Pick a subset" docks to the bottom of the screen while the plot is in view,
+     so T and K can be changed while watching the selection move. */
+  .step-2 {
+    position: sticky; bottom: 0; z-index: 30;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "seg k" "t t" "r r";
+    gap: 8px 10px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    margin: 0 -16px; border-radius: 12px 12px 0 0; border-bottom: 0;
+    box-shadow: 0 -6px 20px rgb(0 0 0 / .08);
+  }
+  .step-2 > h2, .step-2 > .hint { display: none; }
+  .step-2 > .seg { grid-area: seg; align-self: end; }
+  .step-2 > .field { grid-area: t; gap: 0; }
+  .step-2 > .row-between { display: contents; }
+  .step-2 > .row-between > .field { grid-area: k; align-self: end; }
+  .step-2 > .row-between > .field > .lab { display: none; }
+  .step-2 #resample { grid-area: r; }
+  .step-2 #resample:disabled { display: none; }
+  .step-2 .ends { margin-top: -4px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
