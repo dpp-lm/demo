@@ -95,10 +95,14 @@
         <label><input type="radio" name="dims" value="3" checked><span>3D</span></label>
       </div>
       <span id="stage-note" class="note"></span>
+      <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Labels</span></label>
       <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale by quality</span></label>
     </div>
     <div class="plot-wrap">
-      <div id="plot" class="plot" aria-label="Projection of the completions' embeddings"></div>
+      <div class="plot-box">
+        <div id="plot" class="plot" aria-label="Projection of the completions' embeddings"></div>
+        <div id="labels" class="labels" aria-hidden="true"></div>
+      </div>
       <div id="eigbars" class="eigbars" title="Variance captured by each principal axis. Click 1–3 to change the view."></div>
       <div id="inspect" class="inspect" aria-live="polite" hidden></div>
     </div>

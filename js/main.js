@@ -64,6 +64,7 @@ async function loadGalleryItem(id) {
 }
 
 function setPool(pool, phi) {
+  $('#labels').innerHTML = '';
   S.pinned = -1;
   S.pool = pool;
   S.phi = phi;
@@ -119,6 +120,7 @@ function render() {
   renderCards();
   renderVolHint();
   renderInspect();
+  renderLabels();
   if ($('.pool-table').open) renderTable();
 }
 
@@ -372,6 +374,60 @@ const plot = {
   highlightCards(i) { document.querySelectorAll('.card').forEach((c) => c.classList.toggle('hl', +c.dataset.i === i)); },
 };
 
+// ---------------------------------------------------------------- labels
+// Small callouts with the opening words of each selected completion. Shown for
+// K ≤ 6 so they never swamp the plot; in 3D they follow the points every frame.
+const MAX_LABELS = 6;
+function labelText(s) { const t = s.text.replace(/\s+/g, ' ').trim(); return t.length > 90 ? t.slice(0, 88) + '…' : t; }
+function renderLabels() {
+  const layer = $('#labels');
+  const show = $('#label-toggle').checked && S.sel.length && S.sel.length <= MAX_LABELS;
+  if (!show) { layer.innerHTML = ''; return; }
+  const want = new Set(S.sel.map(String));
+  layer.querySelectorAll('.lbl').forEach((el) => { if (!want.has(el.dataset.i)) el.remove(); });
+  for (const i of S.sel) {
+    if (layer.querySelector(`.lbl[data-i="${i}"]`)) continue;
+    const el = document.createElement('div');
+    el.className = 'lbl';
+    el.dataset.i = i;
+    el.appendChild(document.createElement('span')).textContent = labelText(S.pool.samples[i]);
+    el.onclick = () => inspect(i);
+    el.onmouseenter = () => plot.highlight(i);
+    el.onmouseleave = () => plot.highlight(-1);
+    layer.appendChild(el);
+  }
+  layer.classList.toggle('anim', S.dims !== 3);
+  placeLabels();
+}
+function placeLabels() {
+  const layer = $('#labels');
+  const els = [...layer.querySelectorAll('.lbl')];
+  if (!els.length) return;
+  const W = layer.clientWidth, H = layer.clientHeight;
+  const items = els.map((el) => {
+    const i = +el.dataset.i;
+    const p = S.dims === 3 ? plot.p3?.screenXY(i) : plot.p2.pos?.[i];
+    return p && { el, x: p[0], y: p[1], w: el.offsetWidth, h: el.offsetHeight };
+  }).filter(Boolean).sort((a, b) => a.y - b.y);
+  // Right of the point (left if it would leave the plot), then nudge down to avoid overlaps.
+  const placed = [];
+  for (const it of items) {
+    let left = it.x + 10 + it.w > W - 4 ? it.x - 10 - it.w : it.x + 10;
+    left = Math.max(4, left);
+    let top = Math.min(Math.max(4, it.y - it.h / 2), H - it.h - 4);
+    for (const q of placed) {
+      const overlapX = left < q.left + q.w && q.left < left + it.w;
+      if (overlapX && top < q.top + q.h + 3 && q.top < top + it.h) top = q.top + q.h + 3;
+    }
+    placed.push({ left, top, w: it.w, h: it.h });
+    it.el.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+  }
+}
+(function follow3D() {
+  if (S.dims === 3 && $('#labels').childElementCount) placeLabels();
+  requestAnimationFrame(follow3D);
+})();
+
 // ---------------------------------------------------------------- inspector
 // Tap or click a point (or a card) to pin its text and numbers under the plot.
 function inspect(i) {
@@ -490,7 +546,8 @@ function wire() {
   $('#K-plus').onclick = () => setK(S.K + 1);
   document.querySelectorAll('input[name=dims]').forEach((r) => (r.onchange = () => setDims(+r.value)));
   $('#resample').onclick = () => recompute({ newDraw: true });
-  $('#scale-toggle').onchange = () => plot.update();
+  $('#scale-toggle').onchange = () => { plot.update(); renderLabels(); };
+  $('#label-toggle').onchange = () => renderLabels();
   $('.pool-table').addEventListener('toggle', () => { if ($('.pool-table').open) renderTable(); });
   $('#live-go').onclick = runLive;
   $('#live-stop').onclick = () => worker?.postMessage({ type: 'stop' });

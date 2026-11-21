@@ -219,6 +219,14 @@ export class Plot3D {
     return best;
   }
 
+  // Position of point i in CSS pixels relative to the canvas.
+  screenXY(i) {
+    if (!this.current?.[i]) return null;
+    const v = this.current[i].clone().project(this.camera);
+    const w = this.renderer.domElement.clientWidth, h = this.renderer.domElement.clientHeight;
+    return [((v.x + 1) / 2) * w, ((1 - v.y) / 2) * h];
+  }
+
   highlight(i) { this.hovered = i; this.layout(); }
 
   dispose() {
