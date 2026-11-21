@@ -1,4 +1,4 @@
-# PoolDPP demo
+# A Model of Diverse Sampling from Language Models: demo
 
 An interactive companion to *A Model of Diverse Sampling from Language Models*
 ([arXiv:2611.25003](https://arxiv.org/abs/2611.25003)). It is a static site:
