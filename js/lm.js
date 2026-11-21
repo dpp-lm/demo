@@ -13,6 +13,21 @@
 // argument so the same code runs in the browser worker and in Node.
 
 export const DEFAULT_LM = 'onnx-community/Qwen2.5-0.5B-Instruct';
+
+// Instruction-tuned models with browser (ONNX) builds. `gpu` is the 4-bit WebGPU
+// download in MB; `cpu` the dtype used without a float16-capable GPU (null = GPU only).
+export const MODELS = [
+  { key: 'qwen2.5-0.5b', repo: 'onnx-community/Qwen2.5-0.5B-Instruct', name: 'Qwen2.5 0.5B', short: 'Qwen 0.5B', gpu: 480, cpu: 'q4' },
+  // Gemma's 4-bit export needs an operator the CPU runtime lacks, and its 8-bit export quantizes
+  // activations per call (log p would depend on how it was computed), so it is GPU-only here.
+  { key: 'gemma-3-1b', repo: 'onnx-community/gemma-3-1b-it-ONNX', name: 'Gemma 3 1B', short: 'Gemma 1B', gpu: 760, cpu: null },
+  { key: 'smollm2-1.7b', repo: 'HuggingFaceTB/SmolLM2-1.7B-Instruct', name: 'SmolLM2 1.7B', short: 'SmolLM2 1.7B', gpu: 1110, cpu: 'q4' },
+  { key: 'qwen2.5-1.5b', repo: 'onnx-community/Qwen2.5-1.5B-Instruct', name: 'Qwen2.5 1.5B', short: 'Qwen 1.5B', gpu: 1220, cpu: 'q4' },
+  { key: 'qwen3-1.7b', repo: 'onnx-community/Qwen3-1.7B-ONNX', name: 'Qwen3 1.7B', short: 'Qwen3 1.7B', gpu: 1430, cpu: 'q4', chat: { enable_thinking: false } },
+  { key: 'qwen3-4b', repo: 'onnx-community/Qwen3-4B-ONNX', name: 'Qwen3 4B', short: 'Qwen3 4B', gpu: 2160, cpu: null, chat: { enable_thinking: false } },
+  { key: 'phi-3.5-mini', repo: 'onnx-community/Phi-3.5-mini-instruct-onnx-web', name: 'Phi-3.5 mini (3.8B)', short: 'Phi-3.5 mini', gpu: 2320, cpu: null },
+];
+export const modelByKey = (k) => MODELS.find((m) => m.key === k) ?? MODELS[0];
 export const DEFAULT_EMBEDDER = 'Xenova/all-MiniLM-L6-v2';
 
 function logSumExp(x, scale) {
@@ -42,9 +57,9 @@ export function eosIds(model, tokenizer) {
   return new Set(ids.filter((v) => v !== null && v !== undefined).map(Number));
 }
 
-export async function loadLM(T, { model = DEFAULT_LM, device, dtype, progress_callback } = {}) {
+export async function loadLM(T, { model = DEFAULT_LM, device, dtype, progress_callback, extra = {} } = {}) {
   const tokenizer = await T.AutoTokenizer.from_pretrained(model, { progress_callback });
-  const lm = await T.AutoModelForCausalLM.from_pretrained(model, { device, dtype, progress_callback });
+  const lm = await T.AutoModelForCausalLM.from_pretrained(model, { device, dtype, progress_callback, ...extra });
   return { tokenizer, model: lm, name: model };
 }
 
@@ -65,11 +80,11 @@ export async function embed(embedder, texts, batchSize = 16) {
   return out;
 }
 
-export function chatPrompt(tokenizer, prompt, system) {
+export function chatPrompt(tokenizer, prompt, system, chat = {}) {
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: prompt });
-  return tokenizer.apply_chat_template(messages, { tokenize: false, add_generation_prompt: true });
+  return tokenizer.apply_chat_template(messages, { tokenize: false, add_generation_prompt: true, ...chat });
 }
 
 /**
@@ -78,13 +93,13 @@ export function chatPrompt(tokenizer, prompt, system) {
  * string hit maxNewTokens (then logp/logq are prefix log-probs; see note in UI).
  */
 export async function samplePool(T, { tokenizer, model }, {
-  prompt, system = null, N = 50, Tprime = 1.0, maxNewTokens = 64, batchSize = 10,
+  prompt, system = null, chat = {}, N = 50, Tprime = 1.0, maxNewTokens = 64, batchSize = 10,
   rng = Math.random, onProgress = () => {}, shouldStop = () => false,
 }) {
   const { LogitsProcessor, LogitsProcessorList } = T;
   const eos = eosIds(model, tokenizer);
   const eosList = [...eos];
-  const text = chatPrompt(tokenizer, prompt, system);
+  const text = chatPrompt(tokenizer, prompt, system, chat);
   const promptIds = tokenizer(text, { add_special_tokens: false });
   const promptLen = promptIds.input_ids.dims.at(-1);
   const pool = [];

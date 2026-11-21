@@ -1,15 +1,18 @@
 // Slow integration check (downloads ~0.5GB): recorded log p / log q must match
 // an independent teacher-forced forward pass. Run: node tests/check-lm.mjs
 import * as T from '@huggingface/transformers';
-import { loadLM, samplePool, chatPrompt, eosIds } from '../js/lm.js';
+import { loadLM, samplePool, chatPrompt, eosIds, modelByKey } from '../js/lm.js';
 
-const lm = await loadLM(T, { dtype: process.argv[3] ?? 'q8' });
+const M = modelByKey(process.argv[4] ?? 'qwen2.5-0.5b');
+const dt = process.argv[3] ?? 'q4';
+const lm = await loadLM(T, { model: M.repo, dtype: dt, extra: dt === M.cpu ? M.cpuExtra ?? {} : {} });
+console.log('model', M.name);
 const Tp = Number(process.argv[2] ?? 1.0);
 const t0 = Date.now();
-const pool = await samplePool(T, lm, { prompt: 'Name a fruit and say one thing about it.', N: 4, Tprime: Tp, maxNewTokens: 24, batchSize: 4 });
+const pool = await samplePool(T, lm, { prompt: 'Name a fruit and say one thing about it.', chat: M.chat ?? {}, N: 4, Tprime: Tp, maxNewTokens: 24, batchSize: 4 });
 console.log('gen secs', (Date.now() - t0) / 1000);
 const eos = [...eosIds(lm.model, lm.tokenizer)];
-const text = chatPrompt(lm.tokenizer, 'Name a fruit and say one thing about it.');
+const text = chatPrompt(lm.tokenizer, 'Name a fruit and say one thing about it.', null, M.chat ?? {});
 let worst = 0;
 for (const s of pool) {
   const pIds = lm.tokenizer(text, { add_special_tokens: false }).input_ids.tolist()[0].map(Number);

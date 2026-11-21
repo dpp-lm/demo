@@ -1,12 +1,14 @@
 // Live pool construction in a Web Worker: same code path as the gallery builder.
 import * as T from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
-import { loadLM, loadEmbedder, samplePool, embed, DEFAULT_LM, DEFAULT_EMBEDDER } from './lm.js';
+import { loadLM, loadEmbedder, samplePool, embed, modelByKey, DEFAULT_EMBEDDER } from './lm.js';
 
-let lm = null, embedder = null, stop = false, device = null;
+let lm = null, lmKey = null, embedder = null, stop = false, device = null, f16 = false;
 
+// WebGPU if available; float16 weights only when the GPU supports shader-f16.
 async function pickDevice() {
   try {
-    if (self.navigator?.gpu && (await self.navigator.gpu.requestAdapter())) return 'webgpu';
+    const a = await self.navigator?.gpu?.requestAdapter();
+    if (a) { f16 = a.features.has('shader-f16'); return 'webgpu'; }
   } catch {}
   return 'wasm';
 }
@@ -29,9 +31,14 @@ self.onmessage = async ({ data }) => {
   stop = false;
   try {
     device ??= await pickDevice();
-    if (!lm) {
-      postMessage({ type: 'status', text: `Loading language model (${device})…` });
-      lm = await loadLM(T, { model: DEFAULT_LM, device, dtype: device === 'webgpu' ? 'q4f16' : 'q4', progress_callback: progressCb('language model') });
+    const M = modelByKey(data.model);
+    const dtype = device === 'webgpu' && f16 ? 'q4f16' : M.cpu;
+    if (!dtype) throw new Error(`${M.name} needs a GPU with float16 support, which this browser does not offer. Pick a smaller model.`);
+    if (!lm || lmKey !== M.key) {
+      if (lm) { try { await lm.model.dispose(); } catch {} lm = null; }
+      postMessage({ type: 'status', text: `Loading ${M.name} (${device === 'webgpu' ? 'GPU' : 'CPU'})…` });
+      lm = await loadLM(T, { model: M.repo, device, dtype, extra: dtype === M.cpu ? M.cpuExtra ?? {} : {}, progress_callback: progressCb(M.name) });
+      lmKey = M.key;
     }
     if (!embedder) {
       postMessage({ type: 'status', text: 'Loading embedder…' });
@@ -40,7 +47,7 @@ self.onmessage = async ({ data }) => {
     const t0 = performance.now();
     postMessage({ type: 'status', text: `Sampling 0/${data.N}…` });
     const pool = await samplePool(T, lm, {
-      prompt: data.prompt, N: data.N, Tprime: data.Tprime, maxNewTokens: data.maxNewTokens,
+      prompt: data.prompt, chat: M.chat ?? {}, N: data.N, Tprime: data.Tprime, maxNewTokens: data.maxNewTokens,
       batchSize: device === 'webgpu' ? 10 : 5,
       shouldStop: () => stop,
       onProgress: (n, N, last) => {
@@ -57,7 +64,7 @@ self.onmessage = async ({ data }) => {
     postMessage({
       type: 'done', device,
       pool: {
-        prompt: data.prompt, model: DEFAULT_LM, embedder: DEFAULT_EMBEDDER, Tprime: data.Tprime,
+        prompt: data.prompt, model: M.repo, modelName: M.name, embedder: DEFAULT_EMBEDDER, Tprime: data.Tprime,
         maxNewTokens: data.maxNewTokens, N: pool.length, D,
         samples: pool.map(({ text, logp, logq, nTokens, ended }) => ({ text, logp, logq, nTokens, ended })),
       },

@@ -5,6 +5,7 @@ import {
 } from './dpp.js';
 import { Plot3D } from './plot3d.js';
 import { initExplainers } from './explain.js';
+import { MODELS, modelByKey } from './lm.js';
 
 const $ = (s) => document.querySelector(s);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -61,7 +62,7 @@ async function loadGalleryItem(id) {
   $('#prompt').dispatchEvent(new Event('input'));
   markExample(id);
   $('#progress').hidden = true;
-  $('#live-status').textContent = `Example: ${rec.N} completions. Edit the prompt to try your own.`;
+  $('#live-status').textContent = `Example: ${rec.N} completions from ${modelByKey(MODELS.find((m) => m.repo === rec.model)?.key).name}. Edit the prompt to try your own.`;
   setPool(rec, decodeEmb(rec.emb, rec.N, rec.D));
 }
 
@@ -493,7 +494,7 @@ function runLive() {
     if (data.type === 'done') {
       const D = data.pool.D;
       const phi = Array.from({ length: data.pool.N }, (_, i) => data.emb.subarray(i * D, (i + 1) * D));
-      $('#live-status').textContent = `Sampled ${data.pool.N} completions on ${data.device === 'webgpu' ? 'your GPU' : 'your CPU'}. Drag T to change the subset.`;
+      $('#live-status').textContent = `${data.pool.N} completions from ${data.pool.modelName}, on your ${data.device === 'webgpu' ? 'GPU' : 'CPU'}.`;
       $('#progress').hidden = true;
       markExample(null);
       setPool(data.pool, phi);
@@ -501,7 +502,7 @@ function runLive() {
     }
   };
   const done = () => { $('#live-go').hidden = false; $('#live-stop').hidden = true; };
-  worker.postMessage({ type: 'run', prompt, N, Tprime: Tp, maxNewTokens });
+  worker.postMessage({ type: 'run', prompt, N, Tprime: Tp, maxNewTokens, model: $('#model').value });
 }
 const clampInt = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(+v || lo)));
 
@@ -525,7 +526,25 @@ function setK(v) {
 function wire() {
   initExplainers();
   // Collapsed sampling settings: the summary line shows the current values.
-  const advSum = () => ($('#adv-sum').textContent = `Qwen 0.5B · ${$('#live-N').value} samples`);
+  // Model picker: default to Gemma 3 1B with WebGPU, the small Qwen without; remember the choice.
+  // Models marked cpu: null need a GPU with float16 support (WebGPU 'shader-f16').
+  let hasGPU = false;
+  const fillModels = () => {
+    $('#model').innerHTML = MODELS.map((m) => `<option value="${m.key}" ${!hasGPU && !m.cpu ? 'disabled' : ''}>${m.name} · ${(m.gpu / 1000).toFixed(1)} GB${m.cpu ? '' : ' · GPU only'}</option>`).join('');
+    let saved = null;
+    try { saved = localStorage.getItem('dpp-lm-model'); } catch {}
+    const usable = (k) => MODELS.some((m) => m.key === k && (hasGPU || m.cpu));
+    $('#model').value = usable(saved) ? saved : hasGPU ? 'qwen3-1.7b' : 'qwen2.5-0.5b';
+    advSum(); modelNote();
+  };
+  const modelNote = () => {
+    const m = modelByKey($('#model').value);
+    $('#model-note').textContent = `Runs on your ${hasGPU ? 'GPU' : 'CPU'}. First use downloads about ${(m.gpu / 1000).toFixed(1)} GB; it is cached after that.`;
+  };
+  const advSum = () => ($('#adv-sum').textContent = `${modelByKey($('#model').value).short} · ${$('#live-N').value} samples`);
+  $('#model').addEventListener('change', () => { try { localStorage.setItem('dpp-lm-model', $('#model').value); } catch {} advSum(); modelNote(); });
+  fillModels();
+  navigator.gpu?.requestAdapter().then((a) => { hasGPU = !!a?.features.has('shader-f16'); fillModels(); }).catch(() => {});
   ['#live-N', '#live-Tp', '#live-max'].forEach((id) => $(id).addEventListener('input', advSum));
   advSum();
   $('#resample').disabled = S.mode === 'map';
