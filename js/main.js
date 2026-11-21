@@ -17,7 +17,7 @@ const S = {
   logp: null, logq: null,
   proj: null,        // { coords: [N][3], frac: number[] }
   dims: 3,
-  mode: 'sample',
+  mode: 'map',
   T: { sample: 1, map: 20 },
   K: 3,
   pinned: -1,      // point shown in the inspector
@@ -475,6 +475,7 @@ function wire() {
   ['#live-N', '#live-Tp', '#live-max'].forEach((id) => $(id).addEventListener('input', advSum));
   advSum();
   $('#mode-hint').textContent = MODE_HINT[S.mode];
+  $('#resample').disabled = S.mode === 'map';
   $('#T-slider').value = tToSlider(S.T[S.mode]);
   let raf = 0;
   $('#T-slider').addEventListener('input', (e) => {
