@@ -95,8 +95,13 @@
         <label><input type="radio" name="dims" value="3" checked><span>3D</span></label>
       </div>
       <span id="stage-note" class="note"></span>
-      <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Labels</span></label>
-      <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale by quality</span></label>
+      <details class="viewmenu" id="viewmenu">
+        <summary>View</summary>
+        <div class="menu">
+          <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Label selected points</span></label>
+          <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale points by quality</span></label>
+        </div>
+      </details>
     </div>
     <div class="plot-wrap">
       <div class="plot-box">

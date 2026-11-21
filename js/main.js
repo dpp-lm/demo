@@ -548,6 +548,9 @@ function wire() {
   $('#resample').onclick = () => recompute({ newDraw: true });
   $('#scale-toggle').onchange = () => { plot.update(); renderLabels(); };
   $('#label-toggle').onchange = () => renderLabels();
+  // Close the View menu on an outside click or Escape.
+  document.addEventListener('click', (e) => { const m = $('#viewmenu'); if (m.open && !m.contains(e.target)) m.open = false; });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#viewmenu').open = false; });
   $('.pool-table').addEventListener('toggle', () => { if ($('.pool-table').open) renderTable(); });
   $('#live-go').onclick = runLive;
   $('#live-stop').onclick = () => worker?.postMessage({ type: 'stop' });
