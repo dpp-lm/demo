@@ -160,7 +160,7 @@ function renderVolHint() {
   const el = $('#vol-hint');
   if (S.dims === 1) { el.innerHTML = ''; return; }
   el.innerHTML = S.sel.length <= 3 && S.sel.length >= 2
-    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg>spanned volume (det L<sub>S</sub> = volume²)`
+    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg>spanned volume (det L(S) = volume²)`
     : `<button id="vol-btn" class="link">Show the spanned volume (K = 3)</button>`;
   const b = $('#vol-btn');
   if (b) b.onclick = () => setK(3);
@@ -398,7 +398,7 @@ function renderInspect() {
 // ---------------------------------------------------------------- pool table
 let sortKey = 'logp', sortDir = -1;
 function renderTable() {
-  const T = S.T.sample; // log w is PoolDPP-Sampling's importance weight
+  const T = S.T.sample; // log w is the sampling mode's importance weight
   const sel = new Set(S.sel);
   const rows = S.pool.samples.map((s, i) => ({ i, text: s.text + (s.ended ? '' : '…'), logp: s.logp, logq: s.logq, logw: s.logp / T - s.logq, pi: S.pi[i] }));
   rows.sort((a, b) => sortDir * (typeof a[sortKey] === 'string' ? a[sortKey].localeCompare(b[sortKey]) : a[sortKey] - b[sortKey]));

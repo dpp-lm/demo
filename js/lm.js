@@ -1,4 +1,4 @@
-// Pool construction for PoolDPP (paper §2, §4).
+// Pool construction (paper §2, §4).
 //
 // Draws N strings i.i.d. from the locally annealed proposal q = p°_{T'} (Eq. 1–2)
 // and records, for every string, the exact log p(y) and log q(y), including the

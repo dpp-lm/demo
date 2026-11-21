@@ -1,4 +1,4 @@
-// K-DPP machinery for PoolDPP (paper §3–§5). Plain JS, no dependencies.
+// K-DPP machinery for the paper's pool-based sampler (§3–§5). Plain JS, no dependencies.
 //
 // Notation follows the paper: φ unit-norm embeddings, κ(y) = p(y)^{1/T},
 // pool kernel L̂ = B̂ᵀB̂ with columns √(w/N) φ (sampling) or √κ φ (MAP).
@@ -255,12 +255,12 @@ export function inclusionProbs(spec, K) {
   return pi;
 }
 
-// ---------- the PoolDPP modes ----------
+// ---------- the two inference modes ----------
 
 /**
  * Per-item log column scale for each mode.
  *  'sample': log(w/N) with w = κ/q  (Eq. 8) — the importance-weighted pool kernel.
- *  'map'   : log κ                 — PoolDPP-MAP needs no importance correction (§4).
+ *  'map'   : log κ                 — the MAP mode needs no importance correction (§4).
  *  'naive' : log p                 — "naive DPP": proposal likelihood, no global T.
  */
 export function columnLogScale(mode, logp, logq, T) {
