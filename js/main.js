@@ -112,7 +112,7 @@ function render() {
   document.querySelectorAll('input[name=dims]').forEach((r) => (r.checked = +r.value === S.dims));
   const distinct = new Set(S.pool.samples.map((x) => x.text)).size;
   const N = S.pool.samples.length;
-  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate, tap a point to read it' : 'tap a point to read it'}`;
+  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate · tap a point to read it · change dimensions with the bars at right' : 'tap a point to read it · change dimensions with the bars at right'}`;
   $('#subset-meta').textContent = `K = ${S.sel.length} · ${S.mode === 'map' ? 'greedy MAP' : 'K-DPP sample'} at T = ${fmtT(S.T[S.mode])}`;
   $('#T-out').textContent = fmtT(S.T[S.mode]);
   plot.update();
