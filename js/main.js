@@ -46,7 +46,7 @@ const EXAMPLE_LABELS = { sort: 'Sort a list', story: 'Story opening', bike: 'Old
 async function loadGallery() {
   const idx = await (await fetch('data/index.json')).json();
   const el = $('#examples');
-  el.innerHTML = '<option value="">Examples…</option>' + idx.map((g) => `<option value="${g.id}">${escapeHtml(EXAMPLE_LABELS[g.id] ?? g.id)}</option>`).join('');
+  el.innerHTML = '<option value="">Examples</option>' + idx.map((g) => `<option value="${g.id}">${escapeHtml(EXAMPLE_LABELS[g.id] ?? g.id)}</option>`).join('');
   el.onchange = () => el.value && loadGalleryItem(el.value);
   await loadGalleryItem(idx.find((g) => g.id === 'story')?.id ?? idx[0].id);
 }
@@ -58,6 +58,7 @@ function markExample(id) {
 async function loadGalleryItem(id) {
   const rec = await (await fetch(`data/${id}.json`)).json();
   $('#prompt').value = rec.prompt;
+  $('#prompt').dispatchEvent(new Event('input'));
   markExample(id);
   $('#progress').hidden = true;
   $('#live-status').textContent = `Example: ${rec.N} completions. Edit the prompt to try your own.`;
@@ -476,7 +477,7 @@ function runLive() {
   const maxNewTokens = clampInt($('#live-max').value, 8, 256);
   const prompt = $('#prompt').value.trim();
   if (!prompt) return;
-  $('#live-go').disabled = true;
+  $('#live-go').hidden = true;
   $('#live-stop').hidden = false;
   $('#progress').hidden = false;
   $('#progress-fill').style.width = '0%';
@@ -499,7 +500,7 @@ function runLive() {
       done();
     }
   };
-  const done = () => { $('#live-go').disabled = false; $('#live-stop').hidden = true; };
+  const done = () => { $('#live-go').hidden = false; $('#live-stop').hidden = true; };
   worker.postMessage({ type: 'run', prompt, N, Tprime: Tp, maxNewTokens });
 }
 const clampInt = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(+v || lo)));
@@ -549,6 +550,15 @@ function wire() {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#viewmenu').open = false; });
   $('.pool-table').addEventListener('toggle', () => { if ($('.pool-table').open) renderTable(); });
   $('#live-go').onclick = runLive;
+  // Composer: Enter generates, Shift+Enter adds a line; the send button needs a prompt.
+  const syncGo = () => ($('#live-go').disabled = !$('#prompt').value.trim());
+  $('#prompt').addEventListener('input', syncGo);
+  $('#prompt').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!$('#live-go').hidden && !$('#live-go').disabled) runLive(); }
+  });
+  syncGo();
+  // Close the settings menu on an outside click.
+  document.addEventListener('click', (e) => { const m = $('#adv'); if (m.open && !m.contains(e.target)) m.open = false; });
   $('#live-stop').onclick = () => worker?.postMessage({ type: 'stop' });
   let rt = 0;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { plot.reset(); render(); }, 200); });

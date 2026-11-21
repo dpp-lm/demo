@@ -38,23 +38,21 @@
 <main class="app">
   <aside class="controls" aria-label="Controls">
     <section class="step step-1">
-      <div class="step-head">
-        <label class="lab" for="prompt">Prompt</label>
-        <select id="examples" aria-label="Example prompts"><option value="">Examples…</option></select>
-      </div>
-      <textarea id="prompt" rows="2" spellcheck="false"></textarea>
-      <div class="gen-row">
-        <details class="adv" id="adv">
-          <summary><span>Settings</span><span id="adv-sum" class="adv-sum"></span></summary>
-          <div class="grid3">
-            <label class="field"><span class="lab">Samples N</span><input id="live-N" type="number" min="10" max="200" step="10" value="30" inputmode="numeric"></label>
-            <label class="field"><span class="lab">Temp. T′ <button type="button" class="xbtn" data-x="Tprime" aria-label="What is T′?">?</button></span><input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0" inputmode="decimal"></label>
-            <label class="field"><span class="lab">Max tokens</span><input id="live-max" type="number" min="8" max="256" step="8" value="64" inputmode="numeric"></label>
-          </div>
-        </details>
-        <div class="actions">
-          <button id="live-stop" class="btn" hidden>Stop</button>
-          <button id="live-go" class="btn primary">Generate</button>
+      <div class="composer">
+        <textarea id="prompt" rows="2" spellcheck="false" aria-label="Prompt" placeholder="Ask for something with many good answers"></textarea>
+        <div class="comp-row">
+          <details class="chipmenu" id="adv">
+            <summary class="chip" aria-label="Sampling settings"><span id="adv-sum"></span></summary>
+            <div class="menu">
+              <label class="field"><span class="lab">Samples N</span><input id="live-N" type="number" min="10" max="200" step="10" value="30" inputmode="numeric"></label>
+              <label class="field"><span class="lab">Temp. T′ <button type="button" class="xbtn" data-x="Tprime" aria-label="What is T′?">?</button></span><input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0" inputmode="decimal"></label>
+              <label class="field"><span class="lab">Max tokens</span><input id="live-max" type="number" min="8" max="256" step="8" value="64" inputmode="numeric"></label>
+            </div>
+          </details>
+          <select id="examples" class="chip" aria-label="Example prompts"><option value="">Examples</option></select>
+          <span class="grow"></span>
+          <button id="live-stop" class="sendbtn stop" aria-label="Stop" title="Stop" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg></button>
+          <button id="live-go" class="sendbtn" aria-label="Generate completions" title="Generate (Enter)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg></button>
         </div>
       </div>
       <div class="progress" id="progress" hidden><div class="bar"><span id="progress-fill"></span></div><p id="progress-last" class="last"></p></div>

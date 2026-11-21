@@ -92,23 +92,33 @@ input:hover, textarea:hover { border-color: #c8c8c8; }
 .stepper input::-webkit-inner-spin-button { display: none; }
 button.link { border: 0; background: none; padding: 0; font: inherit; color: var(--text); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 
-.adv { padding: 0; }
-.adv summary { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; padding: 7px 0; cursor: pointer; list-style: none; font-size: 13px; color: var(--text-2); }
-.adv summary::-webkit-details-marker { display: none; }
-.adv summary::before { content: "▸"; color: var(--muted); font-size: 11px; transition: transform .15s; }
-.adv[open] summary::before { transform: rotate(90deg); }
-.adv-sum { margin-left: auto; font: 12px var(--sans); color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
-.adv[open] .adv-sum { visibility: hidden; }
-.adv .grid3 { padding: 2px 0 4px; }
 
 /* step 1: header with the examples dropdown; settings + Generate on one row */
 .step-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-#examples { font: 13px var(--sans); color: var(--text-2); background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 4px 6px; max-width: 160px; }
-.gen-row { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
-.gen-row .adv { flex: 1; min-width: 0; border: 0; }
-.gen-row .adv[open] { flex-basis: 100%; }
-.gen-row .actions { margin-left: auto; }
 .btn.primary { flex: none; padding-inline: 18px; }
+
+/* prompt composer: text on top, chips at bottom left, round send button at bottom right */
+.step-1 { background: none; border: 0; padding: 0; box-shadow: none; gap: 6px; }
+.composer { background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 10px 10px 8px 14px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 1px 3px rgb(0 0 0 / .04); }
+.composer:focus-within { border-color: #cfc7ba; }
+.composer textarea { border: 0; padding: 2px 0; background: transparent; resize: none; min-height: 48px; }
+.composer textarea:focus { outline: none; }
+.comp-row { display: flex; align-items: center; gap: 6px; }
+.comp-row .grow { flex: 1; }
+.chip { font: 12.5px var(--sans); color: var(--text-2); background: var(--surface-2); border: 0; border-radius: 999px; padding: 5px 11px; cursor: pointer; max-width: 150px; }
+.chip:hover { color: var(--text); background: var(--btn-hover); }
+select.chip { appearance: none; -webkit-appearance: none; padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 13px) 52%, calc(100% - 9px) 52%; background-size: 4px 4px; background-repeat: no-repeat; }
+.chipmenu { position: relative; }
+.chipmenu summary { list-style: none; white-space: nowrap; }
+.chipmenu summary::-webkit-details-marker { display: none; }
+.chipmenu .menu { position: absolute; left: 0; top: calc(100% + 6px); z-index: 25; display: grid; grid-template-columns: repeat(3, 84px); gap: 8px; padding: 10px; background: #fff; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / .1); }
+.sendbtn { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border: 0; border-radius: 50%; background: var(--accent); color: #fff; cursor: pointer; padding: 0; transition: opacity .15s, filter .15s; }
+.sendbtn:hover { filter: brightness(.94); }
+.sendbtn:disabled { opacity: .35; cursor: default; filter: none; }
+.sendbtn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.sendbtn.stop { background: var(--text); }
+.sendbtn.stop svg { fill: currentColor; stroke: none; }
+.step-1 .status, .step-1 .progress { padding-inline: 6px; }
 
 /* step 2: T slider with its two ends inline */
 .mode-row { display: flex; align-items: center; gap: 8px; }
@@ -273,9 +283,10 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .stepper input { width: 48px; }
   .seg span { padding: 7px 10px; font-size: 13.5px; }
   .seg.small span { padding: 5px 11px; font-size: 12.5px; }
-  .adv summary { padding: 7px 0; font-size: 13.5px; }
-  .xbtn { width: 18px; height: 18px; font-size: 11px; }
-  #examples { min-height: 32px; font-size: 16px; max-width: 150px; padding-block: 2px; }
+    .xbtn { width: 18px; height: 18px; font-size: 11px; }
+  select.chip { font-size: 16px; padding-block: 3px; }
+  .chip { font-size: 14px; }
+  .chipmenu .menu { grid-template-columns: repeat(3, minmax(0, 1fr)); width: min(320px, calc(100vw - 48px)); }
   .viewmenu summary { padding: 5px 10px; font-size: 13px; }
   .viewmenu .menu { gap: 0; padding: 4px 6px; }
   .viewmenu .menu .toggle { padding: 10px 6px; font-size: 14px; }
