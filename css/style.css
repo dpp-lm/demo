@@ -196,8 +196,11 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   h1 { font-size: 26px; }
   .tag { font-size: 15px; }
   .app { grid-template-columns: minmax(0, 1fr); }
-  .controls { position: static; }
-  .stage { order: -1; }
+  /* Phones: prompt first, then the plot, then the subset controls. */
+  .controls { display: contents; }
+  .step-1 { order: 0; }
+  .stage { order: 1; }
+  .step-2 { order: 2; }
   .stage-bar .note { order: 3; flex-basis: 100%; }
   .plot { height: 58vh; }
   .plot-wrap { grid-template-columns: minmax(0, 1fr) 46px; }
