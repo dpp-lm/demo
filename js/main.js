@@ -60,7 +60,7 @@ async function loadGalleryItem(id) {
   $('#prompt').value = rec.prompt;
   markExample(id);
   $('#progress').hidden = true;
-  $('#live-status').textContent = `Example pool of ${rec.N} completions. Edit the prompt to make your own.`;
+  $('#live-status').textContent = `Example: ${rec.N} completions. Edit the prompt to try your own.`;
   setPool(rec, decodeEmb(rec.emb, rec.N, rec.D));
 }
 
@@ -152,7 +152,7 @@ function renderReadout() {
   const e = ess(logWeights(S.logp, S.logq, S.T.sample));
   const stat = (k, v, x) => `<span class="stat">${k} <button type="button" class="xbtn" data-x="${x}" aria-label="What is ${k}?">?</button> <span class="v">${v}</span></span>`;
   $('#readout').innerHTML = !ok
-    ? `<span class="stat">No subset of size ${S.K}: the pool has fewer distinct directions. Lower K or sample more.</span>`
+    ? `<span class="stat">No subset of size ${S.K}: there are fewer distinct completions than that. Lower K or generate more.</span>`
     : stat('log P(S)', fmt(S.logP), 'logp') +
       stat('quality', fmt(quality(S.logp, S.sel)), 'quality') +
       stat('diversity', fmt(diversity(S.G, N, S.sel)), 'diversity') +

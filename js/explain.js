@@ -28,7 +28,7 @@ export const EXPLAIN = {
   },
   logp: {
     title: 'log P(S)',
-    body: `<p>How probable this subset is among all size-$K$ subsets of the pool:
+    body: `<p>How probable this subset is among all size-$K$ subsets of the completions:
       $$P(S) = \\frac{\\det \\mathbf L_S}{\\sum_{|S'| = K} \\det \\mathbf L_{S'}}.$$
       The most likely subset is the one that maximizes it.</p>`,
   },
@@ -42,13 +42,13 @@ export const EXPLAIN = {
   },
   ess: {
     title: 'Effective sample size',
-    body: `<p>The pool is drawn at sampling temperature $T'$, but the subset should follow $\\kappa = p^{1/T}$. So <b>Sample</b> reweights each completion by
+    body: `<p>The completions are generated at sampling temperature $T'$, but the subset should follow $\\kappa = p^{1/T}$. So <b>Sample</b> reweights each completion by
       $$w(y) = \\frac{p(y)^{1/T}}{p^{\\circ}_{T'}(y)}.$$
       The effective sample size $(\\sum w)^2 / \\sum w^2$ says how many completions effectively count. When $T = T'$ every weight is equal; far from $T'$ a few completions dominate.</p>`,
   },
   Tprime: {
     title: 'Sampling temperature T′',
-    body: `<p>Controls how the pool is drawn: every next-token distribution is raised to the power $1/T'$ and renormalized. $T' = 1$ samples the model as it is. Higher $T'$ gives more varied but less coherent text, which is why diversity comes from choosing the subset afterwards instead.</p>`,
+    body: `<p>Controls how the completions are generated: every next-token distribution is raised to the power $1/T'$ and renormalized. $T' = 1$ samples the model as it is. Higher $T'$ gives more varied but less coherent text, which is why diversity comes from choosing the subset afterwards instead.</p>`,
   },
   scale: {
     title: 'Scale points by quality',

@@ -39,10 +39,10 @@
   <aside class="controls" aria-label="Controls">
     <section class="step step-1">
       <div class="step-head">
-        <h2><span class="num">1</span>Sample a pool</h2>
+        <label class="lab" for="prompt">Prompt</label>
         <select id="examples" aria-label="Example prompts"><option value="">Examples…</option></select>
       </div>
-      <textarea id="prompt" rows="2" spellcheck="false" aria-label="Prompt"></textarea>
+      <textarea id="prompt" rows="2" spellcheck="false"></textarea>
       <div class="gen-row">
         <details class="adv" id="adv">
           <summary><span>Settings</span><span id="adv-sum" class="adv-sum"></span></summary>
@@ -62,7 +62,7 @@
     </section>
 
     <section class="step step-2">
-      <h2><span class="num">2</span>Pick a subset</h2>
+      <h2>Pick a subset</h2>
       <div class="mode-row">
         <div class="seg" role="radiogroup" aria-label="Selection rule">
           <label><input type="radio" name="mode" value="map" checked><span>Most likely</span></label>
@@ -132,7 +132,7 @@
 </section>
 
 <details class="pool-table">
-  <summary>All completions in the pool</summary>
+  <summary>All completions</summary>
   <div id="pool-table"></div>
 </details>
 
