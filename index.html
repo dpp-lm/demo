@@ -92,16 +92,6 @@
   </aside>
 
   <section class="stage" aria-label="Embeddings">
-    <div class="stage-bar">
-      <span id="stage-note" class="note"></span>
-      <details class="viewmenu" id="viewmenu">
-        <summary>View</summary>
-        <div class="menu">
-          <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Label selected points</span></label>
-          <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale points by quality</span> <button type="button" class="xbtn" data-x="scale" aria-label="What does scaling do?">?</button></label>
-        </div>
-      </details>
-    </div>
     <div class="plot-wrap">
       <div class="plot-box">
         <div id="plot" class="plot" aria-label="Projection of the completions' embeddings"></div>
@@ -117,6 +107,16 @@
         <span id="vol-hint" class="lg"></span>
       </div>
       <div id="readout" class="readout"></div>
+    </div>
+    <div class="stage-bar">
+      <span id="stage-note" class="note"></span>
+      <details class="viewmenu" id="viewmenu">
+        <summary>View</summary>
+        <div class="menu">
+          <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Label selected points</span></label>
+          <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale points by quality</span> <button type="button" class="xbtn" data-x="scale" aria-label="What does scaling do?">?</button></label>
+        </div>
+      </details>
     </div>
   </section>
 </main>
