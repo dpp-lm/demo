@@ -3,6 +3,14 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+function rod(a, b, r, color) {
+  const d = new THREE.Vector3().subVectors(b, a);
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 8), new THREE.MeshBasicMaterial({ color }));
+  m.position.copy(a).addScaledVector(d, 0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
+  return m;
+}
+
 export class Plot3D {
   constructor(el, { onHover }) {
     this.el = el;
@@ -47,11 +55,16 @@ export class Plot3D {
   update(o) {
     this.o = o;
     const N = o.coords.length;
-    // Centre the camera target on the unit-embedding cloud, keep the origin visible.
-    if (!this.scale) {
-      let m = 0;
-      for (const c of o.coords) m = Math.max(m, Math.hypot(...c));
-      this.scale = 1 / (m || 1);
+    // Fit points and (for K ≤ 3) the far corner of the spanned volume inside the unit ball.
+    let m = 0;
+    for (const c of o.coords) m = Math.max(m, Math.hypot(...c));
+    if (o.sel.length >= 2 && o.sel.length <= 3) {
+      const far = [0, 1, 2].map((d) => o.sel.reduce((acc, i) => acc + o.coords[i][d] * (o.scaled ? o.c[i] : 1), 0));
+      m = Math.max(m, Math.hypot(...far));
+    }
+    this.scale = 1 / (m || 1);
+    if (!this.camSet) {
+      this.camSet = true;
       const cx = o.coords.reduce((a, c) => a + c[0], 0) / N * this.scale;
       this.controls.target.set(cx / 2, 0, 0);
       this.camera.position.set(cx / 2 + 1.4, 1.0, 2.0);
@@ -75,6 +88,12 @@ export class Plot3D {
       const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(...d).multiplyScalar(0.9)]);
       this.group.add(new THREE.Line(g, axMat));
     }
+    // Faint floor grid through the origin (as in the paper's Fig. 1).
+    const grid = new THREE.GridHelper(2, 16, o.text, o.text);
+    grid.material.transparent = true;
+    grid.material.opacity = 0.12;
+    grid.material.depthWrite = false;
+    this.group.add(grid);
     // Ghosts: unit embeddings.
     const s = this.scale;
     const gpos = new Float32Array(N * 3);
@@ -86,7 +105,7 @@ export class Plot3D {
     const sphere = new THREE.SphereGeometry(0.018, 12, 8);
     this.mesh = new THREE.InstancedMesh(sphere, new THREE.MeshLambertMaterial(), N);
     const sel = new Set(o.sel);
-    for (let i = 0; i < N; i++) this.mesh.setColorAt(i, new THREE.Color(sel.has(i) ? o.accent : o.color(i)));
+    for (let i = 0; i < N; i++) this.mesh.setColorAt(i, new THREE.Color(sel.has(i) ? o.selColor(i) : o.color(i)));
     this.group.add(this.mesh);
     // Arrows + parallelepiped edges are rebuilt every tick from current positions.
     this.dyn = new THREE.Group();
@@ -106,30 +125,49 @@ export class Plot3D {
     });
     this.mesh.instanceMatrix.needsUpdate = true;
     for (const ch of [...this.dyn.children]) { this.dyn.remove(ch); ch.geometry?.dispose(); ch.material?.dispose?.(); }
-    const accent = new THREE.Color(o.accent);
+    const few = o.sel.length <= 3;
+    const O = new THREE.Vector3();
+    // Edges from the origin to each selected point: arrows for large K, plain coloured
+    // rods (one colour per item) for K ≤ 3, as in the paper's Fig. 1.
     for (const i of o.sel) {
       const p = this.current[i];
       const len = p.length();
       if (len < 1e-4) continue;
-      const a = new THREE.ArrowHelper(p.clone().normalize(), new THREE.Vector3(), len, accent, Math.min(0.06, len * 0.3), Math.min(0.03, len * 0.15));
-      this.dyn.add(a);
+      const color = new THREE.Color(o.selColor(i));
+      if (few) this.dyn.add(rod(O, p, 0.006, color));
+      else this.dyn.add(new THREE.ArrowHelper(p.clone().normalize(), O, len, color, Math.min(0.06, len * 0.3), Math.min(0.03, len * 0.15)));
     }
-    if (o.sel.length >= 2 && o.sel.length <= 3) {
+    if (o.sel.length >= 2 && few) {
       const v = o.sel.map((i) => this.current[i]);
-      const corners = [];
       const n = v.length;
-      for (let mask = 0; mask < 1 << n; mask++) {
-        const c = new THREE.Vector3();
-        for (let k = 0; k < n; k++) if (mask & (1 << k)) c.add(v[k]);
-        corners.push(c);
+      const corner = (mask) => v.reduce((c, x, k) => (mask & (1 << k) ? c.add(x) : c), new THREE.Vector3());
+      const grey = new THREE.Color(o.text);
+      // Translucent faces.
+      const tri = [];
+      for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++) {
+        const others = [...Array(n).keys()].filter((k) => k !== a && k !== b);
+        for (const off of others.length ? [0, 1 << others[0]] : [0]) {
+          const q = [off, off | (1 << a), off | (1 << a) | (1 << b), off | (1 << b)].map(corner);
+          tri.push(q[0], q[1], q[2], q[0], q[2], q[3]);
+        }
       }
-      const pts = [];
-      for (let a = 0; a < corners.length; a++) for (let k = 0; k < n; k++) {
+      const fg = new THREE.BufferGeometry().setFromPoints(tri);
+      this.dyn.add(new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ color: grey, transparent: true, opacity: 0.08, side: THREE.DoubleSide, depthWrite: false })));
+      // Dark edges, except the ones from the origin (drawn above in colour).
+      const seg = [];
+      for (let a = 0; a < 1 << n; a++) for (let k = 0; k < n; k++) {
         const b = a | (1 << k);
-        if (b !== a) pts.push(corners[a], corners[b]);
+        if (b !== a && a !== 0) seg.push(corner(a), corner(b));
       }
-      const g = new THREE.BufferGeometry().setFromPoints(pts);
-      this.dyn.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: accent, transparent: true, opacity: 0.5 })));
+      this.dyn.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(seg), new THREE.LineBasicMaterial({ color: grey, transparent: true, opacity: 0.75 })));
+      // Corner dots; the far corner is larger.
+      const full = (1 << n) - 1;
+      for (let mask = 1; mask <= full; mask++) {
+        if (!(mask & (mask - 1))) continue;
+        const dot = new THREE.Mesh(new THREE.SphereGeometry(mask === full ? 0.016 : 0.009, 10, 8), new THREE.MeshBasicMaterial({ color: grey }));
+        dot.position.copy(corner(mask));
+        this.dyn.add(dot);
+      }
     }
   }
 

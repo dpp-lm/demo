@@ -103,6 +103,7 @@ function render() {
   renderEigbars();
   renderReadout();
   renderCards();
+  renderVolHint();
   if ($('.pool-table').open) renderTable();
 }
 
@@ -140,11 +141,21 @@ function renderReadout() {
     ${S.mode === 'sample' ? `<div class="stat"><div class="k">Weight ESS</div><div class="v">${e.toFixed(1)} / ${N}</div><div class="s">w = p^(1/T) / q</div></div>` : ''}`;
 }
 
+function renderVolHint() {
+  const el = $('#vol-hint');
+  if (S.dims === 1) { el.innerHTML = ''; return; }
+  el.innerHTML = S.sel.length <= 3 && S.sel.length >= 2
+    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg>volume spanned by the selected set (det L_S = volume²)`
+    : `<button id="vol-btn" class="link">Draw the spanned volume (K = 3)</button>`;
+  const b = $('#vol-btn');
+  if (b) b.onclick = () => { $('#K').value = 3; $('#K').onchange(); };
+}
+
 function renderCards() {
   const order = S.sel.slice().sort((a, b) => S.logp[b] - S.logp[a]);
   $('#selected').innerHTML = order.map((i) => {
     const s = S.pool.samples[i];
-    return `<div class="card" data-i="${i}">${escapeHtml(s.text)}${s.ended ? '' : '…'}
+    return `<div class="card" data-i="${i}" style="border-left-color:${selColor(i)}">${escapeHtml(s.text)}${s.ended ? '' : '…'}
       <div class="meta">#${i} · log p ${fmt(s.logp, 1)} · P(i∈S) ${fmt(S.pi[i], 2)}</div></div>`;
   }).join('');
   $('#selected').querySelectorAll('.card').forEach((el) => {
@@ -167,6 +178,28 @@ function showTip(i, x, y) {
 }
 
 // ---------------------------------------------------------------- projection plot
+// With K ≤ 3 each selected vector gets its own colour and we draw the
+// parallelogram/parallelepiped it spans (paper, Fig. 1); otherwise one accent.
+const VEC = ['--series-1', '--series-2', '--series-3'];
+function selColor(i) {
+  const k = S.sel.indexOf(i);
+  return S.sel.length <= 3 && k >= 0 ? css(VEC[k]) : css('--accent');
+}
+// Faces (as corner lists) and corner points of the parallelotope spanned by vectors V from origin O.
+function parallelotope(O, V) {
+  const add = (a, b) => a.map((x, d) => x + b[d] - O[d]);
+  const corner = (mask) => V.reduce((acc, v, k) => (mask & (1 << k) ? add(acc, v) : acc), O.slice());
+  const faces = [];
+  for (let a = 0; a < V.length; a++) for (let b = a + 1; b < V.length; b++) {
+    const others = [...Array(V.length).keys()].filter((k) => k !== a && k !== b);
+    const offs = others.length ? [0, 1 << others[0]] : [0];
+    for (const o of offs) faces.push([o, o | (1 << a), o | (1 << a) | (1 << b), o | (1 << b)].map(corner));
+  }
+  const full = (1 << V.length) - 1;
+  const extra = [];
+  for (let mask = 1; mask <= full; mask++) if (mask & (mask - 1)) extra.push({ p: corner(mask), far: mask === full });
+  return { faces, corners: extra };
+}
 const colorFor = () => {
   const lp = S.logp.slice().sort((a, b) => a - b);
   const lo = lp[Math.floor(0.05 * (lp.length - 1))], hi = lp[lp.length - 1];
@@ -179,40 +212,22 @@ class Plot2D {
   reset() { this.el.innerHTML = ''; this.svg = null; }
   build() {
     const el = this.el;
-    const W = el.clientWidth || 600, H = el.clientHeight || 450;
-    const m = 16;
-    const C = S.proj.coords, dims = S.dims;
-    const xs = C.map((c) => c[0]).concat([0]);
-    const ys = dims === 1 ? [0] : C.map((c) => c[1]).concat([0]);
-    const pad = (a) => { const lo = d3.min(a), hi = d3.max(a), p = 0.08 * (hi - lo || 1); return [lo - p, hi + p]; };
-    let [x0, x1] = pad(xs), [y0, y1] = pad(ys);
-    if (dims === 1) { y0 = -1; y1 = 1; }
-    // equal aspect in 2D
-    if (dims === 2) {
-      const sx = (W - 2 * m) / (x1 - x0), sy = (H - 2 * m) / (y1 - y0), s = Math.min(sx, sy);
-      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-      x0 = cx - (W - 2 * m) / s / 2; x1 = cx + (W - 2 * m) / s / 2;
-      y0 = cy - (H - 2 * m) / s / 2; y1 = cy + (H - 2 * m) / s / 2;
-    }
-    this.x = d3.scaleLinear().domain([x0, x1]).range([m, W - m]);
-    this.y = d3.scaleLinear().domain([y0, y1]).range([H - m, m]);
-    const svg = d3.select(el).append('svg').attr('viewBox', `0 0 ${W} ${H}`);
+    this.W = el.clientWidth || 600;
+    this.H = el.clientHeight || 450;
+    const svg = d3.select(el).append('svg').attr('viewBox', `0 0 ${this.W} ${this.H}`);
     svg.append('defs').append('marker').attr('id', 'arrow').attr('viewBox', '0 0 10 10').attr('refX', 9).attr('refY', 5)
       .attr('markerWidth', 7).attr('markerHeight', 7).attr('orient', 'auto-start-reverse')
       .append('path').attr('d', 'M0,0L10,5L0,10z').attr('fill', css('--accent'));
-    // origin cross
-    const ox = this.x(0), oy = this.y(0);
-    svg.append('path').attr('d', dims === 1 ? `M${ox},${m}V${H - m}` : `M${ox - 6},${oy}H${ox + 6}M${ox},${oy - 6}V${oy + 6}`)
-      .attr('stroke', css('--muted')).attr('stroke-width', 1).attr('stroke-dasharray', dims === 1 ? '3 3' : null);
-    svg.append('text').attr('x', ox + 6).attr('y', dims === 1 ? m + 10 : oy - 6).attr('class', 'direct-label').attr('font-size', 11).attr('fill', css('--muted')).text('origin');
+    this.gOrigin = svg.append('g');
+    this.gOrigin.append('path').attr('stroke', css('--muted')).attr('stroke-width', 1);
+    this.gOrigin.append('text').attr('class', 'direct-label').attr('font-size', 11).attr('fill', css('--muted')).text('origin');
     this.gPara = svg.append('g');
     this.gTrail = svg.append('g');
     this.gGhost = svg.append('g');
     this.gArrow = svg.append('g');
     this.gDot = svg.append('g');
     this.svg = svg;
-    // jitter for 1D
-    this.jit = C.map((_, i) => ((i * 0.6180339887) % 1) - 0.5);
+    this.jit = S.proj.coords.map((_, i) => ((i * 0.6180339887) % 1) - 0.5);
     svg.on('pointermove', (ev) => {
       const [px, py] = d3.pointer(ev);
       let best = -1, bd = 18 * 18;
@@ -221,57 +236,84 @@ class Plot2D {
       showTip(best, ev.clientX, ev.clientY);
     }).on('pointerleave', () => { this.highlight(-1); showTip(-1); });
   }
-  xy(i, scale) {
+  // Data-space position of item i (scale = 1 for the unit embedding).
+  dataXY(i, scale) {
     const c = S.proj.coords[i];
-    if (S.dims === 1) return [this.x(c[0] * scale), this.y(this.jit[i] * 1.6)];
-    return [this.x(c[0] * scale), this.y(c[1] * scale)];
+    return S.dims === 1 ? [c[0] * scale, this.jit[i] * 1.6] : [c[0] * scale, c[1] * scale];
+  }
+  // Fit scales to everything drawn, including the far corner of the spanned volume.
+  fit(points) {
+    const { W, H } = this, m = 16, dims = S.dims;
+    const pad = (a) => { const lo = d3.min(a), hi = d3.max(a), p = 0.06 * (hi - lo || 1); return [lo - p, hi + p]; };
+    let [x0, x1] = pad(points.map((q) => q[0]).concat([0]));
+    let [y0, y1] = dims === 1 ? [-1, 1] : pad(points.map((q) => q[1]).concat([0]));
+    if (dims === 2) {
+      const s = Math.min((W - 2 * m) / (x1 - x0), (H - 2 * m) / (y1 - y0));
+      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      x0 = cx - (W - 2 * m) / s / 2; x1 = cx + (W - 2 * m) / s / 2;
+      y0 = cy - (H - 2 * m) / s / 2; y1 = cy + (H - 2 * m) / s / 2;
+    }
+    this.x = d3.scaleLinear().domain([x0, x1]).range([m, W - m]);
+    this.y = d3.scaleLinear().domain([y0, y1]).range([H - m, m]);
   }
   update() {
     if (!this.svg) this.build();
-    const N = S.logp.length;
+    const N = S.logp.length, dims = S.dims, H = this.H;
     const scaled = $('#scale-toggle').checked;
     const col = colorFor();
     const sel = new Set(S.sel);
     const idx = d3.range(N);
-    const ghostPos = idx.map((i) => this.xy(i, 1));
-    this.pos = idx.map((i) => this.xy(i, scaled ? S.c[i] : 1));
-    if (S.dims === 1) this.pos = idx.map((i) => [this.pos[i][0], ghostPos[i][1]]);
+    const ghostD = idx.map((i) => this.dataXY(i, 1));
+    const posD = idx.map((i) => (dims === 1 ? [this.dataXY(i, scaled ? S.c[i] : 1)[0], ghostD[i][1]] : this.dataXY(i, scaled ? S.c[i] : 1)));
+    const vol = dims === 2 && S.sel.length >= 2 && S.sel.length <= 3;
+    const volD = vol ? parallelotope([0, 0], S.sel.map((i) => posD[i])) : { faces: [], corners: [] };
+    this.fit([...posD, ...(scaled ? ghostD : []), ...volD.corners.map((c) => c.p)]);
+    const px = (q) => [this.x(q[0]), this.y(q[1])];
+    const ghostPos = ghostD.map(px);
+    this.pos = posD.map(px);
+    const ox = this.x(0), oy = this.y(0);
     const t = this.svg.transition().duration(450).ease(d3.easeCubicOut);
-    const r = (i) => (sel.has(i) ? 6 : 4.5);
 
-    this.gGhost.selectAll('circle').data(idx).join('circle')
-      .attr('cx', (i) => ghostPos[i][0]).attr('cy', (i) => ghostPos[i][1]).attr('r', 3)
-      .attr('fill', css('--ghost')).attr('opacity', scaled ? 0.45 : 0);
+    this.gOrigin.select('path').attr('stroke-dasharray', dims === 1 ? '3 3' : null).transition(t)
+      .attr('d', dims === 1 ? `M${ox},16V${H - 16}` : `M${ox - 6},${oy}H${ox + 6}M${ox},${oy - 6}V${oy + 6}`);
+    this.gOrigin.select('text').transition(t).attr('x', ox + 6).attr('y', dims === 1 ? 26 : oy - 6);
+    this.gGhost.selectAll('circle').data(idx).join('circle').attr('r', 3)
+      .attr('fill', css('--ghost')).attr('opacity', scaled ? 0.45 : 0)
+      .transition(t).attr('cx', (i) => ghostPos[i][0]).attr('cy', (i) => ghostPos[i][1]);
     this.gTrail.selectAll('line').data(idx).join('line')
-      .attr('x1', (i) => ghostPos[i][0]).attr('y1', (i) => ghostPos[i][1])
       .attr('stroke', css('--ghost')).attr('stroke-width', 1).attr('opacity', scaled ? 0.35 : 0)
-      .transition(t).attr('x2', (i) => this.pos[i][0]).attr('y2', (i) => this.pos[i][1]);
-    const ox = this.x(0), oy = S.dims === 1 ? null : this.y(0);
-    this.gArrow.selectAll('line').data(S.sel, (i) => i).join(
-      (enter) => enter.append('line').attr('x1', ox).attr('y1', (i) => (oy ?? this.pos[i][1])).attr('x2', ox).attr('y2', (i) => (oy ?? this.pos[i][1])),
-    ).attr('stroke', css('--accent')).attr('stroke-width', 2).attr('marker-end', 'url(#arrow)')
-      .transition(t).attr('x1', ox).attr('y1', (i) => (oy ?? this.pos[i][1]))
+      .transition(t).attr('x1', (i) => ghostPos[i][0]).attr('y1', (i) => ghostPos[i][1])
       .attr('x2', (i) => this.pos[i][0]).attr('y2', (i) => this.pos[i][1]);
-    // Parallelogram spanned by a selected pair (2D, K = 2): its area is the projected volume.
-    const para = S.dims === 2 && S.sel.length === 2 ? [S.sel] : [];
-    this.gPara.selectAll('path').data(para).join('path')
-      .attr('fill', css('--accent')).attr('fill-opacity', 0.12).attr('stroke', 'none')
-      .attr('d', ([a, b]) => {
-        const pa = this.pos[a], pb = this.pos[b];
-        return `M${ox},${oy}L${pa[0]},${pa[1]}L${pa[0] + pb[0] - ox},${pa[1] + pb[1] - oy}L${pb[0]},${pb[1]}Z`;
-      });
+    const few = S.sel.length <= 3;
+    const y0 = (i) => (dims === 1 ? this.pos[i][1] : oy);
+    this.gArrow.selectAll('line').data(S.sel, (i) => i).join(
+      (enter) => enter.append('line').attr('x1', ox).attr('y1', y0).attr('x2', ox).attr('y2', y0),
+    ).attr('stroke', (i) => selColor(i)).attr('stroke-width', few ? 2.5 : 2)
+      .attr('marker-end', few ? null : 'url(#arrow)')
+      .transition(t).attr('x1', ox).attr('y1', y0)
+      .attr('x2', (i) => this.pos[i][0]).attr('y2', (i) => this.pos[i][1]);
+    // Volume spanned by the selected set (K = 2: parallelogram, K = 3: parallelepiped),
+    // from the projected quality-scaled vectors; det L_S is its squared volume.
+    const face = (f) => 'M' + f.map((q) => px(q).join(',')).join('L') + 'Z';
+    this.gPara.selectAll('path').data(volD.faces).join('path')
+      .attr('fill', css('--text')).attr('fill-opacity', 0.04)
+      .attr('stroke', css('--text-2')).attr('stroke-opacity', 0.7).attr('stroke-width', 1).attr('stroke-linejoin', 'round')
+      .transition(t).attr('d', face);
+    this.gPara.selectAll('circle').data(volD.corners).join('circle')
+      .attr('fill', css('--text-2')).attr('r', (c) => (c.far ? 4.5 : 2.5))
+      .transition(t).attr('cx', (c) => this.x(c.p[0])).attr('cy', (c) => this.y(c.p[1]));
     this.gDot.selectAll('circle').data(idx).join('circle')
       .attr('fill', (i) => col(i))
-      .attr('stroke', (i) => (sel.has(i) ? css('--accent') : css('--surface')))
+      .attr('stroke', (i) => (sel.has(i) ? selColor(i) : css('--surface')))
       .attr('stroke-width', (i) => (sel.has(i) ? 2.5 : 1))
-      .attr('r', r)
+      .attr('r', (i) => (sel.has(i) ? 6 : 4.5))
       .sort((a, b) => sel.has(a) - sel.has(b))
       .transition(t).attr('cx', (i) => this.pos[i][0]).attr('cy', (i) => this.pos[i][1]);
   }
   highlight(i) {
     if (!this.svg) return;
     S.hover = i;
-    this.gDot.selectAll('circle').attr('stroke', (j) => (j === i ? css('--text') : S.sel.includes(j) ? css('--accent') : css('--surface')));
+    this.gDot.selectAll('circle').attr('stroke', (j) => (j === i ? css('--text') : S.sel.includes(j) ? selColor(j) : css('--surface')));
     document.querySelectorAll('.card').forEach((c) => c.classList.toggle('hl', +c.dataset.i === i));
   }
 }
@@ -292,7 +334,7 @@ const plot = {
       }
       this.p3.update({
         coords: S.proj.coords, c: S.c, sel: S.sel, scaled: $('#scale-toggle').checked,
-        color: colorFor(), accent: css('--accent'), ghost: css('--ghost'), text: css('--text-2'), bg: css('--surface'),
+        color: colorFor(), selColor, accent: css('--accent'), ghost: css('--ghost'), text: css('--text-2'), bg: css('--surface'),
       });
     } else this.p2.update();
   },

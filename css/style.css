@@ -92,6 +92,8 @@ input[type=range] { width: 100%; accent-color: var(--series-1); margin: 2px 0 0;
 .sw { display: inline-block; width: 12px; height: 12px; border-radius: 50%; }
 .sw.ramp { background: linear-gradient(90deg, var(--ramp-lo), var(--ramp-hi)); border-radius: 3px; width: 28px; }
 .sw.sel { border: 2.5px solid var(--accent); }
+.sw-vol path { fill: color-mix(in srgb, var(--text) 8%, transparent); stroke: var(--text-2); stroke-width: 1; }
+button.link { border: 0; background: none; padding: 0; color: var(--series-1); text-decoration: underline; font-size: 12.5px; cursor: pointer; }
 .sw.ghost { background: var(--ghost); opacity: .6; }
 .readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
 .stat { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; }
