@@ -470,6 +470,10 @@ function setK(v) {
 }
 
 function wire() {
+  // Collapsed sampling settings: the summary line shows the current values.
+  const advSum = () => ($('#adv-sum').textContent = `${$('#live-N').value} samples · T′ ${(+$('#live-Tp').value).toFixed(1)} · ${$('#live-max').value} tokens`);
+  ['#live-N', '#live-Tp', '#live-max'].forEach((id) => $(id).addEventListener('input', advSum));
+  advSum();
   $('#mode-hint').textContent = MODE_HINT[S.mode];
   $('#T-slider').value = tToSlider(S.T[S.mode]);
   let raf = 0;

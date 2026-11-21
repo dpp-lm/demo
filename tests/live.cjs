@@ -10,6 +10,7 @@ const { chromium } = require('playwright');
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   await page.goto(url, { waitUntil: 'networkidle' });
   await page.fill('#prompt', 'Name a color and say one thing about it, in one sentence.');
+  await page.click('#adv summary');
   await page.fill('#live-N', '12');
   await page.fill('#live-max', '24');
   await page.click('#live-go');
