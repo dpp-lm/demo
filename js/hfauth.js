@@ -3,7 +3,7 @@
 // the visitor's own daily GPU quota instead of the tiny anonymous one.
 
 // Client ID of the OAuth app (public by design; see huggingface.co/settings/applications).
-export const HF_CLIENT_ID = '';
+export const HF_CLIENT_ID = '43d09d55-ee33-4a6f-8447-4731a6da25b9';
 const SCOPES = 'openid profile';
 const KEY = 'dpp-lm-hf-auth';
 const HUB = 'https://cdn.jsdelivr.net/npm/@huggingface/hub@2.17.10/+esm';
