@@ -25,9 +25,15 @@ jobs:
       - name: Unit tests (DPP maths)
         run: node --test tests/dpp.test.mjs
       - name: Assemble site
+        # Scripts and styles go under a per-commit folder, so a reload never mixes a new page
+        # with stale cached code (Pages lets browsers reuse files for 10 minutes).
         run: |
-          mkdir -p _site
-          cp -r index.html css js data _site/
+          V="v-${GITHUB_SHA::8}"
+          mkdir -p "_site/$V"
+          cp -r index.html data _site/
+          cp -r css js "_site/$V/"
+          sed -i "s#href=\"css/style.css\"#href=\"$V/css/style.css\"#; s#src=\"js/main.js\"#src=\"$V/js/main.js\"#" _site/index.html
+          grep -q "$V/js/main.js" _site/index.html && grep -q "$V/css/style.css" _site/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

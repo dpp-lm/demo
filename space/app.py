@@ -157,7 +157,13 @@ def sample_pool(prompt: str, model: str = "", n: int = 20, t_prime: float = 1.0,
     n = max(2, min(int(n), 200 if ON_ZEROGPU else 40))
     max_new_tokens = max(8, min(int(max_new_tokens), 256))
     t_prime = min(max(float(t_prime), 0.2), 2.0)
-    samples = run(prompt, model, n, t_prime, max_new_tokens, seed)
+    try:
+        samples = run(prompt, model, n, t_prime, max_new_tokens, seed)
+    except gr.Error:
+        raise
+    except Exception as e:  # pass the reason on to API callers instead of a bare "error"
+        print(f"sample_pool failed: {type(e).__name__}: {e}", flush=True)
+        raise gr.Error(f"{type(e).__name__}: {e}")
     emb = _embedder.encode([s["text"] or "(empty)" for s in samples], normalize_embeddings=True)
     emb = np.asarray(emb, dtype=np.float32)
     repo = MODELS[model][0]
