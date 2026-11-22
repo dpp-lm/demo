@@ -6,6 +6,7 @@ import {
 import { Plot3D } from './plot3d.js';
 import { initExplainers } from './explain.js';
 import { MODELS, modelByKey } from './lm.js';
+import { authEnabled, getAuth, signIn, signOut, finishSignIn } from './hfauth.js';
 
 const $ = (s) => document.querySelector(s);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -474,11 +475,13 @@ function renderTable() {
 // ---------------------------------------------------------------- live mode
 // Models served by a Hugging Face Space (ZeroGPU). The Space returns the same pool format
 // (exact log p / log q and embeddings); the DPP still runs here.
-// Hidden for now: anonymous visitors get almost no ZeroGPU quota, so calls from the page fail.
-// Re-enable once requests go through a relay or visitors can sign in to Hugging Face.
-const CLOUD = [
-  // { key: 'hf-qwen3-14b', name: 'Qwen3 14B', short: 'Qwen3 14B · cloud', space: 'https://xtimv-dpp-lm-sampler.hf.space', model: 'qwen3-14b' },
-];
+// Anonymous visitors get almost no ZeroGPU quota, so these need "Sign in with Hugging Face":
+// the visitor's token goes with the request and ZeroGPU charges their own daily quota.
+// While this is being tried out, the option only shows with ?cloud in the URL or once signed in.
+const showCloud = authEnabled() && (!!getAuth() || /[?&](cloud|code)=?/.test(location.search));
+const CLOUD = showCloud ? [
+  { key: 'hf-qwen3-14b', name: 'Qwen3 14B', short: 'Qwen3 14B · cloud', space: 'https://xtimv-dpp-lm-sampler.hf.space', model: 'qwen3-14b' },
+] : [];
 const cloudByKey = (k) => CLOUD.find((m) => m.key === k);
 const anyModel = (k) => cloudByKey(k) ?? modelByKey(k);
 let cloudAbort = null;
@@ -486,24 +489,26 @@ let cloudAbort = null;
 async function runCloud(M, { prompt, N, Tprime, maxNewTokens }, done) {
   cloudAbort = new AbortController();
   const signal = cloudAbort.signal;
+  const auth = getAuth();
+  if (!auth) { done(); return signIn({ prompt, model: M.key }); }
   const t0 = performance.now();
   const tick = setInterval(() => ($('#live-status').textContent = `Waiting for ${M.name} on Hugging Face… ${((performance.now() - t0) / 1000).toFixed(0)}s`), 1000);
   try {
     $('#live-status').textContent = `Sending to ${M.name} on Hugging Face…`;
     const r = await fetch(`${M.space}/gradio_api/call/sample`, {
-      method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
+      method: 'POST', signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
       body: JSON.stringify({ data: [prompt, M.model, N, Tprime, maxNewTokens, Math.floor(Math.random() * 1e9)] }),
     });
     if (!r.ok) throw new Error(`the Space answered ${r.status}${r.status === 404 ? ' (is it running?)' : ''}`);
     const { event_id } = await r.json();
-    const text = await (await fetch(`${M.space}/gradio_api/call/sample/${event_id}`, { signal })).text();
+    const text = await (await fetch(`${M.space}/gradio_api/call/sample/${event_id}`, { signal, headers: { Authorization: `Bearer ${auth.token}` } })).text();
     // Server-sent events: the last "event: complete" carries the result, "event: error" a message.
     const events = [...text.matchAll(/event: (\w+)\ndata: (.*)/g)].map((m) => [m[1], m[2]]);
     const err = events.find(([e]) => e === 'error');
     const ok = events.find(([e]) => e === 'complete');
     if (!ok) {
       const msg = err && err[1] !== 'null' ? JSON.parse(err[1]) : null;
-      throw new Error(msg || 'the Space returned no result. Its free GPU quota may be used up for today; try again later or use an on-device model.');
+      throw new Error(msg || 'the Space returned no result. Your daily GPU quota on Hugging Face may be used up; try again later or use an on-device model.');
     }
     const pool = JSON.parse(ok[1])[0];
     $('#live-status').textContent = `${pool.N} completions from ${M.name} on Hugging Face, in ${((performance.now() - t0) / 1000).toFixed(0)}s.`;
@@ -611,7 +616,11 @@ function wire() {
   const usable = (k) => !!cloudByKey(k) || MODELS.some((m) => m.key === k && fits(m));
   const modelNote = () => {
     if (cloudByKey($('#model').value)) {
-      $('#model-note').textContent = 'Runs on a free Hugging Face GPU: your prompt is sent there, nothing is downloaded. Each visitor gets a few runs a day; signing in to Hugging Face raises that.';
+      const a = getAuth();
+      $('#model-note').innerHTML = a
+        ? `Runs on a Hugging Face GPU and uses your account's daily GPU quota (${a.isPro ? 'PRO: 40' : 'free: 5'} min). Signed in as <b>${a.user}</b>. <button type="button" class="link" id="hf-signout">Sign out</button>`
+        : 'Runs on a Hugging Face GPU, using your account\'s free daily GPU quota. Pressing ↑ first asks you to sign in to Hugging Face.';
+      $('#hf-signout')?.addEventListener('click', (e) => { e.stopPropagation(); signOut(); modelNote(); });
       return;
     }
     const m = modelByKey($('#model').value);
@@ -703,4 +712,12 @@ function wire() {
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { plot.reset(); render(); });
 }
 wire();
+// Coming back from "Sign in with Hugging Face": restore the prompt and run it.
+finishSignIn().then((r) => {
+  if (!r) return;
+  if (r.stash.prompt) { $('#prompt').value = r.stash.prompt; $('#prompt').dispatchEvent(new Event('input')); }
+  if (r.stash.model && cloudByKey(r.stash.model)) { $('#model').value = r.stash.model; $('#model').dispatchEvent(new Event('change')); }
+  $('#live-status').textContent = `Signed in to Hugging Face as ${r.auth.user}.`;
+  if (r.stash.prompt) runLive();
+}).catch((e) => { $('#live-status').textContent = 'Sign-in failed: ' + (e.message || e); });
 loadGallery().catch((e) => { $('#readout').textContent = 'Could not load gallery: ' + e.message; });
