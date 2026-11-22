@@ -473,8 +473,10 @@ function renderTable() {
 // ---------------------------------------------------------------- live mode
 // Models served by a Hugging Face Space (ZeroGPU). The Space returns the same pool format
 // (exact log p / log q and embeddings); the DPP still runs here.
+// Hidden for now: anonymous visitors get almost no ZeroGPU quota, so calls from the page fail.
+// Re-enable once requests go through a relay or visitors can sign in to Hugging Face.
 const CLOUD = [
-  { key: 'hf-qwen3-14b', name: 'Qwen3 14B', short: 'Qwen3 14B · cloud', space: 'https://xtimv-dpp-lm-sampler.hf.space', model: 'qwen3-14b' },
+  // { key: 'hf-qwen3-14b', name: 'Qwen3 14B', short: 'Qwen3 14B · cloud', space: 'https://xtimv-dpp-lm-sampler.hf.space', model: 'qwen3-14b' },
 ];
 const cloudByKey = (k) => CLOUD.find((m) => m.key === k);
 const anyModel = (k) => cloudByKey(k) ?? modelByKey(k);
@@ -597,8 +599,8 @@ function wire() {
       const why = fits(m) ? '' : !m.cpu ? ' · needs a GPU' : ` · too large for this ${isPhone ? 'phone' : 'device'}`;
       const size = cached.has(m.repo) ? 'downloaded' : sizeMB(m) ? `${(sizeMB(m) / 1000).toFixed(1)} GB` : '';
       return `<option value="${m.key}" ${fits(m) ? '' : 'disabled'}>${m.name}${size ? ` · ${size}` : ''}${why}</option>`;
-    }).join('') + '</optgroup><optgroup label="On Hugging Face (free daily quota)">' +
-      CLOUD.map((m) => `<option value="${m.key}">${m.name} · cloud GPU</option>`).join('') + '</optgroup>';
+    }).join('') + '</optgroup>' + (CLOUD.length ? '<optgroup label="On Hugging Face (free daily quota)">' +
+      CLOUD.map((m) => `<option value="${m.key}">${m.name} · cloud GPU</option>`).join('') + '</optgroup>' : '');
     if (keep && usable(keep)) { $('#model').value = keep; advSum(); modelNote(); return; }
     let saved = null;
     try { saved = localStorage.getItem('dpp-lm-model'); } catch {}

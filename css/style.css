@@ -57,6 +57,9 @@ h1 { font-size: 34px; font-weight: 575; line-height: 1.15; }
 .links a:hover { color: var(--text); text-decoration: underline; }
 .chip-quiet { font-size: 12px; color: var(--muted); }
 
+/* work-in-progress note, styled like the blog's draft banner */
+.wip { margin: 0; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: var(--r); padding: 9px 14px; font: 15.5px/1.4 var(--serif); color: #5c4a00; }
+
 /* ---------- app grid ---------- */
 .app { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 12px; align-items: start; }
 .controls { display: flex; flex-direction: column; gap: 10px; position: sticky; top: max(12px, env(safe-area-inset-top, 0px)); }
@@ -109,6 +112,7 @@ button.link { border: 0; background: none; padding: 0; font: inherit; color: var
 .chip:hover { color: var(--text); background: var(--btn-hover); }
 .chipmenu { position: relative; }
 .chipmenu summary { list-style: none; white-space: nowrap; }
+summary.chip { max-width: none; overflow: hidden; text-overflow: ellipsis; }
 .chipmenu summary::-webkit-details-marker { display: none; }
 .chipmenu .menu { position: absolute; left: 0; top: calc(100% + 6px); z-index: 60; display: grid; grid-template-columns: repeat(3, 84px); gap: 8px; padding: 10px; background: #fff; border: 1px solid var(--border); border-radius: var(--r); box-shadow: 0 6px 20px rgb(0 0 0 / .1); }
 .plusbtn { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-2); color: var(--text-2); cursor: pointer; list-style: none; }
