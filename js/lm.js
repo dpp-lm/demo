@@ -14,18 +14,20 @@
 
 export const DEFAULT_LM = 'onnx-community/Qwen2.5-0.5B-Instruct';
 
-// Instruction-tuned models with browser (ONNX) builds. `gpu` is the 4-bit WebGPU
-// download in MB; `cpu` the dtype used without a float16-capable GPU (null = GPU only).
+// Instruction-tuned models with browser (ONNX) builds. `gpu` is the 4-bit float16 download in MB
+// (GPUs with shader-f16); `cpu` the dtype used otherwise (null = GPU only) and `cpuMB` its size.
 export const MODELS = [
-  { key: 'qwen2.5-0.5b', repo: 'onnx-community/Qwen2.5-0.5B-Instruct', name: 'Qwen2.5 0.5B', short: 'Qwen 0.5B', gpu: 480, cpu: 'q4' },
+  { key: 'qwen2.5-0.5b', repo: 'onnx-community/Qwen2.5-0.5B-Instruct', name: 'Qwen2.5 0.5B', short: 'Qwen 0.5B', gpu: 480, cpu: 'q4', cpuMB: 786 },
   // Gemma's 4-bit export needs an operator the CPU runtime lacks, and its 8-bit export quantizes
   // activations per call (log p would depend on how it was computed), so it is GPU-only here.
+  { key: 'qwen3-0.6b', repo: 'onnx-community/Qwen3-0.6B-ONNX', name: 'Qwen3 0.6B', short: 'Qwen3 0.6B', gpu: 570, cpu: 'q4', cpuMB: 919, chat: { enable_thinking: false } },
+  { key: 'qwen2.5-coder-0.5b', repo: 'onnx-community/Qwen2.5-Coder-0.5B-Instruct', name: 'Qwen2.5 Coder 0.5B', short: 'Coder 0.5B', gpu: 555, cpu: 'q4', cpuMB: 862 },
   { key: 'gemma-3-1b', repo: 'onnx-community/gemma-3-1b-it-ONNX', name: 'Gemma 3 1B', short: 'Gemma 1B', gpu: 760, cpu: null },
-  { key: 'smollm2-1.7b', repo: 'HuggingFaceTB/SmolLM2-1.7B-Instruct', name: 'SmolLM2 1.7B', short: 'SmolLM2 1.7B', gpu: 1110, cpu: 'q4' },
-  { key: 'qwen2.5-1.5b', repo: 'onnx-community/Qwen2.5-1.5B-Instruct', name: 'Qwen2.5 1.5B', short: 'Qwen 1.5B', gpu: 1220, cpu: 'q4' },
-  { key: 'qwen3-1.7b', repo: 'onnx-community/Qwen3-1.7B-ONNX', name: 'Qwen3 1.7B', short: 'Qwen3 1.7B', gpu: 1430, cpu: 'q4', chat: { enable_thinking: false } },
-  { key: 'qwen2.5-coder-1.5b', repo: 'onnx-community/Qwen2.5-Coder-1.5B-Instruct', name: 'Qwen2.5 Coder 1.5B', short: 'Coder 1.5B', gpu: 1340, cpu: 'q4' },
-  { key: 'qwen2.5-coder-3b', repo: 'onnx-community/Qwen2.5-Coder-3B-Instruct', name: 'Qwen2.5 Coder 3B', short: 'Coder 3B', gpu: 2370, cpu: 'q4' },
+  { key: 'smollm2-1.7b', repo: 'HuggingFaceTB/SmolLM2-1.7B-Instruct', name: 'SmolLM2 1.7B', short: 'SmolLM2 1.7B', gpu: 1110, cpu: 'q4', cpuMB: 1412 },
+  { key: 'qwen2.5-1.5b', repo: 'onnx-community/Qwen2.5-1.5B-Instruct', name: 'Qwen2.5 1.5B', short: 'Qwen 1.5B', gpu: 1220, cpu: 'q4', cpuMB: 1788 },
+  { key: 'qwen3-1.7b', repo: 'onnx-community/Qwen3-1.7B-ONNX', name: 'Qwen3 1.7B', short: 'Qwen3 1.7B', gpu: 1430, cpu: 'q4', cpuMB: 2147, chat: { enable_thinking: false } },
+  { key: 'qwen2.5-coder-1.5b', repo: 'onnx-community/Qwen2.5-Coder-1.5B-Instruct', name: 'Qwen2.5 Coder 1.5B', short: 'Coder 1.5B', gpu: 1340, cpu: 'q4', cpuMB: 1916 },
+  { key: 'qwen2.5-coder-3b', repo: 'onnx-community/Qwen2.5-Coder-3B-Instruct', name: 'Qwen2.5 Coder 3B', short: 'Coder 3B', gpu: 2370, cpu: 'q4', cpuMB: 3191 },
   { key: 'qwen3-4b', repo: 'onnx-community/Qwen3-4B-ONNX', name: 'Qwen3 4B', short: 'Qwen3 4B', gpu: 2160, cpu: null, chat: { enable_thinking: false } },
   { key: 'phi-3.5-mini', repo: 'onnx-community/Phi-3.5-mini-instruct-onnx-web', name: 'Phi-3.5 mini (3.8B)', short: 'Phi-3.5 mini', gpu: 2320, cpu: null },
 ];

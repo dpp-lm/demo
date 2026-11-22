@@ -20,7 +20,7 @@ function progressCb(what) {
       seen.set(e.file, [e.loaded, e.total]);
       let l = 0, t = 0;
       for (const [a, b] of seen.values()) { l += a; t += b; }
-      postMessage({ type: 'status', text: `Downloading ${what}… ${(l / 1e6).toFixed(0)} / ${(t / 1e6).toFixed(0)} MB` });
+      postMessage({ type: 'status', text: `${what}… ${(l / 1e6).toFixed(0)} / ${(t / 1e6).toFixed(0)} MB` });
     }
   };
 }
@@ -36,13 +36,17 @@ self.onmessage = async ({ data }) => {
     if (!dtype) throw new Error(`${M.name} needs a GPU with float16 support, which this browser does not offer. Pick a smaller model.`);
     if (!lm || lmKey !== M.key) {
       if (lm) { try { await lm.model.dispose(); } catch {} lm = null; }
-      postMessage({ type: 'status', text: `Loading ${M.name} (${device === 'webgpu' ? 'GPU' : 'CPU'})…` });
-      lm = await loadLM(T, { model: M.repo, device, dtype, extra: dtype === M.cpu ? M.cpuExtra ?? {} : {}, progress_callback: progressCb(M.name) });
+      // transformers.js reports progress for cache reads too, so say which one this is.
+      let fromCache = false;
+      try { fromCache = !!(await (await caches.open('transformers-cache')).match(`https://huggingface.co/${M.repo}/resolve/main/onnx/model_${dtype}.onnx`)); } catch {}
+      const verb = fromCache ? `Loading ${M.name} from this browser` : `Downloading ${M.name}`;
+      postMessage({ type: 'status', text: `${verb}…` });
+      lm = await loadLM(T, { model: M.repo, device, dtype, extra: dtype === M.cpu ? M.cpuExtra ?? {} : {}, progress_callback: progressCb(verb) });
       lmKey = M.key;
     }
     if (!embedder) {
-      postMessage({ type: 'status', text: 'Loading embedder…' });
-      embedder = await loadEmbedder(T, { model: DEFAULT_EMBEDDER, device: 'wasm', dtype: 'fp32', progress_callback: progressCb('embedder') });
+      postMessage({ type: 'status', text: 'Loading the embedder…' });
+      embedder = await loadEmbedder(T, { model: DEFAULT_EMBEDDER, device: 'wasm', dtype: 'fp32', progress_callback: progressCb('Loading the embedder') });
     }
     const t0 = performance.now();
     postMessage({ type: 'status', text: `Sampling 0/${data.N}…` });

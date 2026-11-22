@@ -486,7 +486,7 @@ function runLive() {
   $('#progress-last').textContent = '';
   worker.onmessage = ({ data }) => {
     if (data.type === 'status' || data.type === 'progress') $('#live-status').textContent = data.text;
-    // Fill the bar during downloads too ("Downloading X… a / b MB").
+    // Fill the bar while a model downloads or loads ("… a / b MB").
     const dl = data.type === 'status' && /(\d+) \/ (\d+) MB/.exec(data.text);
     if (dl) { $('#progress').hidden = false; $('#progress-fill').style.width = `${(100 * +dl[1]) / Math.max(1, +dl[2])}%`; $('#progress-last').textContent = ''; }
     if (data.type === 'status' && /^Sampling 0\//.test(data.text)) $('#progress-fill').style.width = '0%';
@@ -536,27 +536,39 @@ function wire() {
   // Models marked cpu: null need a GPU with float16 support (WebGPU 'shader-f16').
   let hasGPU = false;
   let cached = new Set();
+  // Without a float16 GPU the model runs in WebAssembly, which must hold the whole file in memory:
+  // phones cope with about 1 GB, desktops with about 2.2 GB.
+  const isPhone = navigator.userAgentData?.mobile ?? /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+  const sizeMB = (m) => (hasGPU ? m.gpu : m.cpuMB);
+  const fits = (m) => hasGPU || (m.cpu && m.cpuMB <= (isPhone ? 1000 : 2200));
   const fillModels = () => {
     const keep = $('#model').value;
-    $('#model').innerHTML = MODELS.map((m) => `<option value="${m.key}" ${!hasGPU && !m.cpu ? 'disabled' : ''}>${m.name} · ${cached.has(m.repo) ? 'downloaded' : `${(m.gpu / 1000).toFixed(1)} GB`}${m.cpu ? '' : ' · GPU only'}</option>`).join('');
+    $('#model').innerHTML = MODELS.map((m) => {
+      const why = fits(m) ? '' : !m.cpu ? ' · needs a GPU' : ` · too large for this ${isPhone ? 'phone' : 'device'}`;
+      const size = cached.has(m.repo) ? 'downloaded' : sizeMB(m) ? `${(sizeMB(m) / 1000).toFixed(1)} GB` : '';
+      return `<option value="${m.key}" ${fits(m) ? '' : 'disabled'}>${m.name}${size ? ` · ${size}` : ''}${why}</option>`;
+    }).join('');
     if (keep && usable(keep)) { $('#model').value = keep; advSum(); modelNote(); return; }
     let saved = null;
     try { saved = localStorage.getItem('dpp-lm-model'); } catch {}
-    $('#model').value = usable(saved) ? saved : hasGPU ? 'qwen3-1.7b' : 'qwen2.5-0.5b';
+    $('#model').value = usable(saved) ? saved : hasGPU ? 'qwen3-1.7b' : isPhone ? 'qwen3-0.6b' : 'qwen3-1.7b';
     advSum(); modelNote();
   };
-  const usable = (k) => MODELS.some((m) => m.key === k && (hasGPU || m.cpu));
+  const usable = (k) => MODELS.some((m) => m.key === k && fits(m));
   const modelNote = () => {
     const m = modelByKey($('#model').value);
     $('#model-note').textContent = cached.has(m.repo)
       ? `Runs on your ${hasGPU ? 'GPU' : 'CPU'}. Already downloaded to this browser.`
-      : `Runs on your ${hasGPU ? 'GPU' : 'CPU'}. First use downloads about ${(m.gpu / 1000).toFixed(1)} GB; this browser keeps it for next time.`;
+      : `Runs on your ${hasGPU ? 'GPU' : 'CPU'}. First use downloads about ${(sizeMB(m) / 1000).toFixed(1)} GB; this browser keeps it for next time.`;
   };
   // Which models are already in the browser's cache (transformers.js stores files under their URL).
   const refreshCache = async () => {
     try {
       const keys = await (await caches.open('transformers-cache')).keys();
-      cached = new Set(MODELS.filter((m) => keys.some((r) => r.url.includes(`/${m.repo}/resolve/`) && /\/onnx\/model[^/]*\.onnx$/.test(r.url))).map((m) => m.repo));
+      // Only the build this device will load counts (float16 on capable GPUs, else the CPU build).
+      const file = (m) => `https://huggingface.co/${m.repo}/resolve/main/onnx/model_${hasGPU ? 'q4f16' : m.cpu}.onnx`;
+      const urls = new Set(keys.map((r) => r.url));
+      cached = new Set(MODELS.filter((m) => fits(m) && urls.has(file(m))).map((m) => m.repo));
       const est = await navigator.storage?.estimate?.();
       const gb = est?.usage ? est.usage / 1e9 : 0;
       $('#cache-info').textContent = cached.size ? `${cached.size} model${cached.size > 1 ? 's' : ''} downloaded (${gb.toFixed(1)} GB).` : '';
@@ -580,7 +592,7 @@ function wire() {
   $('#model').addEventListener('change', () => { try { localStorage.setItem('dpp-lm-model', $('#model').value); } catch {} advSum(); modelNote(); });
   fillModels();
   refreshCache();
-  navigator.gpu?.requestAdapter().then((a) => { hasGPU = !!a?.features.has('shader-f16'); fillModels(); }).catch(() => {});
+  navigator.gpu?.requestAdapter().then((a) => { hasGPU = !!a?.features.has('shader-f16'); refreshCache(); }).catch(() => {});
   ['#live-N', '#live-Tp', '#live-max'].forEach((id) => $(id).addEventListener('input', advSum));
   advSum();
   $('#resample').disabled = S.mode === 'map';
@@ -616,7 +628,17 @@ function wire() {
   document.addEventListener('click', (e) => { for (const m of [$('#adv'), $('#exmenu')]) if (m.open && !m.contains(e.target)) m.open = false; });
   // Only one composer menu open at a time.
   for (const [a, b] of [['#adv', '#exmenu'], ['#exmenu', '#adv']]) $(a).addEventListener('toggle', () => { if ($(a).open) $(b).open = false; });
-  $('#live-stop').onclick = () => worker?.postMessage({ type: 'stop' });
+  // Stop right away: shut the worker down (this also cancels a download). Files already
+  // downloaded stay in the browser's cache; the next run starts a fresh worker.
+  $('#live-stop').onclick = () => {
+    worker?.terminate();
+    worker = null;
+    $('#live-go').hidden = false;
+    $('#live-stop').hidden = true;
+    $('#progress').hidden = true;
+    $('#live-status').textContent = 'Stopped. Press ↑ to start again.';
+    window.__refreshCache?.();
+  };
   let rt = 0;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { plot.reset(); render(); }, 200); });
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { plot.reset(); render(); });
