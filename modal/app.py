@@ -219,3 +219,13 @@ def web():
         return await Sampler().sample_pool.remote.aio(prompt, n, t_prime, max_new, seed)
 
     return api
+
+
+@app.local_entrypoint()
+def smoke():
+    """One small GPU run, for checking a deploy: modal run modal/app.py::smoke"""
+    t = time.time()
+    pool = Sampler().sample_pool.remote("Name a color in one word.", 6, 1.0, 16, 0)
+    print(f"{pool['N']} samples, D={pool['D']}, {time.time() - t:.0f}s including start-up")
+    for s in pool["samples"]:
+        print(f"  logp={s['logp']:8.3f} logq={s['logq']:8.3f} n={s['nTokens']} ended={s['ended']} {s['text']!r}")
