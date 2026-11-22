@@ -38,9 +38,9 @@ export const EXPLAIN = {
   },
   diversity: {
     title: 'Diversity',
-    body: `<p>How different the selected completions are, from <b>0</b> (at least two are duplicates) to <b>1</b> (they all point in completely different directions).</p>
-      <p>It is the volume spanned by the unit-length embeddings, taken per completion so it does not shrink as $K$ grows:
-      $$\\det\\big(\\Phi_S^\\top\\Phi_S\\big)^{1/K}.$$</p>`,
+    body: `<p>How different the selected completions are: the log of the squared volume their unit-length embeddings span,
+      $$\\log\\det\\big(\\Phi_S^\\top\\Phi_S\\big).$$</p>
+      <p>It is at most 0, reached when the completions point in completely different directions, and goes to $-\\infty$ as two of them become duplicates.</p>`,
   },
   ess: {
     title: 'Effective sample size',

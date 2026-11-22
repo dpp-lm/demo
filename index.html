@@ -73,13 +73,13 @@
         </div>
         <button type="button" class="xbtn" data-x="subset" aria-label="How is the subset chosen?">?</button>
       </div>
-      <div class="field tfield">
-        <div class="lab row"><span><label for="T-slider">Temperature T</label> <button type="button" class="xbtn" data-x="T" aria-label="What does T do?">?</button></span><output id="T-out" class="val">1.00</output></div>
-        <div class="trow"><span>quality</span><input id="T-slider" type="range" min="0" max="1000" step="1" value="500"><span>diversity</span></div>
+      <div class="tfield">
+        <span class="tlab"><label for="T-slider" title="Temperature">T</label> <button type="button" class="xbtn" data-x="T" aria-label="What does T do?">?</button> <output id="T-out" class="val">1.00</output></span>
+        <span class="end">quality</span><input id="T-slider" type="range" min="0" max="1000" step="1" value="500" aria-label="Temperature T"><span class="end">diversity</span>
       </div>
       <div class="row-between">
-        <div class="field">
-          <span class="lab" id="K-lab">Subset size K</span>
+        <div class="field kfield">
+          <span class="lab" id="K-lab" title="Subset size">K</span>
           <div class="stepper" role="group" aria-labelledby="K-lab">
             <button class="btn icon" id="K-minus" aria-label="Decrease K">−</button>
             <input id="K" type="number" min="1" max="20" value="3" aria-labelledby="K-lab">

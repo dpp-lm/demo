@@ -157,7 +157,7 @@ function renderReadout() {
     ? `<span class="stat">No subset of size ${S.K}: there are fewer distinct completions than that. Lower K or generate more.</span>`
     : stat('log P(S)', fmt(S.logP), 'logp') +
       stat('quality', fmt(quality(S.logp, S.sel)), 'quality') +
-      stat('diversity', fmt(Math.exp(diversity(S.G, N, S.sel) / S.sel.length), 2), 'diversity') +
+      stat('diversity', fmt(diversity(S.G, N, S.sel)), 'diversity') +
       (S.mode === 'sample' ? stat('ESS', `${e.toFixed(0)}/${N}`, 'ess') : '');
 }
 
