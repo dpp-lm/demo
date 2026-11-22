@@ -471,14 +471,64 @@ function renderTable() {
 }
 
 // ---------------------------------------------------------------- live mode
+// Models served by a Hugging Face Space (ZeroGPU). The Space returns the same pool format
+// (exact log p / log q and embeddings); the DPP still runs here.
+const CLOUD = [
+  { key: 'hf-qwen3-14b', name: 'Qwen3 14B', short: 'Qwen3 14B · cloud', space: 'https://xtimv-dpp-lm-sampler.hf.space', model: 'qwen3-14b' },
+];
+const cloudByKey = (k) => CLOUD.find((m) => m.key === k);
+const anyModel = (k) => cloudByKey(k) ?? modelByKey(k);
+let cloudAbort = null;
+
+async function runCloud(M, { prompt, N, Tprime, maxNewTokens }, done) {
+  cloudAbort = new AbortController();
+  const signal = cloudAbort.signal;
+  const t0 = performance.now();
+  const tick = setInterval(() => ($('#live-status').textContent = `Waiting for ${M.name} on Hugging Face… ${((performance.now() - t0) / 1000).toFixed(0)}s`), 1000);
+  try {
+    $('#live-status').textContent = `Sending to ${M.name} on Hugging Face…`;
+    const r = await fetch(`${M.space}/gradio_api/call/sample`, {
+      method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: [prompt, M.model, N, Tprime, maxNewTokens, Math.floor(Math.random() * 1e9)] }),
+    });
+    if (!r.ok) throw new Error(`the Space answered ${r.status}${r.status === 404 ? ' (is it running?)' : ''}`);
+    const { event_id } = await r.json();
+    const text = await (await fetch(`${M.space}/gradio_api/call/sample/${event_id}`, { signal })).text();
+    // Server-sent events: the last "event: complete" carries the result, "event: error" a message.
+    const events = [...text.matchAll(/event: (\w+)\ndata: (.*)/g)].map((m) => [m[1], m[2]]);
+    const err = events.find(([e]) => e === 'error');
+    const ok = events.find(([e]) => e === 'complete');
+    if (!ok) {
+      const msg = err && err[1] !== 'null' ? JSON.parse(err[1]) : null;
+      throw new Error(msg || 'the Space returned no result. Its free GPU quota may be used up for today; try again later or use an on-device model.');
+    }
+    const pool = JSON.parse(ok[1])[0];
+    $('#live-status').textContent = `${pool.N} completions from ${M.name} on Hugging Face, in ${((performance.now() - t0) / 1000).toFixed(0)}s.`;
+    $('#progress').hidden = true;
+    markExample(null);
+    setPool(pool, decodeEmb(pool.emb, pool.N, pool.D));
+  } catch (e) {
+    if (e.name !== 'AbortError') $('#live-status').textContent = 'Error: ' + (e.message || e);
+  } finally {
+    clearInterval(tick);
+    cloudAbort = null;
+    done();
+  }
+}
+
 let worker = null;
 function runLive() {
-  navigator.storage?.persist?.().catch(() => {}); // ask the browser not to evict downloaded models
-  worker ??= new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   const N = clampInt($('#live-N').value, 2, 200), Tp = Math.min(2, Math.max(0.2, +$('#live-Tp').value || 1));
   const maxNewTokens = clampInt($('#live-max').value, 8, 256);
   const prompt = $('#prompt').value.trim();
   if (!prompt) return;
+  const cloud = cloudByKey($('#model').value);
+  if (cloud) {
+    $('#live-go').hidden = true; $('#live-stop').hidden = false; $('#progress').hidden = true;
+    return runCloud(cloud, { prompt, N, Tprime: Tp, maxNewTokens }, () => { $('#live-go').hidden = false; $('#live-stop').hidden = true; });
+  }
+  navigator.storage?.persist?.().catch(() => {}); // ask the browser not to evict downloaded models
+  worker ??= new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   $('#live-go').hidden = true;
   $('#live-stop').hidden = false;
   $('#progress').hidden = false;
@@ -543,19 +593,24 @@ function wire() {
   const fits = (m) => hasGPU || (m.cpu && m.cpuMB <= (isPhone ? 1000 : 2200));
   const fillModels = () => {
     const keep = $('#model').value;
-    $('#model').innerHTML = MODELS.map((m) => {
+    $('#model').innerHTML = '<optgroup label="On this device">' + MODELS.map((m) => {
       const why = fits(m) ? '' : !m.cpu ? ' · needs a GPU' : ` · too large for this ${isPhone ? 'phone' : 'device'}`;
       const size = cached.has(m.repo) ? 'downloaded' : sizeMB(m) ? `${(sizeMB(m) / 1000).toFixed(1)} GB` : '';
       return `<option value="${m.key}" ${fits(m) ? '' : 'disabled'}>${m.name}${size ? ` · ${size}` : ''}${why}</option>`;
-    }).join('');
+    }).join('') + '</optgroup><optgroup label="On Hugging Face (free daily quota)">' +
+      CLOUD.map((m) => `<option value="${m.key}">${m.name} · cloud GPU</option>`).join('') + '</optgroup>';
     if (keep && usable(keep)) { $('#model').value = keep; advSum(); modelNote(); return; }
     let saved = null;
     try { saved = localStorage.getItem('dpp-lm-model'); } catch {}
     $('#model').value = usable(saved) ? saved : hasGPU ? 'qwen3-1.7b' : isPhone ? 'qwen3-0.6b' : 'qwen3-1.7b';
     advSum(); modelNote();
   };
-  const usable = (k) => MODELS.some((m) => m.key === k && fits(m));
+  const usable = (k) => !!cloudByKey(k) || MODELS.some((m) => m.key === k && fits(m));
   const modelNote = () => {
+    if (cloudByKey($('#model').value)) {
+      $('#model-note').textContent = 'Runs on a free Hugging Face GPU: your prompt is sent there, nothing is downloaded. Each visitor gets a few runs a day; signing in to Hugging Face raises that.';
+      return;
+    }
     const m = modelByKey($('#model').value);
     $('#model-note').textContent = cached.has(m.repo)
       ? `Runs on your ${hasGPU ? 'GPU' : 'CPU'}. Already downloaded to this browser.`
@@ -588,7 +643,7 @@ function wire() {
     $('#cache-info').textContent = 'Downloaded models deleted.';
   };
   window.__refreshCache = refreshCache;
-  const advSum = () => ($('#adv-sum').textContent = `${modelByKey($('#model').value).short} · ${$('#live-N').value} samples`);
+  const advSum = () => ($('#adv-sum').textContent = `${anyModel($('#model').value).short} · ${$('#live-N').value} samples`);
   $('#model').addEventListener('change', () => { try { localStorage.setItem('dpp-lm-model', $('#model').value); } catch {} advSum(); modelNote(); });
   fillModels();
   refreshCache();
@@ -631,6 +686,7 @@ function wire() {
   // Stop right away: shut the worker down (this also cancels a download). Files already
   // downloaded stay in the browser's cache; the next run starts a fresh worker.
   $('#live-stop').onclick = () => {
+    cloudAbort?.abort();
     worker?.terminate();
     worker = null;
     $('#live-go').hidden = false;
