@@ -381,7 +381,8 @@ const plot = {
 // Small callouts with the opening words of each selected completion. Shown for
 // K ≤ 6 so they never swamp the plot; in 3D they follow the points every frame.
 const MAX_LABELS = 6;
-function labelText(s) { const t = s.text.replace(/\s+/g, ' ').trim(); return t.length > 90 ? t.slice(0, 88) + '…' : t; }
+// The first few words only: enough to tell the selected completions apart.
+function labelText(s) { const w = s.text.replace(/\s+/g, ' ').trim().split(' '); return w.length > 5 ? w.slice(0, 5).join(' ') + '…' : w.join(' '); }
 function renderLabels() {
   const layer = $('#labels');
   const show = $('#label-toggle').checked && S.sel.length && S.sel.length <= MAX_LABELS;
@@ -415,7 +416,7 @@ function placeLabels() {
   // Right of the point (left if it would leave the plot), then nudge down to avoid overlaps.
   const placed = [];
   for (const it of items) {
-    let left = it.x + 10 + it.w > W - 4 ? it.x - 10 - it.w : it.x + 10;
+    let left = it.x + 8 + it.w > W - 4 ? it.x - 8 - it.w : it.x + 8;
     left = Math.max(4, left);
     let top = Math.min(Math.max(4, it.y - it.h / 2), H - it.h - 4);
     for (const q of placed) {
