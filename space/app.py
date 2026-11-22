@@ -6,6 +6,12 @@ embeddings. The demo page does the DPP part in the browser.
 
 Runs on free CPU hardware as is; on ZeroGPU the @spaces.GPU decorator attaches a GPU.
 """
+# On ZeroGPU, `spaces` must be imported before torch initializes CUDA.
+try:
+    import spaces
+except Exception:  # running locally
+    spaces = None
+
 import base64
 import inspect
 import os
@@ -21,19 +27,19 @@ def _duration(prompt, model_key, n, t_prime, max_new_tokens, seed=0):
     return int(min(120, 15 + 0.25 * int(max_new_tokens) * (1 + int(n) // 100)))
 
 
-try:
-    import spaces  # available on Hugging Face Spaces; a no-op outside ZeroGPU
-    gpu = spaces.GPU(duration=_duration)
-except Exception:  # running locally
+if spaces is not None:
+    gpu = spaces.GPU(duration=_duration)  # a no-op outside ZeroGPU
+else:
     def gpu(f):
         return f
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 try:  # the spaces package knows whether this Space runs on ZeroGPU
     from spaces.config import Config as _SpacesConfig
     ON_ZEROGPU = bool(_SpacesConfig.zero_gpu)
 except Exception:
     ON_ZEROGPU = os.environ.get("SPACES_ZERO_GPU", "").lower() in ("1", "true")
+# On ZeroGPU the GPU only exists inside @spaces.GPU calls; don't probe CUDA at import time there.
+DEVICE = "cuda" if ON_ZEROGPU or torch.cuda.is_available() else "cpu"
 
 # key -> (repo, chat-template options). On ZeroGPU the Space serves one large model,
 # loaded onto the GPU at startup (ZeroGPU wants models placed on cuda at module level).
