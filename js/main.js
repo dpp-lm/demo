@@ -478,9 +478,13 @@ function renderTable() {
 // Anonymous visitors get almost no ZeroGPU quota, so these need "Sign in with Hugging Face":
 // the visitor's token goes with the request and ZeroGPU charges their own daily quota.
 // While this is being tried out, the option only shows with ?cloud in the URL or once signed in.
+// Modal endpoint (modal/app.py); when set it replaces the ZeroGPU Space.
+const MODAL_URL = '';
 const showCloud = authEnabled() && (!!getAuth() || /[?&](cloud|code)=?/.test(location.search));
 const CLOUD = showCloud ? [
-  { key: 'hf-qwen3-14b', name: 'Qwen3 14B', short: 'Qwen3 14B · cloud', space: 'https://xtimv-dpp-lm-sampler.hf.space', model: 'qwen3-14b' },
+  MODAL_URL
+    ? { key: 'modal-qwen3-14b', name: 'Qwen3 14B', short: 'Qwen3 14B · cloud', modal: MODAL_URL, model: 'qwen3-14b' }
+    : { key: 'hf-qwen3-14b', name: 'Qwen3 14B', short: 'Qwen3 14B · cloud', space: 'https://xtimv-dpp-lm-sampler.hf.space', model: 'qwen3-14b' },
 ] : [];
 const cloudByKey = (k) => CLOUD.find((m) => m.key === k);
 const anyModel = (k) => cloudByKey(k) ?? modelByKey(k);
@@ -492,8 +496,23 @@ async function runCloud(M, { prompt, N, Tprime, maxNewTokens }, done) {
   const auth = getAuth();
   if (!auth) { done(); return signIn({ prompt, model: M.key }); }
   const t0 = performance.now();
-  const tick = setInterval(() => ($('#live-status').textContent = `Waiting for ${M.name} on Hugging Face… ${((performance.now() - t0) / 1000).toFixed(0)}s`), 1000);
+  const tick = setInterval(() => ($('#live-status').textContent = `Waiting for ${M.name}… ${((performance.now() - t0) / 1000).toFixed(0)}s`), 1000);
   try {
+    if (M.modal) {
+      $('#live-status').textContent = `Sending to ${M.name}… (the first run starts a GPU, about a minute)`;
+      const r = await fetch(`${M.modal}/sample`, {
+        method: 'POST', signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
+        body: JSON.stringify({ prompt, n: N, t_prime: Tprime, max_new_tokens: maxNewTokens, seed: Math.floor(Math.random() * 2 ** 31) }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (r.status === 401) signOut();
+      if (!r.ok) throw new Error(body.detail || `the server answered ${r.status}`);
+      $('#live-status').textContent = `${body.N} completions from ${M.name}, in ${((performance.now() - t0) / 1000).toFixed(0)}s.`;
+      $('#progress').hidden = true;
+      markExample(null);
+      setPool(body, decodeEmb(body.emb, body.N, body.D));
+      return;
+    }
     $('#live-status').textContent = `Sending to ${M.name} on Hugging Face…`;
     const r = await fetch(`${M.space}/gradio_api/call/sample`, {
       method: 'POST', signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
@@ -605,7 +624,7 @@ function wire() {
       const why = fits(m) ? '' : !m.cpu ? ' · needs a GPU' : ` · too large for this ${isPhone ? 'phone' : 'device'}`;
       const size = cached.has(m.repo) ? 'downloaded' : sizeMB(m) ? `${(sizeMB(m) / 1000).toFixed(1)} GB` : '';
       return `<option value="${m.key}" ${fits(m) ? '' : 'disabled'}>${m.name}${size ? ` · ${size}` : ''}${why}</option>`;
-    }).join('') + '</optgroup>' + (CLOUD.length ? '<optgroup label="On Hugging Face (free daily quota)">' +
+    }).join('') + '</optgroup>' + (CLOUD.length ? (MODAL_URL ? '<optgroup label="In the cloud (sign in with Hugging Face)">' : '<optgroup label="On Hugging Face (free daily quota)">') +
       CLOUD.map((m) => `<option value="${m.key}">${m.name} · cloud GPU</option>`).join('') + '</optgroup>' : '');
     if (keep && usable(keep)) { $('#model').value = keep; advSum(); modelNote(); return; }
     let saved = null;
@@ -617,9 +636,10 @@ function wire() {
   const modelNote = () => {
     if (cloudByKey($('#model').value)) {
       const a = getAuth();
+      const where = MODAL_URL ? 'Runs on a cloud GPU (a few free runs a day each)' : `Runs on a Hugging Face GPU and uses your account's daily GPU quota (${a?.isPro ? 'PRO: 40' : 'free: 5'} min)`;
       $('#model-note').innerHTML = a
-        ? `Runs on a Hugging Face GPU and uses your account's daily GPU quota (${a.isPro ? 'PRO: 40' : 'free: 5'} min). Signed in as <b>${a.user}</b>. <button type="button" class="link" id="hf-signout">Sign out</button>`
-        : 'Runs on a Hugging Face GPU, using your account\'s free daily GPU quota. Pressing ↑ first asks you to sign in to Hugging Face.';
+        ? `${where}. Signed in to Hugging Face as <b>${a.user}</b>. <button type="button" class="link" id="hf-signout">Sign out</button>`
+        : `${where}. Pressing ↑ first asks you to sign in with Hugging Face.`;
       $('#hf-signout')?.addEventListener('click', (e) => { e.stopPropagation(); signOut(); modelNote(); });
       return;
     }

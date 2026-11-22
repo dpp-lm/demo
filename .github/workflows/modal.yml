@@ -1,0 +1,36 @@
+name: Deploy the Modal backend
+
+on:
+  push:
+    branches: [main]
+    paths: ['modal/**', '.github/workflows/modal.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check for Modal credentials
+        run: |
+          if [ -z "$MODAL_TOKEN_ID" ] || [ -z "$MODAL_TOKEN_SECRET" ]; then
+            echo "::warning::Add the MODAL_TOKEN_ID and MODAL_TOKEN_SECRET repository secrets to deploy."
+            echo "skip=1" >> "$GITHUB_ENV"
+          fi
+      - if: env.skip != '1'
+        run: pip install modal==1.6.3
+      - name: Deploy
+        if: env.skip != '1'
+        run: modal deploy modal/app.py
+      - name: Cache the model weights (CPU only; quick once cached)
+        if: env.skip != '1'
+        run: modal run modal/app.py::download
