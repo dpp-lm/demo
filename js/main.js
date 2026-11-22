@@ -479,7 +479,7 @@ function renderTable() {
 // the visitor's token goes with the request and ZeroGPU charges their own daily quota.
 // While this is being tried out, the option only shows with ?cloud in the URL or once signed in.
 // Modal endpoint (modal/app.py); when set it replaces the ZeroGPU Space.
-const MODAL_URL = '';
+const MODAL_URL = 'https://timvieira--dpp-lm-sampler-web.modal.run';
 const showCloud = authEnabled() && (!!getAuth() || /[?&](cloud|code)=?/.test(location.search));
 const CLOUD = showCloud ? [
   MODAL_URL
