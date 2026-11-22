@@ -155,10 +155,10 @@ summary.chip { max-width: none; overflow: hidden; text-overflow: ellipsis; }
 .kfield .lab { font: 500 13px var(--sans); color: var(--text-2); }
 .step-2 .row-between { align-items: center; }
 /* T on one row: label, ?, value, then quality ━━●━━ diversity */
-.tfield { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 6px; }
+.tfield { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 10px; row-gap: 0; }
+.tfield .ends { grid-column: 2; display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; line-height: 1.1; margin-top: -3px; }
 .tlab { display: inline-flex; align-items: center; gap: 4px; font: 500 13px var(--sans); color: var(--text-2); white-space: nowrap; }
 .tlab .val { min-width: 3.2em; }
-.tfield .end { color: var(--muted); font-size: 11px; }
 .tfield input[type=range] { margin: 0; }
 
 /* "?" explainer buttons and their popover */
@@ -355,7 +355,7 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .step-2 input[type=range] { height: 24px; }
   .step-2 .tlab { font-size: 12.5px; }
   .step-2 > .mode-row { grid-area: seg; align-self: end; }
-  .step-2 > .field { grid-area: t; gap: 0; }
+  .step-2 > .tfield { grid-area: t; }
   .step-2 > .row-between { display: contents; }
   .step-2 > .row-between > .field { grid-area: k; align-self: end; }
   .step-2 > .row-between > .field > .lab { display: none; }
