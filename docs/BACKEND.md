@@ -35,7 +35,9 @@ Multi-model server (the deployed one):
   "models": [{"key": "qwen3-14b", "name": "Qwen3 14B", "params": 14.8, "repo": "...", "slot": "resident", "state": "ready"}],
   "embedders": {"minilm": "sentence-transformers/all-MiniLM-L6-v2", "qwen3-emb": "Qwen/Qwen3-Embedding-0.6B", "own": null},
   "ownModels": ["qwen3-14b"], "defaultEmbedder": "qwen3-emb",
-  "maxN": 200, "maxNewTokens": 256, "maxTextChars": 2000, "embed": true, "continuePool": true
+  "maxN": 200, "maxNewTokens": 256, "maxTextChars": 2000, "embed": true, "continuePool": true,
+  "describe": true, "maxDescribeGroups": 8, "maxDescribeTexts": 4,
+  "queue": {"running": 1, "waiting": 2, "max": 16}, "generating": 1, "waiting": 2
 }
 ```
 
@@ -62,7 +64,9 @@ Request (JSON):
 | `seed` | integer | Random seed. A new seed gives new samples. |
 | `model` | string | Optional. Sent only to a multi-model server. |
 | `embedder` | string | Optional. Sent when the backend offers several embedders or the requested one is not its first. The deployed server accepts `minilm`, `qwen3-emb`, `mpnet`, and `own` (only for models in `ownModels`). |
+| `request_id` | string | Optional, 1 to 64 characters of `A-Za-z0-9_-`. Lets the page ask `GET /queue?id=` where the request stands. 400 if malformed, 409 if another unfinished request uses it. |
 
+The deployed server runs generating work through a FIFO queue, one running job per engine (the resident model and the swappable slot model run side by side). A request waits in the queue before it runs, so the response can take a long time to start; the server answers 503 if the wait exceeds 10 minutes and 429 when 16 jobs are already waiting. A client may have one `/sample` request queued or running at a time (a second gets 429). If the client disconnects while waiting, the job is dropped.
 Response (JSON):
 
 ```json
@@ -87,7 +91,19 @@ Request: `{"texts": ["..."], "embedder": "qwen3-emb", "model": "qwen3-14b", "pro
 
 Response: `{"N": 30, "embedder": "qwen3-emb", "D": 1024, "emb": "<base64 float32, N x D>", "approximate": false, "note": "..."}` with rows in the order of `texts`. For `own` the result is teacher-forced and flagged `approximate: true`; the page shows `note` in the status line.
 
-Without this endpoint the page disables the embedder switch on a live pool and says why.
+Without this endpoint the page disables the embedder switch on a live pool and says why. `request_id` is accepted here too. Only `own` embeddings use the queue (they run the language model); the other embedders answer at once.
+
+### `POST {url}/describe` (optional)
+
+Names groups of completions with the resident language model. Advertised by `"describe": true` in `/status`, with `maxDescribeGroups` (8) and `maxDescribeTexts` (4).
+
+Request: `{"prompt": "Tell me a joke.", "groups": [["text", "text"], ["text"]], "request_id": "abc123"}`. `groups` has 2 to `maxDescribeGroups` lists of 1 to `maxDescribeTexts` strings. The server cuts each text to 240 characters and the prompt to `maxTextChars`. The body is at most 32 KB. `request_id` is optional.
+
+Response: `{"names": ["Puns about science", ""], "model": "qwen3-14b", "ms": 420}`. There is one name per group, in order. A name has at most 40 characters, starts with a capital letter, and has no quotes or trailing punctuation. A name is `""` when the model returned nothing usable, and the page then falls back to "Group i". `model` is the key of the model that wrote the names (always the resident model). A repeated identical request is answered from a cache. Limits: 120 calls per client per hour and 600 per hour overall (429 with `Retry-After`).
+
+### `GET {url}/queue?id=<request_id>` (optional)
+
+Returns where a request that carried `request_id` stands: `{"state": "waiting", "ahead": 2}`. `state` is `waiting`, `running` or `unknown` (finished, never queued, or id not seen). `ahead` counts the jobs in front of it on its engine, the running one included, and is 0 for `running` and `unknown`. The route needs no key, returns nothing about other requests, and is limited to 120 calls per minute per client (429).
 
 ### Errors
 
@@ -97,8 +113,8 @@ Errors use HTTP status codes and a JSON body `{"detail": "message"}` (an `error`
 |---|---|
 | 400 | Bad request, for example an empty prompt. The message is shown. |
 | 401 | Sign-in needed. For `auth: "hf"` backends the stored token is dropped. |
-| 429 | Usage limit reached or the server is busy. With a `Retry-After` header the page says how long to wait ("Try again in about 2 minutes."). The deployed server limits each client to one generating request at a time, 150k generated tokens per hour and 3 model swaps per hour, with a 30 s global gap between swaps. |
-| 503 | Backend not available, or an engine died. The page says "The model is restarting. Try again in a minute." Network failures are treated the same way. |
+| 429 | Usage limit reached or the server is busy. With a `Retry-After` header the page says how long to wait ("Try again in about 2 minutes."). The deployed server limits each client to one queued or running `/sample` request, 150k generated tokens per hour and 3 model swaps per hour, with a 30 s global gap between swaps. It also answers 429 when 16 jobs are already waiting. |
+| 503 | Backend not available, an engine died, or the request waited more than 10 minutes in the queue. The page says "The model is restarting. Try again in a minute." Network failures are treated the same way. |
 | 403, 413, 415, 499, 500 | The message is shown. 413 is a body over the size limit (64 KB for `/sample`, 1.5 MiB for `/embed`). 415 means the content type was not `application/json`. |
 
 ## The `space` kind

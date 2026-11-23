@@ -2,11 +2,12 @@
 // or a worker in this browser. The page asks each backend for its capabilities and talks to nothing else.
 //
 // backend = { id, label, kind, url?, caps, status(), sample(req, { signal, onProgress }), embed?(req) }
-// caps    = { models: [{ key, name, state? }], embedders: [id], ownModels: [model key] | null, maxN, maxTokens, auth: 'none' | 'hf', continuePool, def?, up }
+// caps    = { models: [{ key, name, state? }], embedders: [id], ownModels: [model key] | null, maxN, maxTokens, auth: 'none' | 'hf', continuePool, describe, queue: { running, waiting, max } | null, def?, up }
 // sample resolves to { pool, emb } where pool is the pool JSON without `emb` and emb is a Float32Array of N x D (row-major).
+// An http backend whose /status has a `queue` field also takes `onQueue({ state, ahead })` in sample's options, and has describe(req, { signal }).
 // See docs/BACKEND.md for the wire format.
 
-export const DEFAULT_CAPS = { models: [], embedders: ['minilm'], maxN: 200, maxTokens: 256, auth: 'none', continuePool: false, up: false };
+export const DEFAULT_CAPS = { models: [], embedders: ['minilm'], maxN: 200, maxTokens: 256, auth: 'none', continuePool: false, describe: false, queue: null, up: false };
 
 /** Backend error with a stable `code`: bad_request (400), unauthorized (401), rate_limited (429), unavailable (503 and network). */
 export class BackendError extends Error {
@@ -92,6 +93,10 @@ export function parseStatus(st, cfg = {}) {
   caps.continuePool = !!(st?.continuePool ?? cfg.continuePool);
   caps.embed = !!(st?.embed ?? cfg.embed);
   caps.budget = st?.gpu_minutes_left_this_month;
+  caps.describe = !!st?.describe;
+  caps.maxDescribeGroups = st?.maxDescribeGroups ?? 8;
+  caps.maxDescribeTexts = st?.maxDescribeTexts ?? 4;
+  caps.queue = st?.queue && typeof st.queue === 'object' ? { running: st.queue.running ?? 0, waiting: st.queue.waiting ?? 0, max: st.queue.max ?? null } : null;
   return caps;
 }
 
@@ -105,7 +110,27 @@ export function sampleBody(req, caps) {
   const body = { prompt: req.prompt, n: req.n, t_prime: req.t_prime, max_new_tokens: req.max_new_tokens, seed: req.seed ?? Math.floor(Math.random() * 2 ** 31) };
   if (caps.multi && req.model) body.model = req.model;
   if (req.embedder && (caps.embedders.length > 1 || req.embedder !== caps.embedders[0])) body.embedder = req.embedder;
+  if (req.request_id) body.request_id = req.request_id;
   return body;
+}
+
+/** A random request id for /sample, /embed and /describe: 32 hex characters (the server accepts 1 to 64 of [A-Za-z0-9_-]). */
+export function newRequestId(cryptoObj = globalThis.crypto) {
+  const bytes = cryptoObj.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+/** Status line for a /queue answer while a request waits: null when it is not waiting (the page shows its running text). */
+export function queueText(q) {
+  if (q?.state !== 'waiting') return null;
+  const n = Math.max(0, Math.round(Number(q.ahead) || 0));
+  return n > 0 ? `Waiting in line, ${n} ahead.` : 'Waiting in line, next up.';
+}
+
+/** Response of POST /describe -> { names: string[] (one per group, '' when the model gave none), model, ms }. */
+export function decodeDescribe(body, nGroups) {
+  if (!body || !Array.isArray(body.names) || body.names.length !== nGroups) throw new BackendError('bad_request', 'The backend returned the wrong number of group names.');
+  return { names: body.names.map((x) => (typeof x === 'string' ? x.trim() : '')), model: body.model ?? null, ms: body.ms ?? null };
 }
 
 /** The url from `?backend=` if it is an http(s) URL: { url, origin }, else null. */
@@ -134,8 +159,25 @@ const authHeader = (auth, getToken) => {
 
 async function readJson(r) { try { return await r.json(); } catch { return {}; } }
 
-/** kind 'http': GET {url}/status, POST {url}/sample, optional POST {url}/embed. */
-function httpBackend(cfg, { fetch: f, getToken }) {
+/**
+ * While a request is pending, ask GET {url}/queue?id= every `ms` and pass { state, ahead } to onQueue. A failed poll is ignored.
+ * Returns the function that stops the polling.
+ */
+function pollQueue({ f, url, id, headers, signal, onQueue, ms }) {
+  let stopped = false, busy = false;
+  const timer = setInterval(async () => {
+    if (stopped || busy) return;
+    busy = true;
+    try {
+      const r = await f(`${url}/queue?id=${encodeURIComponent(id)}`, { cache: 'no-store', signal, headers });
+      if (r.ok) { const j = await r.json(); if (!stopped && j && typeof j.state === 'string') onQueue({ state: j.state, ahead: Number(j.ahead) || 0 }); }
+    } catch {} finally { busy = false; }
+  }, ms);
+  return () => { stopped = true; clearInterval(timer); };
+}
+
+/** kind 'http': GET {url}/status, POST {url}/sample (polling {url}/queue while it waits), optional POST {url}/embed, POST {url}/describe. */
+function httpBackend(cfg, { fetch: f, getToken, pollMs = 2000, crypto: cr }) {
   const b = {
     id: cfg.id, label: cfg.label ?? cfg.id, kind: 'http', url: cfg.url, caps: { ...DEFAULT_CAPS, auth: cfg.auth ?? 'none' },
     async status() {
@@ -146,14 +188,30 @@ function httpBackend(cfg, { fetch: f, getToken }) {
       } catch { b.caps = { ...b.caps, up: false }; }
       return b.caps;
     },
-    async sample(req, { signal } = {}) {
+    async sample(req, { signal, onQueue } = {}) {
+      // A backend with a queue gets a request id, so the page can ask where the request stands.
+      const id = b.caps.queue ? newRequestId(cr) : null;
+      const stop = id && onQueue ? pollQueue({ f, url: cfg.url, id, headers: authHeader(cfg.auth, getToken), signal, onQueue, ms: pollMs }) : () => {};
+      try {
+        let r;
+        try {
+          r = await f(`${cfg.url}/sample`, { method: 'POST', signal, headers: { 'Content-Type': 'application/json', ...authHeader(cfg.auth, getToken) }, body: JSON.stringify(sampleBody({ ...req, request_id: id }, b.caps)) });
+        } catch (e) { if (e.name === 'AbortError') throw e; throw new BackendError('unavailable', `Could not reach ${cfg.label ?? cfg.url}.`); }
+        const body = await readJson(r);
+        if (!r.ok) throw mapError(r.status, body, r.headers?.get?.('Retry-After'));
+        return decodePool(body);
+      } finally { stop(); }
+    },
+    /** Short labels for groups of completions: req = { prompt, groups: string[][] } -> { names, model, ms }. */
+    async describe(req, { signal } = {}) {
+      if (!b.caps.describe) throw new BackendError('bad_request', `${b.label} cannot name groups.`);
       let r;
       try {
-        r = await f(`${cfg.url}/sample`, { method: 'POST', signal, headers: { 'Content-Type': 'application/json', ...authHeader(cfg.auth, getToken) }, body: JSON.stringify(sampleBody(req, b.caps)) });
+        r = await f(`${cfg.url}/describe`, { method: 'POST', signal, headers: { 'Content-Type': 'application/json', ...authHeader(cfg.auth, getToken) }, body: JSON.stringify({ prompt: req.prompt, groups: req.groups, ...(b.caps.queue ? { request_id: newRequestId(cr) } : {}) }) });
       } catch (e) { if (e.name === 'AbortError') throw e; throw new BackendError('unavailable', `Could not reach ${cfg.label ?? cfg.url}.`); }
       const body = await readJson(r);
       if (!r.ok) throw mapError(r.status, body, r.headers?.get?.('Retry-After'));
-      return decodePool(body);
+      return decodeDescribe(body, req.groups.length);
     },
   };
   if (cfg.embed !== false) {

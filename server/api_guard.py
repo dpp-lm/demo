@@ -5,12 +5,14 @@ exception for bad input.
 """
 import asyncio
 import collections
+import contextlib
 import hashlib
 import hmac
 import ipaddress
 import json
 import math
 import os
+import re
 import shutil
 import time
 
@@ -183,11 +185,15 @@ class Limits:
     """Per-client and global limits. `check` raises 429 with Retry-After; `commit` records a request."""
 
     def __init__(self, tokens_per_hour, swaps_per_hour, runs_per_hour_global, tokens_per_hour_global, embeds_per_hour_client,
-                 embeds_per_hour_global, swap_min_interval, max_clients=20000):
+                 embeds_per_hour_global, swap_min_interval, max_clients=20000, describes_per_hour_client=120,
+                 describes_per_hour_global=600):
         self.tph, self.sph = tokens_per_hour, swaps_per_hour
         self.rph_g, self.tph_g = runs_per_hour_global, tokens_per_hour_global
         self.eph_c, self.eph_g = embeds_per_hour_client, embeds_per_hour_global
         self.swap_gap = swap_min_interval
+        self.dph_c, self.dph_g = describes_per_hour_client, describes_per_hour_global
+        self.describes = collections.defaultdict(collections.deque)
+        self.druns = collections.deque()
         self.buckets = {}
         self.swaps = collections.defaultdict(collections.deque)
         self.embeds = collections.defaultdict(collections.deque)
@@ -218,10 +224,23 @@ class Limits:
         m = max(1, round(w / 60))
         return HTTPException(429, msg.format(w=w, mm="a minute" if m == 1 else f"{m} minutes"), headers={"Retry-After": str(w)})
 
-    def check_run(self, client, cost, needs_swap, now=None):
-        now = now or time.time()
+    def claim(self, client):
+        """Reserve the client's one sample request (queued or running); 429 when it already holds one. Release with `unclaim`."""
         if client in self.inflight:
-            raise self._429("You already have a request running. Wait for it to finish, then try again.", 5)
+            raise self._429("You already have a request waiting or running. Wait for it to finish, then try again.", 5)
+        self.inflight.add(client)
+
+    def unclaim(self, client):
+        self.inflight.discard(client)
+
+    def swap_wait(self, now=None):
+        """Seconds until the global gap between two slot swaps has passed (0 when it has)."""
+        now = now or time.time()
+        return max(0.0, self.last_swap + self.swap_gap - now)
+
+    def check_run(self, client, cost, needs_swap, now=None, check_gap=True):
+        """429 when a budget is exhausted. `check_gap=False` skips the global gap between swaps (a queued job waits it out at its start)."""
+        now = now or time.time()
         self._trim(self.runs, now)
         if len(self.runs) >= self.rph_g:
             raise self._429("The server is busy this hour. Please try again in about {mm}.", 300)
@@ -232,7 +251,7 @@ class Limits:
         if w > 0:
             raise self._429("You have used your share of generation for this hour. Please try again in about {mm}, or use fewer or shorter completions.", w)
         if needs_swap:
-            gap = self.last_swap + self.swap_gap - now
+            gap = self.last_swap + self.swap_gap - now if check_gap else 0
             if gap > 0:
                 raise self._429("The server just switched models for someone else. Please try again in {w} seconds.", gap)
             dq = self.swaps[client]
@@ -242,7 +261,6 @@ class Limits:
 
     def commit_run(self, client, cost, needs_swap, now=None):
         now = now or time.time()
-        self.inflight.add(client)
         self.runs.append(now)
         self._bucket(client).take(cost, now)
         self.gbucket.take(cost, now)
@@ -252,7 +270,6 @@ class Limits:
 
     def end_run(self, client, refund=0, now=None):
         now = now or time.time()
-        self.inflight.discard(client)
         if refund:
             self._bucket(client).give(refund, now)
             self.gbucket.give(refund, now)
@@ -271,6 +288,21 @@ class Limits:
         now = now or time.time()
         self.eruns.append(now)
         self.embeds[client].append(now)
+
+    def check_describe(self, client, now=None):
+        now = now or time.time()
+        self._trim(self.druns, now)
+        if len(self.druns) >= self.dph_g:
+            raise self._429("The server is busy this hour. Please try again later.", 300)
+        dq = self.describes[client]
+        self._trim(dq, now)
+        if len(dq) >= self.dph_c:
+            raise self._429("Too many naming requests from you this hour. Please try again in about {mm}.", dq[0] + 3600 - now)
+
+    def commit_describe(self, client, now=None):
+        now = now or time.time()
+        self.druns.append(now)
+        self.describes[client].append(now)
 
     def snapshot(self, now=None):
         now = now or time.time()
@@ -310,3 +342,234 @@ def rotate_log(path, max_bytes, keep=4):
     with open(path, "r+b") as f:
         f.truncate(0)
     return True
+
+
+# ---------------------------------------------------------------- request ids, queue
+
+_RID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def request_id(v):
+    """Optional `request_id` of a request: 1 to 64 characters of A-Z, a-z, 0-9, `_` and `-`; None when absent."""
+    if v is None:
+        return None
+    if not isinstance(v, str) or not _RID.fullmatch(v):
+        raise bad("request_id must be 1 to 64 characters of A-Z, a-z, 0-9, _ and -.")
+    return v
+
+
+class RateWindow:
+    """At most `limit` events per client in any `period` seconds (for cheap read-only routes)."""
+
+    def __init__(self, limit, period, max_clients=20000):
+        self.limit, self.period, self.max_clients = limit, period, max_clients
+        self.ev = {}
+
+    def hit(self, client, now=None):
+        now = now or time.time()
+        dq = self.ev.get(client)
+        if dq is None:
+            if len(self.ev) >= self.max_clients:
+                self.ev.pop(next(iter(self.ev)))
+            dq = self.ev[client] = collections.deque()
+        while dq and now - dq[0] > self.period:
+            dq.popleft()
+        if len(dq) >= self.limit:
+            raise bad("Too many requests. Please slow down.", 429, {"Retry-After": "5"})
+        dq.append(now)
+
+
+class _Job:
+    __slots__ = ("rid", "engine", "state", "fut", "t")
+
+    def __init__(self, rid, engine, loop):
+        self.rid, self.engine, self.state, self.t = rid, engine, "waiting", time.monotonic()
+        self.fut = loop.create_future()
+
+
+class JobQueue:
+    """FIFO admission of generating work, one running job per engine.
+
+    `admit(engine, request_id, gone)` is an async context manager: it returns when the job is at the head of its engine's queue
+    and that engine is idle, and releases the engine on exit (normal, error or cancellation). At most `max_waiting` jobs
+    wait over all engines (429 with Retry-After beyond that). A waiting job leaves the queue when `gone()` (awaitable, true when
+    the client disconnected; HTTP 499) or after `max_wait` seconds (HTTP 503)."""
+
+    def __init__(self, engines, max_waiting=16, max_wait=600.0, poll=1.0):
+        self.max_waiting, self.max_wait, self.poll = max_waiting, max_wait, poll
+        self.q = {e: collections.deque() for e in engines}
+        self.cur = {e: None for e in engines}
+        self.ids = {}
+
+    def counts(self):
+        return {"running": sum(j is not None for j in self.cur.values()), "waiting": sum(len(d) for d in self.q.values()),
+                "max": self.max_waiting}
+
+    def busy(self, engine):
+        """True when a job runs or waits on `engine`."""
+        return self.cur[engine] is not None or bool(self.q[engine])
+
+    def position(self, rid):
+        """(state, ahead) of a request id: ahead counts the running job and the waiting jobs in front on the same engine."""
+        j = self.ids.get(rid)
+        if j is None:
+            return "unknown", 0
+        if j.state == "running" or j.engine is None:
+            return "running", 0
+        return "waiting", (1 if self.cur[j.engine] is not None else 0) + self.q[j.engine].index(j)
+
+    def _use_id(self, rid):
+        if rid is not None and rid in self.ids:
+            raise bad("This request_id is already in use by a request that has not finished.", 409)
+
+    @contextlib.contextmanager
+    def track(self, rid):
+        """Register a request that needs no queue (shown as running under its id)."""
+        self._use_id(rid)
+        job = _Job(rid, None, asyncio.get_running_loop())
+        job.state = "running"
+        if rid is not None:
+            self.ids[rid] = job
+        try:
+            yield job
+        finally:
+            if rid is not None and self.ids.get(rid) is job:
+                del self.ids[rid]
+
+    def _promote(self, engine):
+        d = self.q[engine]
+        if self.cur[engine] is None and d:
+            j = d.popleft()
+            j.state, self.cur[engine] = "running", j
+            if not j.fut.done():
+                j.fut.set_result(True)
+
+    def _enqueue(self, engine, rid):
+        self._use_id(rid)
+        job = _Job(rid, engine, asyncio.get_running_loop())
+        idle = self.cur[engine] is None and not self.q[engine]
+        if not idle and self.counts()["waiting"] >= self.max_waiting:
+            raise bad("Many people are using the server right now. Please try again in a minute.", 429, {"Retry-After": "30"})
+        self.q[engine].append(job)
+        if rid is not None:
+            self.ids[rid] = job
+        self._promote(engine)
+        return job
+
+    def _leave(self, job):
+        if job.rid is not None and self.ids.get(job.rid) is job:
+            del self.ids[job.rid]
+        e = job.engine
+        if job.state == "waiting":
+            try:
+                self.q[e].remove(job)
+            except ValueError:
+                pass
+        elif self.cur[e] is job:
+            self.cur[e] = None
+            self._promote(e)
+        job.state = "done"
+
+    async def _wait(self, job, gone):
+        deadline = time.monotonic() + self.max_wait
+        while job.state != "running":
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise bad("The request waited too long in the queue. Please try again in a minute.", 503, {"Retry-After": "60"})
+            await asyncio.wait({job.fut}, timeout=min(self.poll, left))
+            if job.state != "running" and gone is not None and await gone():
+                raise bad("Client closed the request.", 499)
+
+    @contextlib.asynccontextmanager
+    async def admit(self, engine, rid=None, gone=None):
+        job = self._enqueue(engine, rid)
+        try:
+            await self._wait(job, gone)
+            yield job
+        finally:
+            self._leave(job)
+
+
+# ---------------------------------------------------------------- /describe
+
+DESCRIBE_MIN_GROUPS, DESCRIBE_MAX_GROUPS, DESCRIBE_MAX_TEXTS, DESCRIBE_TEXT_CHARS, DESCRIBE_NAME_CHARS = 2, 8, 4, 240, 40
+
+
+def describe_groups(v):
+    """`groups`: 2 to 8 lists of 1 to 4 strings; each text is stripped and cut to 240 characters (an empty text becomes "(empty)")."""
+    if not isinstance(v, list) or not DESCRIBE_MIN_GROUPS <= len(v) <= DESCRIBE_MAX_GROUPS:
+        raise bad(f"groups must be a list of {DESCRIBE_MIN_GROUPS} to {DESCRIBE_MAX_GROUPS} groups.")
+    out = []
+    for g in v:
+        if not isinstance(g, list) or not 1 <= len(g) <= DESCRIBE_MAX_TEXTS or not all(isinstance(t, str) for t in g):
+            raise bad(f"Each group must be a list of 1 to {DESCRIBE_MAX_TEXTS} strings.")
+        out.append([t.strip()[:DESCRIBE_TEXT_CHARS] or "(empty)" for t in g])
+    return out
+
+
+DESCRIBE_TEMPLATE = """A language model was given this prompt:
+{prompt}
+
+Its answers were clustered by meaning into {k} groups. Group {i} contains answers like:
+{group}
+
+Answers from the other groups look like:
+{others}
+
+Write a label of 2 to 5 words that says what sets the answers of group {i} apart from the other groups: a different topic, claim, example, or approach, or an unusual feature such as garbled text. The label must be specific enough that it would not fit the other groups. Do not just say that answers are similar or repeated. No quotes, no trailing period. Reply with the label only."""
+
+
+def describe_prompts(prompt, groups, template=DESCRIBE_TEMPLATE):
+    """One user message per group: the task prompt, that group's texts, and the first text of each other group."""
+    def bullets(ts):
+        return "\n".join("- " + t.replace("\n", " ") for t in ts)
+    out = []
+    for i, g in enumerate(groups):
+        others = [h[0] for j, h in enumerate(groups) if j != i]
+        out.append(template.format(prompt=prompt, k=len(groups), i=i + 1, group=bullets(g), others=bullets(others)))
+    return out
+
+
+_QUOTES = "\"'`\u201c\u201d\u2018\u2019\u00ab\u00bb"
+_TRAIL = ".,;:!?\u2026"
+
+
+def clean_label(s):
+    """Model output to a label: first line, markdown and quotes removed, trailing punctuation dropped, whitespace collapsed,
+    at most 40 characters (cut at a word boundary when possible), first letter upper case. Empty when nothing is left."""
+    s = (s or "").strip().split("\n")[0]
+    s = re.sub(r"^\s*(?:[-*+>]\s+|#+\s*|\d+[.)]\s+)", "", s)
+    s = re.sub(r"^(?:label|name|group \d+)\s*:\s*", "", s, flags=re.I)
+    s = re.sub(r"[*_`~#]+", "", s) if re.search(r"[*_`~#]", s) else s
+    s = re.sub("[\"`\u201c\u201d\u00ab\u00bb]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    for _ in range(3):
+        s = s.strip(_QUOTES + " ").rstrip(_TRAIL + " ")
+    if len(s) > DESCRIBE_NAME_CHARS:
+        cut = s[:DESCRIBE_NAME_CHARS]
+        s = (cut[:cut.rfind(" ")] if " " in cut and s[DESCRIBE_NAME_CHARS] != " " else cut).rstrip(" " + _TRAIL + _QUOTES + "-,")
+    words = s.split(" ")
+    if len(words) > 1 and all(w[:1].isupper() for w in words if w[:1].isalpha()):   # Title Case to sentence case; acronyms stay
+        s = " ".join([words[0]] + [w if (len(w) > 1 and w.isupper()) else w.lower() for w in words[1:]])
+    return s[:1].upper() + s[1:]
+
+
+def describe_key(model, prompt, groups, template):
+    return hashlib.sha256(json.dumps([model, prompt, groups, template], ensure_ascii=False).encode()).hexdigest()
+
+
+class LRU:
+    def __init__(self, size=256):
+        self.size, self.d = size, collections.OrderedDict()
+
+    def get(self, k):
+        if k in self.d:
+            self.d.move_to_end(k)
+            return self.d[k]
+        return None
+
+    def put(self, k, v):
+        self.d[k] = v
+        self.d.move_to_end(k)
+        while len(self.d) > self.size:
+            self.d.popitem(last=False)

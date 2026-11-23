@@ -13,6 +13,8 @@ proxy under `/dpp_api/`. It runs on one 24 GB GPU: a resident Qwen3 14B AWQ engi
 | `POST /sample` | draw `n` completions from the annealed proposal q = p_{T'} and return log p, log q, embeddings |
 | `POST /embed` | embed existing completions after the fact (`minilm`, `qwen3-emb`, `mpnet`, or the LM's own states `own`) |
 | `POST /embed_own` | owner only: teacher-force completions and return uncentered own states |
+| `POST /describe` | name 2 to 8 groups of completions in a few words each, with the resident model |
+| `GET /queue?id=<request_id>` | `{"state": "waiting"\|"running"\|"unknown", "ahead": int}` for a request that carried a `request_id` |
 
 Requests are JSON (`Content-Type: application/json`). Embeddings are base64 of little-endian float32, N x D.
 
@@ -27,6 +29,26 @@ vectors `/sample` returns from the generation itself (cosine about 0.9999 for Ge
 text loses trailing whitespace tokens).
 
 Options `embedders`, `own_raw` and `return_ids` of `/sample` need the owner key.
+
+**Queue.** Generating work (`/sample`, `/embed` with `own`, `/describe`, `/embed_own`) is admitted through a FIFO queue with one running job
+per engine (the resident 14B engine and the slot engine run concurrently). A slot model swap happens when its job reaches the head of the
+slot queue. A client may hold one `/sample` request at a time, queued or running (a second one gets 429); `/describe` and `/embed` are not
+counted against that cap. At most 16 jobs wait over both engines (429 with `Retry-After` beyond that). A waiting job whose client
+disconnects leaves the queue (499), and one that waits longer than 10 minutes gets 503. Hourly budgets are checked when a job is queued
+(429 if already exhausted) and charged when it starts running. Plain `/embed` embedders (MiniLM, Qwen3-Embedding, MPNet) bypass the queue.
+
+`/sample`, `/embed`, `/embed_own` and `/describe` accept an optional `request_id` (1 to 64 characters of `A-Za-z0-9_-`; 400 otherwise, 409 while
+another unfinished request uses it). `GET /queue?id=<request_id>` answers `waiting` (with `ahead`: the running job plus the waiting jobs in
+front on the same engine), `running` (`ahead` 0) or `unknown` (`ahead` 0). It needs no key and returns nothing else; it is limited to
+120 calls per minute per client. `/status` has `"queue": {"running", "waiting", "max": 16}` and, as before, `generating` and `waiting`.
+
+`POST /describe` body: `prompt`, `groups` (2 to 8 lists of 1 to 4 strings; each text is cut to 240 characters), optional `request_id`
+(at most 32 KB). One batched greedy generation on the resident model (temperature 0, thinking off, 12 tokens, stop at a newline) labels each group
+from the prompt, that group's texts and one text of each other group. Response `{"names": [...], "model": "qwen3-14b", "ms": int}`, one
+name per group in order, at most 40 characters, sentence case, quotes and trailing punctuation removed; `""` when nothing usable came back.
+Identical requests are answered from a 256-entry in-memory cache without cost. The prompt is the built-in `DESCRIBE_TEMPLATE` of
+`api_guard.py`, or the file `describe_prompt.txt` next to `server.py` when present (placeholders `{prompt}`, `{k}`, `{i}`, `{group}`, `{others}`).
+`/status` advertises `"describe": true, "maxDescribeGroups": 8, "maxDescribeTexts": 4`.
 
 ## The LM's own states ("own" embedder)
 
@@ -124,12 +146,14 @@ the local reverse proxy. Without a real address all traffic shares one key, so t
 | Limit | Value |
 |---|---|
 | request body | 64 KB (`/sample`), 1.5 MiB (`/embed`), 4 MiB (owner) |
-| generating requests per client | 1 at a time |
+| `/sample` requests per client | 1 queued or running |
+| `/describe` calls per client | 120 per hour (cache hits are free), 600 per hour global |
 | generated tokens per client | 150,000 per hour (n x max_new_tokens, token bucket) |
 | slot model swaps | 3 per client per hour, 30 s between any two swaps |
 | `/embed` calls per client | 240 per hour |
 | global | 300 runs, 1,000,000 tokens, 1,200 embeds per hour |
-| queue | 8 waiting pools, 180 s wait |
+| queue | 16 waiting jobs over both engines, 600 s maximum wait (503) |
+| request body | 32 KB (`/describe`) |
 
 Violations answer 429 with `Retry-After`. `/docs`, `/redoc` and `/openapi.json` are disabled.
 
@@ -143,6 +167,7 @@ three slot deaths within 10 minutes also exit.
 
 ```
 python tests/test_api_guard.py     # validation, limits, rotation (no GPU)
+python tests/test_queue.py         # FIFO queue, request ids, /describe validation and labels (no GPU)
 python tests/test_exit_paths.py    # exit and recovery paths with fake engines (no GPU)
 python tests/http_checks.py basic  # against a running server: malformed input, docs, owner options
 python tests/http_checks.py limits

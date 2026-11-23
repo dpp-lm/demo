@@ -133,6 +133,11 @@ export const EXPLAIN = {
       <p><b>Far apart</b> (default) merges completions step by step so that no cluster contains two completions farther apart than its diameter, which gives distant points different colors. <b>Average</b> balances that with cluster size. <b>k-means</b> builds compact groups around centers, so an isolated completion can be absorbed by the nearest group.</p>
       <p>Every completion gets a color. With Far apart or Average, a completion far from all others becomes its own small cluster. Space chooses whether distances come from the embeddings or from the 3D positions you see.</p>`,
   },
+  describe: {
+    title: 'Describe groups',
+    body: `<p>The server's language model reads a few completions from each group and writes a short label for it. The labels are a reading aid and do not affect the selection.</p>
+      <p>Until a label arrives, and when the model gives none, the group keeps its usual name.</p>`,
+  },
   ghost: {
     title: 'Unit positions',
     body: `<p>The faint dots mark each completion's direction at unit length, where it would sit with no quality scaling. The solid points are the same completions scaled by the chosen vector length.</p>`,

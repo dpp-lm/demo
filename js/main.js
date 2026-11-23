@@ -6,9 +6,9 @@ import {
 import { spanView, openCone, displayedFactor, clusterPool, clusterKeywords, fitView, alignTo, pcaRotate, hull2D, polyArea, tipSheet, clusterLinkage, cutClusters, distFromGram, distFromCoords, clusterDiameters } from './layout.js';
 import { Plot3D } from './plot3d.js';
 import { initExplainers } from './explain.js';
-import { viridis, viridisCss, textOn, range, unitPos, fmtSig, weightsFromLog, buildAll, primalMatrix, dualMatrix, heatmapPixels, submatrix, permuted, rowOrder, countAbove, trace, seriation, dendrogramLayout, nodeGroups, medoidOf, largestGroup, principalAxes, projectedDual, normalizeCorr } from './matrices.js';
+import { viridis, viridisCss, textOn, range, unitPos, fmtSig, weightsFromLog, buildAll, primalMatrix, dualMatrix, heatmapPixels, submatrix, permuted, rowOrder, countAbove, trace, seriation, dendrogramLayout, nodeGroups, medoidOf, groupTexts, largestGroup, principalAxes, projectedDual, normalizeCorr } from './matrices.js';
 import { MODELS, modelByKey } from './lm.js';
-import { createBackends, loadBackendConfigs, chooseBackend, embeddersFor } from './backends.js';
+import { createBackends, loadBackendConfigs, chooseBackend, embeddersFor, queueText } from './backends.js';
 import { authEnabled, getAuth, signIn, signOut, finishSignIn } from './hfauth.js';
 import {
   parseBasis, sharedArrows, relevantSets, displayScale, weightLogScale, weightEss, resolveWeight, paperWeight, weightOnModeSwitch, visibleModels, readoutNotes, effectiveK, distinctCount, guardModel, comboFor as pickCombo, planRun, PRESETS, matchPreset, presetDiff, f16ToF32, unitRows, T_LOG_MIN, T_LOG_MAX, easeInOut, pairSelected, seedFor, gramToVectors, pickKernel,
@@ -337,7 +337,7 @@ function setPool(pool, phi, opt = {}) {
     FIXED.set(S.phi, value);
   }
   S.fixed = FIXED.get(S.phi);
-  S.cl = clustersFor();
+  setClusters();
   S.manual = false;
   S.Kwant ??= S.K;
   S.K = effectiveK(S.Kwant, S.distinct, N);
@@ -782,7 +782,7 @@ async function addMore() {
   const t0 = performance.now();
   try {
     const req = { ...requestFor(c, key), embedder: S.embedder };
-    const r = await b.sample(req, { signal: ctl.signal, onProgress: (d) => { if (seq === S.runSeq && d.text) $('#live-status').textContent = d.text; } });
+    const r = await b.sample(req, { signal: ctl.signal, onProgress: (d) => { if (seq === S.runSeq && d.text) $('#live-status').textContent = d.text; }, onQueue: (q) => { if (seq === S.runSeq) $('#live-status').textContent = queueText(q) ?? `Sampling ${c.N} more from ${info(key).name} on ${whereName(b)}…`; } });
     if (seq !== S.runSeq) return;
     if (r.pool.D !== S.base.phi[0].length) throw new Error(`the new samples have embedding size ${r.pool.D}, the pool has ${S.base.phi[0].length}`);
     const add = entryFromResult(r), samples = S.pool.samples.concat(add.rec.samples);
@@ -882,7 +882,8 @@ function renderLegend() {
   const cnt = new Array(S.cl.k).fill(0);
   S.cl.label.forEach((c) => { if (c >= 0) cnt[c]++; });
   const chip = (c, name, n, dot, title) => `<button type="button" class="clchip" data-c="${c}" title="${escapeHtml(title)}"><span class="sw" style="${dot}"></span>${escapeHtml(name)} <span class="vn">${n}</span></button>`;
-  box.innerHTML = cnt.map((n, c) => chip(c, S.cl.kw[c], n, `background:${clusterColor(c)}`, `${S.cl.kw[c]}: ${n} completions`)).join('')
+  const names = llmNames(), nameOf = (c) => names?.[c] || S.cl.kw[c];
+  box.innerHTML = cnt.map((n, c) => chip(c, nameOf(c), n, `background:${clusterColor(c)}`, `${nameOf(c)}: ${n} completions`)).join('')
     + (S.cl.nIso ? chip(-1, 'isolated', S.cl.nIso, `border:1.5px solid ${css('--text-2')};background:transparent`, `${S.cl.nIso} completions far from every cluster, left uncolored`) : '')
     + '<span class="clhint">stronger color = more likely</span>';
   box.querySelectorAll('.clchip').forEach((b) => {
@@ -937,7 +938,7 @@ const clOpts = () => ({
   iso: false, // every completion gets a cluster color: with linkage a far point becomes its own small cluster
 });
 function clustersFor() {
-  const pool = S.pool, N = pool.samples.length, o = clOpts(), cache = memoOf(pool, 'clc'), dm = memoOf(pool, 'dm');
+  const pool = S.pool, N = pool.samples.length, o = clOpts(), cache = memoOf(pool, `clc|${S.kernel}`), dm = memoOf(pool, `dm|${S.kernel}`); // per kernel: another kernel has other distances and groups
   const key = [S.embedder, o.method, o.k, o.space, o.iso, o.names].join('|');
   if (cache.has(key)) return cache.get(key);
   // Distances once per (pool, space): unit embeddings of the active embedder, or the fixed view's unit positions.
@@ -969,14 +970,69 @@ function clustersFor() {
 }
 function onClusterChange() {
   if (!S.pool) return;
-  S.cl = clustersFor();
+  setClusters();
   render();
+}
+const setClusters = () => { S.cl = clustersFor(); scheduleDescribe(); };
+
+// ---- names for the groups from the server's language model (expert mode, a backend whose /status has describe).
+// One request per grouping, sent 400 ms after the grouping stops changing. Results are cached per pool, embedder, kernel and
+// group assignment, so toggling the option or returning to a grouping costs nothing. Until a name arrives the group keeps its
+// usual name ("Group 1" by default); an empty name or an error leaves it so.
+const NAMES = new WeakMap(); // pool -> Map(key -> string[] by group id | 'pending' | 'failed')
+let descTimer = 0;
+const describeBackend = () => {
+  const ok = (b) => b?.kind === 'http' && b.caps.up && b.caps.describe && usableBackend(b);
+  const own = S.source === 'custom' ? backendById(S.where) : null;
+  return ok(own) ? own : BACKENDS.find(ok) ?? null;
+};
+const describeOn = () => S.expert && $('#llm-names').checked && !!describeBackend();
+const namesKey = () => [S.embedder, S.kernel, S.cl.k, Array.from(S.cl.label).join(',')].join('|');
+function llmNames() {
+  if (!describeOn() || !S.cl || !S.pool) return null;
+  const v = NAMES.get(S.pool)?.get(namesKey());
+  return Array.isArray(v) ? v : null;
+}
+function syncDescribe() {
+  const b = describeBackend(), el = $('#llm-names'), colorOn = $('#color-toggle').checked;
+  el.disabled = !b || !colorOn;
+  $('#llm-names-why').textContent = b ? '' : ' Not offered by the backend in use.';
+}
+function scheduleDescribe() {
+  clearTimeout(descTimer);
+  if (describeOn()) descTimer = setTimeout(describeGroups, 400);
+}
+async function describeGroups() {
+  const b = describeBackend();
+  if (!describeOn() || !S.pool || !S.cl || !byCl()) return;
+  const pool = S.pool, cl = S.cl, key = namesKey(), N = pool.samples.length;
+  const cache = NAMES.get(pool) ?? NAMES.set(pool, new Map()).get(pool);
+  if (cache.has(key)) { renderLegend(); return; }
+  const maxG = Math.min(8, b.caps.maxDescribeGroups ?? 8);
+  const { ids, groups } = groupTexts(S.G, N, cl.label, cl.k, pool.samples.map((x) => x.text), { perGroup: Math.min(4, b.caps.maxDescribeTexts ?? 4) });
+  if (ids.length < 2 || ids.length > maxG) return;
+  cache.set(key, 'pending');
+  let note = '';
+  try {
+    const r = await b.describe({ prompt: pool.prompt ?? $('#prompt').value, groups });
+    const names = Array.from({ length: cl.k }, () => '');
+    ids.forEach((c, g) => { names[c] = r.names[g] ?? ''; });
+    cache.set(key, names);
+  } catch (e) {
+    cache.set(key, 'failed');
+    if (e.name !== 'AbortError') note = `Could not name the groups: ${e.message || e}`;
+  }
+  // A grouping that changed while the request was out keeps its result in the cache but is not shown.
+  if (S.pool !== pool || !describeOn() || namesKey() !== key) return;
+  if (note) $('#live-status').textContent = note;
+  renderLegend();
 }
 // The clustering settings look disabled while Color by cluster is off.
 function syncCl() {
   const on = $('#color-toggle').checked;
   $('#adv-cl').classList.toggle('off', !on);
   $('#adv-cl').querySelectorAll('input, button.btn').forEach((el) => (el.disabled = !on));
+  syncDescribe();
 }
 function selColor(i) {
   if (byCl()) return clusterColor(S.cl.label[i]);
@@ -1519,6 +1575,7 @@ function syncLimits() {
 }
 function updatePickers() {
   syncPickers();
+  syncDescribe();
   syncLimits();
   renderTp();
 }
@@ -1852,8 +1909,11 @@ async function runBackend(b, key, c, seq, done, fail) {
   $('#progress').hidden = b.kind !== 'browser';
   if (b.kind === 'browser') { navigator.storage?.persist?.().catch(() => {}); $('#progress-fill').style.width = '0%'; $('#progress-last').textContent = ''; }
   if (isCloud(b) && !getAuth()) { run = null; setBusy(false); S.pending = false; return signIn({ prompt: c.prompt, model: key }); }
+  let queued = null; // the answer of GET /queue while the request waits (http backends with a queue)
   const say = () => {
     const st = b.caps.models.find((m) => m.key === key)?.state;
+    const qt = queueText(queued);
+    if (qt) { $('#live-status').textContent = qt; return; }
     $('#live-status').textContent = isCloud(b) ? `Waiting for ${name}… ${secs()}s`
       : st && st !== 'ready' ? `Loading ${name} on the server… about 20 s (${secs()} s)` : `Sampling from ${name} on ${whereName(b)}… ${secs()} s`;
   };
@@ -1873,7 +1933,7 @@ async function runBackend(b, key, c, seq, done, fail) {
   };
   try {
     const req = requestFor(c, key);
-    const r = await b.sample(req, { signal: ctl.signal, onProgress });
+    const r = await b.sample(req, { signal: ctl.signal, onProgress, onQueue: (q) => { if (seq !== S.runSeq) return; queued = q; say(); } });
     if (server) b.status();
     const e = entryFromResult(r), got = embKeyOf(r.pool.embedder) ?? req.embedder, want = S.embedder;
     if (got && got !== S.embedder) { S.embedder = got; syncEmbedder(); }
@@ -1941,6 +2001,8 @@ function resetExpertSettings() {
   set('axes', DEFAULTS.axes); set('clm', DEFAULTS.clm); set('cls', DEFAULTS.cls); set('cln', 'num'); set('mord', 'blocks'); set('dmode', 'axes'); set('dr', '32');
   set('wt', paperWeight(S.mode)); set('len', paperWeight(S.mode));
   $('#cl-k').value = DEFAULTS.clk;
+  $('#llm-names').checked = false;
+  try { localStorage.setItem('dpp-lm-describe', '0'); } catch {}
   for (const [id, v] of [['cone-toggle', DEFAULTS.cone], ['ghost-toggle', DEFAULTS.ghost], ['label-toggle', DEFAULTS.label], ['color-toggle', DEFAULTS.color], ['size-toggle', false], ['mat-norm', true], ['T-link', DEFAULTS.link]]) $('#' + id).checked = v;
   $('#len-lock').setAttribute('aria-pressed', String(DEFAULTS.lock));
   S.kernelKind = 'emb';
@@ -1969,7 +2031,7 @@ function applyExpert(on, { save = true } = {}) {
   if (S.pool && was !== on) {
     if (!on && S.kernels.find((k) => k.id === S.kernel)?.kind === 'h') { applyKernel(); return; } // the activation option is expert-only
     syncKernelControls();
-    S.cl = clustersFor(); recompute({ newDraw: false });
+    setClusters(); recompute({ newDraw: false });
   }
 }
 function updateBanner() {
@@ -2090,8 +2152,13 @@ function wire() {
   $('#cone-toggle').onchange = () => { if (S.pool) render(); };
   document.querySelectorAll('input[name=axes]').forEach((r) => (r.onchange = () => { if (S.pool) render(); }));
   $('#ghost-toggle').onchange = () => { if (S.pool) plot.update(); };
-  $('#color-toggle').onchange = () => { syncCl(); if (S.pool) render(); };
+  $('#color-toggle').onchange = () => { syncCl(); scheduleDescribe(); if (S.pool) render(); };
+  $('#llm-names').addEventListener('change', () => {
+    try { localStorage.setItem('dpp-lm-describe', $('#llm-names').checked ? '1' : '0'); } catch {}
+    if (S.pool) NAMES.get(S.pool)?.forEach((v, k, m) => { if (v === 'failed') m.delete(k); }); // switching it on again tries again
+  });
   $('#adv-cl').addEventListener('change', onClusterChange);
+  try { $('#llm-names').checked = localStorage.getItem('dpp-lm-describe') === '1'; } catch {}
   $('#cl-minus').onclick = () => { $('#cl-k').value = clampInt(+$('#cl-k').value - 1, 2, 8); onClusterChange(); syncChanged(); };
   $('#cl-plus').onclick = () => { $('#cl-k').value = clampInt(+$('#cl-k').value + 1, 2, 8); onClusterChange(); syncChanged(); };
   syncCl();

@@ -209,6 +209,33 @@ export function medoidOf(G, N, members) {
 }
 
 /**
+ * Representative texts of each group, for naming the groups with a language model. For every group with members (in group id
+ * order): the medoid first, then the members most similar to it (largest G[medoid, j]), distinct strings only, up to `perGroup`
+ * texts of at most `maxChars` characters. label[i] < 0 (isolated) belongs to no group.
+ * Returns { ids, groups }: ids[g] is the group id of groups[g].
+ */
+export function groupTexts(G, N, label, k, texts, { perGroup = 4, maxChars = 240 } = {}) {
+  const ids = [], groups = [];
+  for (let c = 0; c < k; c++) {
+    const members = [];
+    for (let i = 0; i < N; i++) if (label[i] === c) members.push(i);
+    if (!members.length) continue;
+    const m = medoidOf(G, N, members);
+    const rest = members.filter((i) => i !== m).sort((a, b) => G[m * N + b] - G[m * N + a] || a - b);
+    const seen = new Set(), out = [];
+    for (const i of [m, ...rest]) {
+      const t = String(texts[i] ?? '').trim().slice(0, maxChars);
+      if (!t || seen.has(t)) continue;
+      seen.add(t); out.push(t);
+      if (out.length >= perGroup) break;
+    }
+    if (!out.length) continue;
+    ids.push(c); groups.push(out);
+  }
+  return { ids, groups };
+}
+
+/**
  * The pool's principal axes: eigenvectors of the unit dual Phi^T Phi (D x D), from the N x N unit Gram G = Phi Phi^T.
  * With G u_k = lambda_k u_k, v_k = Phi^T u_k / sqrt(lambda_k) is a unit eigenvector of Phi^T Phi. Returns the first
  * r <= rmax axes with lambda_k > 1e-9 lambda_1: { V: Float64Array[r] of length D, values: lambda_k (descending) }.

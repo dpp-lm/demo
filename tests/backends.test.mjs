@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { waitWords, embeddersFor, parseStatus, sampleBody, mapError, BackendError, parseBackendParam, backendConfigs, createBackends, decodePool, decodeEmbed, chooseBackend } from '../js/backends.js';
+import { waitWords, embeddersFor, parseStatus, sampleBody, mapError, BackendError, parseBackendParam, backendConfigs, createBackends, decodePool, decodeEmbed, chooseBackend, newRequestId, queueText, decodeDescribe } from '../js/backends.js';
 
 const b64 = (arr) => Buffer.from(new Float32Array(arr).buffer).toString('base64');
 const pool = (N = 2, D = 3) => ({ prompt: 'p', model: 'm', N, D, Tprime: 1, samples: Array.from({ length: N }, (_, i) => ({ text: `s${i}`, logp: -1, logq: -1, ended: true })), emb: b64(Array.from({ length: N * D }, (_, i) => i / 10)) });
@@ -140,4 +140,113 @@ test('embed sends ended and returns approximate and note; sample reads Retry-Aft
   assert.deepEqual(calls.find((c) => c[0].endsWith('/embed'))[1].ended, [true, false]);
   assert.equal(em.approximate, true); assert.equal(em.note, 'Teacher-forced states.');
   await assert.rejects(b.sample({ prompt: 'x', n: 2, t_prime: 1, max_new_tokens: 8 }), (e) => e.code === 'rate_limited' && /Try again in about 2 minutes/.test(e.message));
+});
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('parseStatus: describe and queue fields', () => {
+  const c = parseStatus({ models: [{ key: 'a' }], describe: true, maxDescribeGroups: 6, maxDescribeTexts: 3, queue: { running: 1, waiting: 2, max: 8 } }, {});
+  assert.equal(c.describe, true); assert.equal(c.maxDescribeGroups, 6); assert.equal(c.maxDescribeTexts, 3);
+  assert.deepEqual(c.queue, { running: 1, waiting: 2, max: 8 });
+  const none = parseStatus({ models: [{ key: 'a' }] }, {});
+  assert.equal(none.describe, false); assert.equal(none.queue, null); assert.equal(none.maxDescribeGroups, 8);
+});
+
+test('queueText and newRequestId', () => {
+  assert.equal(queueText({ state: 'waiting', ahead: 3 }), 'Waiting in line, 3 ahead.');
+  assert.equal(queueText({ state: 'waiting', ahead: 1 }), 'Waiting in line, 1 ahead.');
+  assert.equal(queueText({ state: 'waiting', ahead: 0 }), 'Waiting in line, next up.');
+  assert.equal(queueText({ state: 'running', ahead: 0 }), null);
+  assert.equal(queueText({ state: 'unknown', ahead: 0 }), null);
+  assert.equal(queueText(null), null);
+  const id = newRequestId();
+  assert.match(id, /^[A-Za-z0-9_-]{1,64}$/);
+  assert.notEqual(id, newRequestId());
+  assert.equal(sampleBody({ prompt: 'p', n: 2, t_prime: 1, max_new_tokens: 8, seed: 1, request_id: 'abc' }, { embedders: ['minilm'] }).request_id, 'abc');
+});
+
+test('http backend: sample sends a request id and polls /queue only when /status has a queue', async () => {
+  for (const withQueue of [true, false]) {
+    const calls = [];
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const fetch = async (url, opt = {}) => {
+      calls.push([url, opt.method ?? 'GET', opt.body ? JSON.parse(opt.body) : null]);
+      if (url.endsWith('/status')) return res(200, { models: [{ key: 'q' }], ...(withQueue ? { queue: { running: 1, waiting: 1, max: 4 } } : {}) });
+      if (url.includes('/queue')) return calls.filter((c) => c[0].includes('/queue')).length === 1 ? res(200, { state: 'waiting', ahead: 2 }) : calls.filter((c) => c[0].includes('/queue')).length === 2 ? { ok: false, status: 500, json: async () => ({}) } : res(200, { state: 'running', ahead: 0 });
+      if (url.endsWith('/sample')) { await gate; return res(200, pool()); }
+      return res(404, {});
+    };
+    const [b] = createBackends([{ id: 's', kind: 'http', url: 'http://x/api' }], { fetch, pollMs: 5 });
+    await b.status();
+    const seen = [];
+    const p = b.sample({ prompt: 'hi', n: 2, t_prime: 1, max_new_tokens: 8, seed: 1 }, { onQueue: (q) => seen.push(q) });
+    await sleep(60);
+    release();
+    await p;
+    const post = calls.find((c) => c[0].endsWith('/sample'))[2];
+    const polls = calls.filter((c) => c[0].includes('/queue'));
+    if (withQueue) {
+      assert.match(post.request_id, /^[A-Za-z0-9_-]{1,64}$/);
+      assert.ok(polls.length >= 3);
+      assert.ok(polls.every((c) => c[0].endsWith(`/queue?id=${post.request_id}`)));
+      assert.deepEqual(seen.slice(0, 2), [{ state: 'waiting', ahead: 2 }, { state: 'running', ahead: 0 }]); // the failed poll is skipped
+      const n = polls.length;
+      await sleep(30);
+      assert.equal(calls.filter((c) => c[0].includes('/queue')).length, n, 'polling stops when the request settles');
+    } else {
+      assert.equal('request_id' in post, false);
+      assert.equal(polls.length, 0);
+    }
+  }
+});
+
+test('http backend: polling stops when the request fails or is cancelled', async () => {
+  let polls = 0;
+  const fetch = async (url, opt = {}) => {
+    if (url.endsWith('/status')) return res(200, { models: [{ key: 'q' }], queue: { running: 0, waiting: 0, max: 4 } });
+    if (url.includes('/queue')) { polls++; return res(200, { state: 'waiting', ahead: 1 }); }
+    if (url.endsWith('/sample')) {
+      await new Promise((resolve, reject) => { opt.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))); setTimeout(resolve, 200); });
+      return res(429, { detail: 'busy' });
+    }
+    return res(404, {});
+  };
+  const [b] = createBackends([{ id: 's', kind: 'http', url: 'http://x/api' }], { fetch, pollMs: 5 });
+  await b.status();
+  const ctl = new AbortController();
+  const p = b.sample({ prompt: 'hi', n: 2, t_prime: 1, max_new_tokens: 8 }, { signal: ctl.signal, onQueue: () => {} });
+  await sleep(30);
+  ctl.abort();
+  await assert.rejects(p, (e) => e.name === 'AbortError');
+  const n = polls;
+  assert.ok(n >= 1);
+  await sleep(30);
+  assert.equal(polls, n);
+});
+
+test('http backend: describe', async () => {
+  const calls = [];
+  const fetch = async (url, opt = {}) => {
+    calls.push([url, opt.method ?? 'GET', opt.body ? JSON.parse(opt.body) : null]);
+    if (url.endsWith('/status')) return res(200, { models: [{ key: 'q' }], describe: true, maxDescribeGroups: 8, maxDescribeTexts: 4 });
+    if (url.endsWith('/describe')) {
+      const g = JSON.parse(opt.body).groups;
+      if (g.length === 3) return res(429, { detail: 'busy' });
+      return res(200, { names: g.map((x, i) => (i === 1 ? '' : ` name ${i} `)), model: 'm', ms: 12 });
+    }
+    return res(404, {});
+  };
+  const [b] = createBackends([{ id: 's', kind: 'http', url: 'http://x/api' }], { fetch });
+  await assert.rejects(b.describe({ prompt: 'p', groups: [['a'], ['b']] }), (e) => e.code === 'bad_request'); // before /status: no describe
+  await b.status();
+  const out = await b.describe({ prompt: 'p', groups: [['a', 'b'], ['c']] });
+  assert.deepEqual(out, { names: ['name 0', ''], model: 'm', ms: 12 });
+  assert.deepEqual(calls.find((c) => c[0].endsWith('/describe'))[2], { prompt: 'p', groups: [['a', 'b'], ['c']] }); // no request_id without a queue
+  await assert.rejects(b.describe({ prompt: 'p', groups: [['a'], ['b'], ['c']] }), (e) => e.code === 'rate_limited');
+  assert.throws(() => decodeDescribe({ names: ['x'] }, 2), (e) => e.code === 'bad_request');
+  assert.throws(() => decodeDescribe(null, 2));
+  // browser and space backends have no describe
+  const [sp, br] = createBackends([{ id: 'sp', kind: 'space', url: 'http://s', model: 'm' }, { id: 'br', kind: 'browser' }], { fetch, browserModels: () => [] });
+  assert.equal(sp.describe, undefined); assert.equal(br.describe, undefined);
 });

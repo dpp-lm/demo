@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { gram, symEig, mulberry32 } from '../js/dpp.js';
-import { viridis, viridisCss, textOn, range, unitPos, fmtSig, weightsFromLog, buildB, buildAll, largestGroup, seriate, seriation, dendrogramLayout, nodeGroups, medoidOf, principalAxes, projectedDual, normalizeCorr, submatrix, permuted, rowOrder, countAbove, primalMatrix, dualMatrix, trace, heatmapPixels } from '../js/matrices.js';
+import { viridis, viridisCss, textOn, range, unitPos, fmtSig, weightsFromLog, buildB, buildAll, largestGroup, seriate, seriation, dendrogramLayout, nodeGroups, medoidOf, groupTexts, principalAxes, projectedDual, normalizeCorr, submatrix, permuted, rowOrder, countAbove, primalMatrix, dualMatrix, trace, heatmapPixels } from '../js/matrices.js';
 
 const close = (a, b, tol = 1e-9) => assert.ok(Math.abs(a - b) <= tol * Math.max(1, Math.abs(a), Math.abs(b)), `${a} vs ${b}`);
 function pool(N, D, seed = 3) {
@@ -178,3 +178,22 @@ function detByElimination(A, n) {
   }
   return det;
 }
+
+test('groupTexts: medoid first, then nearest members, distinct, isolated skipped', () => {
+  // 5 points: group 0 = {0,1,2,3} (0 is the medoid by construction), group 1 = {4}, label -1 for none here.
+  const N = 6;
+  const G = new Float64Array(N * N).fill(0);
+  const set = (i, j, v) => { G[i * N + j] = G[j * N + i] = v; };
+  for (let i = 0; i < N; i++) G[i * N + i] = 1;
+  set(0, 1, 0.9); set(0, 2, 0.8); set(0, 3, 0.7); set(1, 2, 0.5); set(1, 3, 0.1); set(2, 3, 0.1);
+  const texts = ['a', 'b', 'c', 'b', 'e', 'x'];
+  const label = [0, 0, 0, 0, 1, -1];
+  const { ids, groups } = groupTexts(G, N, label, 2, texts, { perGroup: 3 });
+  assert.deepEqual(ids, [0, 1]);
+  assert.deepEqual(groups[0], ['a', 'b', 'c']);        // medoid a, then b (0.9), c (0.8); the second 'b' is a duplicate
+  assert.deepEqual(groups[1], ['e']);
+  assert.deepEqual(groupTexts(G, N, label, 3, texts).ids, [0, 1]); // an empty group id is skipped
+  const long = groupTexts(G, N, [0, 0, 0, 0, 0, 0], 1, ['y'.repeat(500), 'b', 'c', 'd', 'e', 'f'], { perGroup: 4, maxChars: 240 });
+  assert.equal(long.groups[0].length, 4);
+  assert.ok(long.groups[0].every((t) => t.length <= 240));
+});

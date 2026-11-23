@@ -142,13 +142,19 @@ def eos_first(key):
 MAX_N, MAX_TOKENS, MAX_PROMPT_CHARS = 200, 256, 2000
 MAX_TEXT_CHARS = 2000                    # /embed: longest text
 PRELOAD = [k for k in os.environ.get("DPP_PRELOAD", "qwen3-emb").split(",") if k]  # embedders loaded at startup
-POOL_SLOTS = 2          # pools generating at once per engine (vLLM batches their samples together)
-MAX_WAITING = 8         # pools queued behind those; more get a 429
-WAIT_TIMEOUT = 180      # seconds a queued pool waits for a slot
+MAX_QUEUE_WAITING = 16  # jobs waiting over both engines (one job runs per engine); more get a 429
+QUEUE_MAX_WAIT = 600    # seconds a job waits in the queue before it gets a 503 (the proxy chain has no response timeout)
+QUEUE_POLLS_PER_MINUTE = 120             # per client, GET /queue
 SWAP_WAIT_TIMEOUT = 300  # seconds a pool waits for a model swap
 MAX_BODY_SAMPLE = 64 * 1024              # bytes, POST /sample
 MAX_BODY_EMBED = 1536 * 1024             # bytes, POST /embed: 200 texts x 2000 characters at up to 3.9 bytes per character
 MAX_BODY_OWNER = 4 * 1024 * 1024         # bytes, owner-only routes and requests carrying the owner key
+MAX_BODY_DESCRIBE = 32 * 1024            # bytes, POST /describe
+DESCRIBE_TOKENS = 12                     # generated tokens per group name
+DESCRIBE_CACHE_SIZE = 256
+DESCRIBE_TEMPLATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "describe_prompt.txt")  # optional override, read per request
+CLIENT_DESCRIBES_PER_HOUR = 120          # per client, POST /describe calls that generate (cache hits are free)
+DESCRIBES_PER_HOUR = 600                 # all clients
 MAX_EMBEDDERS = 3                        # distinct entries of `embedders`
 CLIENT_TOKENS_PER_HOUR = 150_000         # per client, n x max_new_tokens summed (token bucket, refilled evenly)
 CLIENT_SWAPS_PER_HOUR = 3                # per client, slot model swaps it triggers
@@ -367,11 +373,12 @@ async def lifespan(app):
     S["engine"] = AsyncLLM.from_engine_args(engine_args(RESIDENT_KEY, RESIDENT_UTIL))
     S["emb"] = {"minilm": Embedder(**EMBEDDERS["minilm"])}
     S["emb_lock"] = asyncio.Lock()
-    S["sem"] = asyncio.Semaphore(POOL_SLOTS)        # resident engine
-    S["slot_sem"] = asyncio.Semaphore(POOL_SLOTS)   # slot engine
-    S["waiting"], S["generating"] = 0, 0
+    S["queue"] = G.JobQueue(("resident", "slot"), MAX_QUEUE_WAITING, QUEUE_MAX_WAIT)   # one running job per engine, FIFO
+    S["qpoll"] = G.RateWindow(QUEUE_POLLS_PER_MINUTE, 60)
+    S["dcache"] = G.LRU(DESCRIBE_CACHE_SIZE)
     S["limits"] = G.Limits(CLIENT_TOKENS_PER_HOUR, CLIENT_SWAPS_PER_HOUR, GLOBAL_RUNS_PER_HOUR, GLOBAL_TOKENS_PER_HOUR,
-                           CLIENT_EMBEDS_PER_HOUR, EMBEDS_PER_HOUR, SWAP_MIN_INTERVAL)
+                           CLIENT_EMBEDS_PER_HOUR, EMBEDS_PER_HOUR, SWAP_MIN_INTERVAL,
+                           describes_per_hour_client=CLIENT_DESCRIBES_PER_HOUR, describes_per_hour_global=DESCRIBES_PER_HOUR)
     S["slot_deaths"] = collections.deque()
     for k in PRELOAD:
         await asyncio.to_thread(get_embedder, k)
@@ -459,6 +466,20 @@ async def watchdog():
 
 def req_client(req):
     return G.client_key(req.client.host if req.client else "", req.headers.get("x-real-ip"))
+
+
+def engine_name(key):
+    return "resident" if MODELS[key]["slot"] == "resident" else "slot"
+
+
+async def wait_swap_gap(req, key):
+    """A job that needs a slot swap waits out the global gap since the last swap (at most SWAP_MIN_INTERVAL seconds)."""
+    w = S["limits"].swap_wait() if needs_swap(key) else 0
+    if w > 0:
+        try:
+            await or_disconnect(req, asyncio.sleep(w))
+        except _Gone:
+            raise HTTPException(499, "Client closed the request.")
 
 
 def needs_swap(key):
@@ -607,6 +628,7 @@ def model_state(key):
 @app.get("/status")
 async def status():
     res = MODELS[RESIDENT_KEY]
+    q = S["queue"].counts() if "queue" in S else {"running": 0, "waiting": 0, "max": MAX_QUEUE_WAITING}
     models = [{"key": k, "name": m["name"], "params": m["params"], "repo": m["repo"], "slot": m["slot"],
                "state": model_state(k)} for k, m in sorted(MODELS.items(), key=lambda kv: kv[1]["params"])]
     return {"model": res["repo"], "modelName": res["name"], "defaultModel": DEFAULT_MODEL, "models": models,
@@ -614,7 +636,8 @@ async def status():
             "ownModels": [k for k in MODELS if own_available(k)],
             "defaultEmbedder": DEFAULT_EMBEDDER, "maxN": MAX_N, "maxNewTokens": MAX_TOKENS, "maxTextChars": MAX_TEXT_CHARS,
             "embed": True, "continuePool": True,
-            "generating": S.get("generating", 0), "waiting": S.get("waiting", 0),
+            "describe": True, "maxDescribeGroups": G.DESCRIBE_MAX_GROUPS, "maxDescribeTexts": G.DESCRIBE_MAX_TEXTS,
+            "queue": q, "generating": q["running"], "waiting": q["waiting"],
             "runsLastHour": S["limits"].snapshot()["runsLastHour"] if "limits" in S else 0}
 
 
@@ -642,77 +665,70 @@ async def sample_endpoint(req: Request):
         raise HTTPException(403, "The options embedders, own_raw and return_ids are for the owner's scripts.")
     if (embedder == OWN_KEY or OWN_KEY in extra) and not own_available(key):
         raise HTTPException(400, f"The embedder 'own' (the LM's own states) is not available for model {key}.")
+    rid = G.request_id(body.get("request_id"))
     now = time.time()
-    L = S["limits"]
-    client, cost, swap = req_client(req), n * max_new, needs_swap(key)
-    if not owner:
-        L.check_run(client, cost, swap, now)
-    if S["waiting"] >= MAX_WAITING:
-        raise HTTPException(429, "Many people are sampling right now. Please try again in a minute.", headers={"Retry-After": "60"})
-    if not owner:
-        L.commit_run(client, cost, swap, now)
-    started = False   # generation began: the visitor's tokens are spent
+    L, Q = S["limits"], S["queue"]
+    client, cost = req_client(req), n * max_new
     resident = MODELS[key]["slot"] == "resident"
-    sem = S["sem"] if resident else S["slot_sem"]
-    engine, held, got = (S["engine"] if resident else None), False, False
     rec = {"t": round(now, 1), "model": key, "n": n, "t_prime": t_prime, "max_new": max_new, "embedder": embedder,
            "prompt_chars": len(prompt), "client": G.short(client), "cost": cost, "owner": owner}
-    S["waiting"] += 1
+    if not owner:
+        L.claim(client)    # 1 sample request per client, queued or running (429)
+    committed = started = False   # committed: the hourly budgets were charged; started: generation began, the tokens are spent
     try:
-        try:
-            if not resident:
-                engine = await acquire_slot(req, key)
-                held = True
-            try:
-                await or_disconnect(req, asyncio.wait_for(sem.acquire(), WAIT_TIMEOUT))
-                got = True
-            except _Gone as g:
-                if g.late:
-                    sem.release()
-                raise HTTPException(499, "Client closed the request.")
-        except asyncio.TimeoutError:
-            raise HTTPException(429, "Many people are sampling right now. Please try again in a minute.", headers={"Retry-After": "60"})
-        except HTTPException:
-            raise
-        except asyncio.CancelledError:
-            raise
-        except BaseException:
-            log.exception("model %s could not be started", key)
-            raise HTTPException(500, "The model could not be started on the server. Please try again.")
-        finally:
-            S["waiting"] -= 1
-        S["generating"] += 1
-        started = True
-        task = asyncio.create_task(sample_pool(key, engine, prompt, n, t_prime, max_new, seed, embedder, extra, own_raw, return_ids))
-        try:
-            # Stop generating if the visitor leaves (Stop button, closed tab).
-            while not task.done():
-                await asyncio.wait({task}, timeout=1.0)
-                if not task.done() and await req.is_disconnected():
-                    task.cancel()
-                    rec["status"] = "aborted"
-                    raise HTTPException(499, "Client closed the request.")
-            pool = task.result()
-            rec.update(status="ok", **pool["timing"], ended=sum(s["ended"] for s in pool["samples"]),
-                       tokens=sum(s["nTokens"] for s in pool["samples"]))
-            return pool
-        except HTTPException:
-            raise
-        except Exception as e:
-            log.exception("sample failed")
-            rec["status"] = f"error: {type(e).__name__}"
-            if engine_error(engine, e):
-                raise HTTPException(503, "The model server had a problem and is restarting. Please try again in a minute.", headers={"Retry-After": "60"})
-            raise HTTPException(500, "Sampling failed on the server. Please try again.")
-        finally:
-            S["generating"] -= 1
-    finally:
-        if got:
-            sem.release()
-        if held:
-            await slot_release()
         if not owner:
-            L.end_run(client, 0 if started else cost)
+            # refuse now when a budget is already exhausted (the swap gap only when nobody is ahead); charge at start
+            L.check_run(client, cost, needs_swap(key), now, check_gap=resident or not Q.busy("slot"))
+        async with Q.admit("resident" if resident else "slot", rid, req.is_disconnected):
+            rec["wait_s"] = round(time.time() - now, 2)
+            if not owner:
+                await wait_swap_gap(req, key)
+                L.commit_run(client, cost, needs_swap(key), time.time())
+                committed = True
+            engine, held = S["engine"], False
+            try:
+                if not resident:
+                    try:
+                        engine = await acquire_slot(req, key)
+                        held = True
+                    except HTTPException:
+                        raise
+                    except asyncio.CancelledError:
+                        raise
+                    except BaseException:
+                        log.exception("model %s could not be started", key)
+                        raise HTTPException(500, "The model could not be started on the server. Please try again.")
+                started = True
+                task = asyncio.create_task(sample_pool(key, engine, prompt, n, t_prime, max_new_tokens=max_new, seed=seed, embedder=embedder,
+                                                       extra=extra, own_raw=own_raw, return_ids=return_ids))
+                try:
+                    # Stop generating if the visitor leaves (Stop button, closed tab).
+                    while not task.done():
+                        await asyncio.wait({task}, timeout=1.0)
+                        if not task.done() and await req.is_disconnected():
+                            task.cancel()
+                            rec["status"] = "aborted"
+                            raise HTTPException(499, "Client closed the request.")
+                    pool = task.result()
+                    rec.update(status="ok", **pool["timing"], ended=sum(s["ended"] for s in pool["samples"]),
+                               tokens=sum(s["nTokens"] for s in pool["samples"]))
+                    return pool
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    log.exception("sample failed")
+                    rec["status"] = f"error: {type(e).__name__}"
+                    if engine_error(engine, e):
+                        raise HTTPException(503, "The model server had a problem and is restarting. Please try again in a minute.", headers={"Retry-After": "60"})
+                    raise HTTPException(500, "Sampling failed on the server. Please try again.")
+            finally:
+                if held:
+                    await slot_release()
+    finally:
+        if not owner:
+            L.unclaim(client)
+            if committed:
+                L.end_run(client, 0 if started else cost)
         rec["s"] = round(time.time() - now, 2)
         try:
             _log_run(rec)
@@ -743,14 +759,11 @@ async def forced_own(key, prompt, texts, ended, eos_id=None, tail="", req=None):
             raise HTTPException(400, f"Completion {i} has {len(seq)} tokens (limit {OWN_LMAX}).")
         seqs.append(seq)
     resident = cfg["slot"] == "resident"
-    sem = S["sem"] if resident else S["slot_sem"]
-    engine, held, got = S["engine"], False, False
+    engine, held = S["engine"], False
     try:
         if not resident:
             engine = await (acquire_slot(req, key) if req is not None else slot_acquire(key))
             held = True
-        await asyncio.wait_for(sem.acquire(), 600)
-        got = True
 
         async def one(i):
             seq = seqs[i]
@@ -773,16 +786,12 @@ async def forced_own(key, prompt, texts, ended, eos_id=None, tail="", req=None):
         taken = await own_take(engine, [[f"{base}.{i}", 1] for i in range(len(seqs))])
     except HTTPException:
         raise
-    except asyncio.TimeoutError:
-        raise HTTPException(429, "Busy.")
     except Exception as e:
         log.exception("forced own pass failed")
         if engine_error(engine, e):
             raise HTTPException(503, "The model server had a problem and is restarting. Please try again in a minute.", headers={"Retry-After": "60"})
         raise HTTPException(500, "The embedding pass failed on the server. Please try again.")
     finally:
-        if got:
-            sem.release()
         if held:
             await slot_release()
     return {"sum": b"".join(t["sum"] for t in taken), "count": [t["count"][0] for t in taken], "logp": [r[1] for r in res],
@@ -810,7 +819,9 @@ async def embed_own(req: Request):
             or not all(isinstance(t, str) for t in texts)):
         raise HTTPException(400, "Bad request or no P for this model.")
     eos_id = G.number(body["eos_id"], "eos_id", True, 0, 10**7, clamp=False) if body.get("eos_id") is not None else None
-    r = await forced_own(key, prompt, texts, [bool(e) for e in ended], eos_id, req=req)
+    rid = G.request_id(body.get("request_id"))
+    async with S["queue"].admit(engine_name(key), rid, req.is_disconnected):
+        r = await forced_own(key, prompt, texts, [bool(e) for e in ended], eos_id, req=req)
     counts = r["count"]
     mean = np.frombuffer(r["sum"], dtype="<f4").reshape(len(counts), -1) / np.maximum(np.asarray(counts, np.float32), 1)[:, None]
     return {"D": int(mean.shape[1]), "vec": base64.b64encode(mean.astype("<f4").tobytes()).decode("ascii"), "count": counts,
@@ -839,23 +850,23 @@ async def embed_endpoint(req: Request):
     ok_emb = set(EMBEDDERS) | ({OWN_KEY} if OWN_ON else set())
     if not isinstance(embedder, str) or embedder not in ok_emb:
         raise HTTPException(400, f"Unknown embedder; use one of {sorted(ok_emb)}.")
-    L = S["limits"]
+    rid = G.request_id(body.get("request_id"))
+    L, Q = S["limits"], S["queue"]
     client, now = req_client(req), time.time()
     if not owner:
         L.check_embed(client, now)
-    if S["waiting"] >= MAX_WAITING:
-        raise HTTPException(429, "Many people are using the server right now. Please try again in a minute.", headers={"Retry-After": "60"})
     t0 = time.time()
     out = {"N": len(texts), "embedder": embedder if embedder == OWN_KEY else EMBEDDERS[embedder]["repo"], "approximate": False}
     if embedder != OWN_KEY:
         if not owner:
             L.commit_embed(client, now)
-        async with S["emb_lock"]:
-            def run():
-                e = get_embedder(embedder)(texts)
-                torch.cuda.empty_cache()
-                return e
-            emb = await asyncio.to_thread(run)
+        with Q.track(rid):   # a plain embedder takes well under a second and bypasses the queue
+            async with S["emb_lock"]:
+                def run():
+                    e = get_embedder(embedder)(texts)
+                    torch.cuda.empty_cache()
+                    return e
+                emb = await asyncio.to_thread(run)
     else:
         key = body.get("model") or ""
         prompt = G.text(body.get("prompt"), "prompt", MAX_PROMPT_CHARS, required=False)
@@ -870,18 +881,16 @@ async def embed_endpoint(req: Request):
             ended = [True] * len(texts)
         if not isinstance(ended, list) or len(ended) != len(texts):
             raise HTTPException(400, "ended must be a list with one boolean per text.")
-        cost, swap = len(texts) * EMBED_OWN_TOKEN_COST, needs_swap(key)
+        cost = len(texts) * EMBED_OWN_TOKEN_COST
         if not owner:
-            L.check_run(client, cost, swap, now)
-            L.commit_run(client, cost, swap, now)
-            L.commit_embed(client, now)
-        S["waiting"] += 1
-        try:
-            r = await forced_own(key, prompt, texts, [bool(e) for e in ended], tail=MODELS[key].get("ended_tail", ""), req=req)
-        finally:
-            S["waiting"] -= 1
+            L.check_run(client, cost, needs_swap(key), now, check_gap=engine_name(key) == "resident" or not Q.busy("slot"))
+            L.check_embed(client, now)
+        async with Q.admit(engine_name(key), rid, req.is_disconnected):
             if not owner:
-                L.end_run(client)
+                await wait_swap_gap(req, key)
+                L.commit_run(client, cost, needs_swap(key), time.time())
+                L.commit_embed(client, time.time())
+            r = await forced_own(key, prompt, texts, [bool(e) for e in ended], tail=MODELS[key].get("ended_tail", ""), req=req)
         if min(r["count"]) < 1:
             raise HTTPException(500, "The embedding pass returned no states for some texts.")
         emb = own_unit(r["sum"], r["count"], key)
@@ -891,3 +900,83 @@ async def embed_endpoint(req: Request):
     out.update(D=int(emb.shape[1]), emb=base64.b64encode(np.ascontiguousarray(emb, dtype="<f4").tobytes()).decode("ascii"),
                timing={"embed_s": round(time.time() - t0, 2)})
     return out
+
+
+@app.get("/queue")
+async def queue_position(req: Request, id: str = ""):
+    """State of the request with this `request_id`: waiting (ahead = jobs in front on its engine, the running one included), running, or unknown."""
+    S["qpoll"].hit(req_client(req))
+    rid = G.request_id(id or None)
+    if rid is None:
+        raise HTTPException(400, "Pass the request_id as ?id=.")
+    state, ahead = S["queue"].position(rid)
+    return JSONResponse({"state": state, "ahead": ahead}, headers={"Cache-Control": "no-store"})
+
+
+def describe_template():
+    """The /describe prompt: describe_prompt.txt next to this file when present (for tuning without a restart), else the built-in one."""
+    try:
+        return open(DESCRIBE_TEMPLATE_FILE).read().strip()
+    except OSError:
+        return G.DESCRIBE_TEMPLATE
+
+
+async def run_describe(prompts):
+    """One greedy, short, newline-terminated generation per prompt on the resident engine, batched by vLLM."""
+    key, engine = RESIDENT_KEY, S["engine"]
+    tok, eos = model_tok(key)
+    sp = SamplingParams(n=1, temperature=0.0, top_p=1.0, top_k=0, min_p=0.0, repetition_penalty=1.0, presence_penalty=0.0,
+                        frequency_penalty=0.0, max_tokens=DESCRIBE_TOKENS, stop=["\n"], stop_token_ids=sorted(eos),
+                        output_kind=RequestOutputKind.FINAL_ONLY)
+
+    async def one(p):
+        text = tok.apply_chat_template([{"role": "user", "content": p}], tokenize=False, add_generation_prompt=True, **MODELS[key]["chat"])
+        ids = tok(text, add_special_tokens=False).input_ids
+        final = None
+        async for out in engine.generate(TokensPrompt(prompt_token_ids=ids), sp, uuid.uuid4().hex):
+            final = out
+        return final.outputs[0].text
+
+    return await asyncio.gather(*[one(p) for p in prompts])
+
+
+@app.post("/describe")
+async def describe_endpoint(req: Request):
+    """Public: name each group of completions in a few words with the resident model.
+
+    Body (JSON, at most MAX_BODY_DESCRIBE bytes): {prompt, groups: [[text, ...], ...] (2 to 8 groups, 1 to 4 texts each, texts cut to
+    240 characters), request_id?}. Returns {names: [str, ...], model, ms}; a name is "" when the model gave nothing usable."""
+    owner = G.is_owner(req.headers, OWN_SECRET_FILE)
+    body = await G.read_json(req, MAX_BODY_DESCRIBE)
+    rid = G.request_id(body.get("request_id"))
+    prompt = G.text(body.get("prompt"), "prompt", MAX_TEXT_CHARS)
+    groups = G.describe_groups(body.get("groups"))
+    template = describe_template()
+    try:
+        prompts = G.describe_prompts(prompt, groups, template)
+    except (KeyError, IndexError, ValueError):
+        log.error("describe_prompt.txt has a bad placeholder; using the built-in prompt")
+        template = G.DESCRIBE_TEMPLATE
+        prompts = G.describe_prompts(prompt, groups, template)
+    t0 = time.time()
+    ck = G.describe_key(RESIDENT_KEY, prompt, groups, template)
+    hit = S["dcache"].get(ck)
+    if hit is not None:
+        return {"names": list(hit), "model": RESIDENT_KEY, "ms": int((time.time() - t0) * 1000)}
+    L, Q = S["limits"], S["queue"]
+    client = req_client(req)
+    if not owner:
+        L.check_describe(client, t0)
+    async with Q.admit("resident", rid, req.is_disconnected):
+        if not owner:
+            L.commit_describe(client, time.time())
+        try:
+            raw = await run_describe(prompts)
+        except Exception as e:
+            log.exception("describe failed")
+            if engine_error(S["engine"], e):
+                raise HTTPException(503, "The model server had a problem and is restarting. Please try again in a minute.", headers={"Retry-After": "60"})
+            raise HTTPException(500, "Naming the groups failed on the server. Please try again.")
+    names = [G.clean_label(r) for r in raw]
+    S["dcache"].put(ck, names)
+    return {"names": names, "model": RESIDENT_KEY, "ms": int((time.time() - t0) * 1000)}
