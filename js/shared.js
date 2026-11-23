@@ -140,15 +140,23 @@ export function visibleModels(models, expert) {
 
 /**
  * Readout notes: low effective sample size (Kish ESS of the weight in use below K) and few distinct completions (fewer than max(K, N/10)).
- * Returns { kind: 'ess' | 'distinct', text }[].
+ * With `near` ({ size }: the largest group at a tight cosine threshold) it adds a note when half the pool is one answer.
+ * Returns { kind: 'ess' | 'distinct' | 'near' | 'one', text }[].
  */
-export function readoutNotes({ ess, K, N, distinct }) {
+export function readoutNotes({ ess, K, N, distinct, near = null }) {
   const out = [];
   if (Number.isFinite(ess) && ess < K) out.push({ kind: 'ess', text: `Weights are concentrated on about ${Math.max(1, Math.round(ess))} completions, so sets barely vary.` });
   if (distinct < Math.max(K, N / 10)) out.push({ kind: 'distinct', text: `Only ${distinct} distinct completions in this pool. Try a higher sampling temperature T′.` });
+  if (near && !out.some((n) => n.kind === 'distinct') && near.size >= 0.5 * N && near.size >= 3) out.push({ kind: 'near', text: `Most completions (${near.size} of ${N}) are near-duplicates of one answer. Try a higher sampling temperature T′.` });
   if (distinct === K && distinct >= 1) out.push({ kind: 'one', text: `Only one set of ${K} distinct completions exists, so Resample and T change nothing.` });
   return out;
 }
+
+/** A completion's text with runs of whitespace collapsed and the ends trimmed, so strings that differ only in spacing compare equal. */
+export const normText = (t) => String(t).replace(/\s+/g, ' ').trim();
+
+/** Number of distinct completions, whitespace-insensitive. */
+export const distinctCount = (samples) => new Set(samples.map((x) => normText(x.text))).size;
 
 /** The K the picker can use: at most the number of distinct completions and N - 1 (at least 1). */
 export const effectiveK = (K, distinct, N) => Math.max(1, Math.min(K, distinct, N - 1));

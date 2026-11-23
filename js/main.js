@@ -6,12 +6,12 @@ import {
 import { spanView, openCone, displayedFactor, clusterPool, clusterKeywords, fitView, alignTo, pcaRotate, hull2D, polyArea, tipSheet, clusterLinkage, cutClusters, distFromGram, distFromCoords, clusterDiameters } from './layout.js';
 import { Plot3D } from './plot3d.js';
 import { initExplainers } from './explain.js';
-import { viridis, viridisCss, textOn, range, unitPos, fmtSig, weightsFromLog, buildAll, primalMatrix, dualMatrix, heatmapPixels, submatrix, permuted, rowOrder, countAbove, trace, seriation, dendrogramLayout, nodeGroups, medoidOf, principalAxes, projectedDual, normalizeCorr } from './matrices.js';
+import { viridis, viridisCss, textOn, range, unitPos, fmtSig, weightsFromLog, buildAll, primalMatrix, dualMatrix, heatmapPixels, submatrix, permuted, rowOrder, countAbove, trace, seriation, dendrogramLayout, nodeGroups, medoidOf, largestGroup, principalAxes, projectedDual, normalizeCorr } from './matrices.js';
 import { MODELS, modelByKey } from './lm.js';
-import { createBackends, loadBackendConfigs, chooseBackend } from './backends.js';
+import { createBackends, loadBackendConfigs, chooseBackend, embeddersFor } from './backends.js';
 import { authEnabled, getAuth, signIn, signOut, finishSignIn } from './hfauth.js';
 import {
-  parseBasis, sharedArrows, relevantSets, displayScale, weightLogScale, weightEss, resolveWeight, paperWeight, weightOnModeSwitch, visibleModels, readoutNotes, effectiveK, PRESETS, matchPreset, presetDiff, f16ToF32, unitRows, T_LOG_MIN, T_LOG_MAX, easeInOut, pairSelected, seedFor,
+  parseBasis, sharedArrows, relevantSets, displayScale, weightLogScale, weightEss, resolveWeight, paperWeight, weightOnModeSwitch, visibleModels, readoutNotes, effectiveK, distinctCount, PRESETS, matchPreset, presetDiff, f16ToF32, unitRows, T_LOG_MIN, T_LOG_MAX, easeInOut, pairSelected, seedFor,
 } from './shared.js';
 
 const $ = (s) => document.querySelector(s);
@@ -76,6 +76,8 @@ const CATALOG = { models: [], Tprimes: ['1.0', '1.5'], examples: {}, embedders: 
 // Server option for the embedder (POST body field `embedder`). Off until the GPU server is confirmed to hold the Qwen3-Embedding model.
 const SERVER_QWEN_EMB = true;
 const DEF_EMB = 'minilm';
+// The page's embedder key for what a server reports: a key, a repo id ("Qwen/Qwen3-Embedding-0.6B"), or "own"; null if unknown.
+const embKeyOf = (v) => CATALOG.embedders.find((e) => e.key === v || (e.repo && e.repo === v))?.key ?? null;
 const embInfo = (k) => CATALOG.embedders.find((e) => e.key === k) ?? { key: k, name: k };
 async function loadCatalog() {
   try {
@@ -248,7 +250,7 @@ function setPool(pool, phi, opt = {}) {
   S.pinned = -1; S.pinned2 = -1;
   S.pool = pool;
   S.phi = phi;
-  S.distinct = new Set(pool.samples.map((x) => x.text)).size;
+  S.distinct = distinctCount(pool.samples);
   S.logp = pool.samples.map((s) => s.logp);
   S.logq = pool.samples.map((s) => s.logq);
   const N = pool.samples.length;
@@ -396,7 +398,7 @@ function recompute({ newDraw = true } = {}) {
 // ---------------------------------------------------------------- rendering: hero
 function render() {
   document.querySelectorAll('input[name=dims]').forEach((r) => (r.checked = +r.value === S.dims));
-  const distinct = new Set(S.pool.samples.map((x) => x.text)).size;
+  const distinct = S.distinct;
   const N = S.pool.samples.length;
   $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate · tap a point to read it · change dimensions with the bars at right' : 'tap a point to read it · change dimensions with the bars at right'}`;
   $('#subset-meta').textContent = S.manual ? `Your selection · K = ${S.sel.length}` : `K = ${S.sel.length} · ${S.mode === 'map' ? 'greedy MAP' : 'K-DPP sample'} at T = ${fmtT(S.T[S.mode])}`;
@@ -746,10 +748,13 @@ function renderReadout() {
       stat('quality', fmt(quality(S.logp, S.sel)), 'quality') +
       stat('diversity', fmt(diversity(S.G, N, S.sel)), 'diversity') +
       stat('ESS', `${e.toFixed(0)} of ${N} draws`, 'ess');
-  const notes = readoutNotes({ ess: ok ? e : NaN, K: S.K, N, distinct: S.distinct });
+  // Near-duplicates: the largest group of the average-linkage tree at cosine 0.95 (1 - cos <= 0.05), cached per pool.
+  const fx = fixedOf(S.phi);
+  fx.near ??= { size: largestGroup(treeOf().merges, 0.05) };
+  const notes = readoutNotes({ ess: ok ? e : NaN, K: S.K, N, distinct: S.distinct, near: fx.near });
   const nbox = $('#rnotes');
   nbox.hidden = !notes.length;
-  nbox.innerHTML = notes.map((n) => `<div class="rnote">${escapeHtml(n.text)}${n.kind === 'distinct' ? ' <button type="button" class="link" data-act="tp">Change T′</button>' : ''}</div>`).join('');
+  nbox.innerHTML = notes.map((n) => `<div class="rnote">${escapeHtml(n.text)}${n.kind === 'distinct' || n.kind === 'near' ? ' <button type="button" class="link" data-act="tp">Change T′</button>' : ''}</div>`).join('');
   nbox.querySelectorAll('[data-act=tp]').forEach((b) => (b.onclick = changeTprime));
 }
 // Reach T′ from the note even when the T′ controls are expert-only: own prompts open the run settings, examples switch to the next higher precomputed T′.
@@ -1429,8 +1434,20 @@ function syncPickers() {
   syncEmbedder();
 }
 
+// Run settings are bounded by the backend that would run them (/status maxN and maxNewTokens).
+function liveLimits() {
+  const caps = backendById(pickWhere(S.model))?.caps;
+  return { maxN: caps?.maxN ?? 200, maxTokens: caps?.maxTokens ?? 256 };
+}
+function syncLimits() {
+  const L = liveLimits(), n = $('#live-N'), t = $('#live-max');
+  n.max = String(L.maxN); t.max = String(L.maxTokens);
+  if (+n.value > L.maxN) n.value = L.maxN;
+  if (+t.value > L.maxTokens) t.value = L.maxTokens;
+}
 function updatePickers() {
   syncPickers();
+  syncLimits();
   renderTp();
 }
 
@@ -1479,7 +1496,7 @@ function embWhy(key) {
   if (S.source === 'custom' && S.pool) {
     if (key === S.embedder) return '';
     const b = backendById(S.where);
-    return b?.embed && b.caps.embed && b.caps.embedders.includes(key) ? '' : `${b ? whereName(b).replace(/^./, (c) => c.toUpperCase()) : 'The backend'} cannot embed an existing pool, so the embedder stays ${embInfo(S.embedder).name} for these completions.`;
+    return b?.embed && b.caps.embed && embeddersFor(b.caps, S.model).includes(key) ? '' : `${b ? whereName(b).replace(/^./, (c) => c.toUpperCase()) : 'The backend'} cannot embed an existing pool, so the embedder stays ${embInfo(S.embedder).name} for these completions.`;
   }
   if (key === DEF_EMB) return '';
   if (S.source === 'example') return CATALOG.examples[S.exId] ? '' : 'This example has no precomputed pool for other embedders.';
@@ -1503,26 +1520,27 @@ function setEmbedder(key) {
   const why = embWhy(key);
   if (why) { $('#live-status').textContent = why; syncEmbedder(); return; }
   if (key === S.embedder) return;
+  const prev = S.embedder;
   S.embedder = key;
   syncEmbedder();
   if (S.source === 'example' && S.exId) showExample(S.exId, { key: S.model, tp: S.tp, morph: true });
-  else if (S.source === 'custom' && S.pool) embedCustom(key);
+  else if (S.source === 'custom' && S.pool) embedCustom(key, prev);
 }
 // A live pool under another embedder: the backend embeds the existing completions (POST {url}/embed), nothing is resampled.
-async function embedCustom(key) {
+async function embedCustom(key, prev) {
   const b = backendById(S.where);
   const samples = S.pool.samples;
   $('#live-status').textContent = `Embedding ${samples.length} completions with ${embInfo(key).name}…`;
   try {
-    const r = await b.embed({ texts: samples.map((x) => x.text), embedder: key, model: S.model, prompt: S.pool.prompt ?? S.cust?.prompt });
+    const r = await b.embed({ texts: samples.map((x) => x.text), embedder: key, model: S.model, prompt: S.pool.prompt ?? S.cust?.prompt, ended: samples.map((x) => !!x.ended) });
     const N = samples.length;
     if (r.emb.length !== N * r.D) throw new Error('the backend returned a different number of embeddings');
     const rec = { ...S.pool, D: r.D, embedder: key };
     const e = makeEntry(rec, unitRows(r.emb, N, r.D));
     setPool(rec, e.phi, { entry: e, keepPlot: false });
-    $('#live-status').textContent = `${N} completions embedded with ${embInfo(key).name}.`;
+    $('#live-status').textContent = `${N} completions embedded with ${embInfo(key).name}.${r.approximate && r.note ? ` ${r.note}` : r.approximate ? ' This embedding is approximate.' : ''}`;
   } catch (err) {
-    S.embedder = S.pool.embedder ?? DEF_EMB; syncEmbedder();
+    S.embedder = prev ?? DEF_EMB; syncEmbedder();
     $('#live-status').textContent = `Could not embed: ${err.message || err}`;
   }
 }
@@ -1759,7 +1777,7 @@ async function runBackend(b, key, c, seq, done, fail) {
     const req = requestFor(c, key);
     const r = await b.sample(req, { signal: ctl.signal, onProgress });
     if (server) b.status();
-    const e = entryFromResult(r), got = r.pool.embedder ?? req.embedder, want = S.embedder;
+    const e = entryFromResult(r), got = embKeyOf(r.pool.embedder) ?? req.embedder, want = S.embedder;
     if (got && got !== S.embedder) { S.embedder = got; syncEmbedder(); }
     done(e, `${e.N} completions from ${name} on ${whereName(b)}, in ${((performance.now() - t0) / 1000).toFixed(1)}s.${embFallbackNote(want, got)}`);
   } catch (e) {
@@ -1774,7 +1792,8 @@ function runLive() {
   const prompt = $('#prompt').value.trim();
   if (!prompt) return;
   clearTimeout(rerunTimer);
-  S.cust = { prompt, N: clampInt($('#live-N').value, 2, 200), Tp: Math.min(2, Math.max(0.2, +$('#live-Tp').value || 1)), max: clampInt($('#live-max').value, 8, 256) };
+  const L = liveLimits();
+  S.cust = { prompt, N: clampInt($('#live-N').value, 2, L.maxN), Tp: Math.min(2, Math.max(0.2, +$('#live-Tp').value || 1)), max: clampInt($('#live-max').value, 8, L.maxTokens) };
   let key = S.model;
   if (!pickWhere(key)) {
     const sd = serverDefault();

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { gram, columnLogScale } from '../js/dpp.js';
-import { parseBasis, sharedArrows, sharedOpen, pairSelected, seedFor, easeInOut, relevantSets, displayScale, matchPreset, f16ToF32, unitRows, PRESETS, presetDiff, weightLogScale, resolveWeight, paperWeight, weightOnModeSwitch, weightEss, visibleModels, readoutNotes, effectiveK } from '../js/shared.js';
+import { parseBasis, sharedArrows, sharedOpen, pairSelected, seedFor, easeInOut, relevantSets, displayScale, matchPreset, f16ToF32, unitRows, PRESETS, presetDiff, weightLogScale, resolveWeight, paperWeight, weightOnModeSwitch, weightEss, visibleModels, readoutNotes, effectiveK, normText, distinctCount } from '../js/shared.js';
 
 const dec = (b64, N, D) => { const f = new Float32Array(Buffer.from(b64, 'base64').buffer.slice(0)); return Array.from({ length: N }, (_, i) => f.subarray(i * D, (i + 1) * D)); };
 const have = existsSync(new URL('../data/basis/story_T1.5.json', import.meta.url));
@@ -156,6 +156,21 @@ test('readoutNotes: low ESS and few distinct completions', () => {
   }
   assert.equal(effectiveK(10, 200, 30), 10);
   assert.equal(effectiveK(50, 200, 30), 29);
+});
+
+test('normText and distinctCount ignore whitespace differences', () => {
+  assert.equal(normText('  Why did\n the  chicken\t'), 'Why did the chicken');
+  const t = (x) => ({ text: x });
+  assert.equal(distinctCount([t('A joke.'), t('A  joke. '), t('\nA joke.'), t('Another joke.'), t('   ')]), 3);
+  assert.equal(distinctCount([]), 0);
+});
+
+test('readoutNotes: near-duplicates note when half the pool is one answer', () => {
+  const n = readoutNotes({ ess: 100, K: 3, N: 200, distinct: 80, near: { size: 150 } });
+  assert.deepEqual(n.map((x) => x.kind), ['near']); assert.match(n[0].text, /150 of 200/);
+  assert.deepEqual(readoutNotes({ ess: 100, K: 3, N: 200, distinct: 80, near: { size: 60 } }), []);
+  // not repeated when the few-distinct note is already shown
+  assert.deepEqual(readoutNotes({ ess: 100, K: 3, N: 200, distinct: 12, near: { size: 190 } }).map((x) => x.kind), ['distinct']);
 });
 
 test('weightEss: unit is N, quality tends to N at large T, importance is smaller when q is uneven', () => {
