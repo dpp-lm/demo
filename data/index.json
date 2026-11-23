@@ -1,37 +1,58 @@
 [
  {
-  "id": "sort",
-  "prompt": "Write a short Python function that sorts a list without using sorted() or .sort(). Reply with code only.",
-  "N": 100,
-  "Tprime": 1,
-  "model": "onnx-community/Qwen2.5-Coder-1.5B-Instruct"
- },
- {
   "id": "story",
   "prompt": "Write the opening sentence of a short story. Reply with one sentence only.",
-  "N": 100,
-  "Tprime": 1,
-  "model": "onnx-community/Qwen3-1.7B-ONNX"
+  "N": 200,
+  "Tprime": 1.5,
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "label": "Story opening"
+ },
+ {
+  "id": "city",
+  "prompt": "Name a city worth visiting and say why, in one sentence.",
+  "N": 200,
+  "Tprime": 1.5,
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "label": "City to visit"
+ },
+ {
+  "id": "animal",
+  "prompt": "Name an animal and one surprising fact about it, in one sentence.",
+  "N": 200,
+  "Tprime": 1.5,
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "label": "Surprising animal fact"
  },
  {
   "id": "bike",
   "prompt": "Give one creative use for an old bicycle, in one sentence.",
-  "N": 100,
-  "Tprime": 1,
-  "model": "onnx-community/Qwen3-1.7B-ONNX"
+  "N": 200,
+  "Tprime": 1.5,
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "label": "Old bicycle"
  },
  {
-  "id": "bank",
-  "prompt": "What does \"bank\" mean? Answer in one sentence.",
-  "N": 100,
-  "Tprime": 1,
-  "model": "onnx-community/Qwen3-1.7B-ONNX"
+  "id": "firstdate",
+  "prompt": "Suggest an idea for a first date, in one sentence.",
+  "N": 200,
+  "Tprime": 1.5,
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "label": "First date idea"
  },
  {
-  "id": "language",
-  "prompt": "What is the best way to learn a new language? Answer in one sentence.",
-  "N": 100,
-  "Tprime": 1,
-  "model": "onnx-community/Qwen3-1.7B-ONNX"
+  "id": "gift",
+  "prompt": "Suggest a birthday gift for a friend, in one sentence.",
+  "N": 200,
+  "Tprime": 1.5,
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "label": "Birthday gift"
+ },
+ {
+  "id": "dinner",
+  "prompt": "Suggest something to cook for dinner tonight, in one sentence.",
+  "N": 200,
+  "Tprime": 1.5,
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "label": "Dinner idea"
  }
 ]

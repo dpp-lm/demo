@@ -29,14 +29,14 @@
     </div>
   </div>
   <nav class="links">
+    <label class="toggle switch-row" id="expert-row"><input type="checkbox" id="expert-toggle" role="switch"><span class="switch" aria-hidden="true"></span><span>Expert mode</span> <button type="button" class="xbtn" data-x="expert" aria-label="What does expert mode add?">?</button></label>
     <a href="https://arxiv.org/abs/2611.25003" target="_blank" rel="noopener">Paper ↗</a>
   </nav>
 </header>
 <p class="wip" role="note"><b>Work in progress.</b> This demo is still being built. For now, only small models that run in your browser are available.</p>
 
 <main class="app">
-  <aside class="controls" aria-label="Controls">
-    <section class="step step-1">
+  <section class="step step-1">
       <div class="composer">
         <textarea id="prompt" rows="2" spellcheck="false" aria-label="Prompt" placeholder="Ask for something with many good answers"></textarea>
         <div class="comp-row">
@@ -45,29 +45,35 @@
             <div class="menu list" id="examples" role="menu"></div>
           </details>
           <details class="chipmenu" id="adv">
-            <summary class="chip" aria-label="Model and sampling settings"><span id="adv-sum"></span></summary>
+            <summary class="chip" aria-label="Settings for new runs" title="Settings for your own prompts"><span id="adv-sum"></span></summary>
             <div class="menu">
-              <label class="field model-field"><span class="lab">Model</span><select id="model"></select></label>
-              <p class="menu-note" id="model-note"></p>
+              <label class="toggle switch-row"><input type="checkbox" id="browser-toggle" role="switch"><span class="switch" aria-hidden="true"></span><span>Run in this browser</span></label>
+              <p class="menu-note" id="browser-note">Applies to your own prompts. Precomputed examples need no model here.</p>
               <p class="menu-note cache-row"><span id="cache-info"></span> <button type="button" id="cache-clear" class="link" hidden>Clear</button></p>
+              <p class="menu-note hf-row" id="hf-row" hidden></p>
               <label class="field"><span class="lab">Samples N</span><input id="live-N" type="number" min="10" max="200" step="10" value="30" inputmode="numeric"></label>
               <label class="field"><span class="lab">Temp. T′ <button type="button" class="xbtn" data-x="Tprime" aria-label="What is T′?">?</button></span><input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0" inputmode="decimal"></label>
               <label class="field"><span class="lab">Max tokens</span><input id="live-max" type="number" min="8" max="256" step="8" value="64" inputmode="numeric"></label>
             </div>
           </details>
+          <label class="pill" title="Language model"><select id="lm-select" aria-label="Language model"></select></label>
+          <label class="pill" id="emb-row" hidden title="Embedder"><select id="emb-select" aria-label="Embedder"></select></label>
+          <button type="button" class="xbtn" data-x="model" aria-label="What do the model and embedder choices do?">?</button>
           <span class="grow"></span>
           <button id="live-stop" class="sendbtn stop" aria-label="Stop" title="Stop" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg></button>
           <button id="live-go" class="sendbtn" aria-label="Generate completions" title="Generate (Enter)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg></button>
         </div>
       </div>
       <div class="progress" id="progress" hidden><div class="bar"><span id="progress-fill"></span></div><p id="progress-last" class="last"></p></div>
-      <p id="live-status" class="status" aria-live="polite">Runs on your device; the first run downloads ~0.5&nbsp;GB.</p>
-    </section>
+      <p id="live-status" class="status" aria-live="polite">Loading the example…</p>
+      <div class="more-row" id="more-row" hidden><button type="button" class="btn" id="add-more">Add more samples</button><span class="note" id="more-note"></span></div>
+  </section>
 
+  <aside class="controls" aria-label="Controls">
     <section class="step step-2">
       <h2>Pick a subset</h2>
       <div class="mode-row">
-        <div class="seg" role="radiogroup" aria-label="Selection rule">
+        <div class="seg" role="radiogroup" aria-label="Picking mode">
           <label><input type="radio" name="mode" value="map" checked><span>Most likely</span></label>
           <label><input type="radio" name="mode" value="sample"><span>Sample</span></label>
         </div>
@@ -78,17 +84,125 @@
         <input id="T-slider" type="range" min="0" max="1000" step="1" value="500" aria-label="Temperature T">
         <span class="ends" aria-hidden="true"><span>quality</span><span>diversity</span></span>
       </div>
+      <p class="preset-note expert-only" id="preset-note" hidden></p>
+      <p class="manual-note" id="manual-note" hidden>Your selection. <button type="button" class="link" id="manual-back">Back to Most likely</button></p>
       <div class="row-between">
         <div class="field kfield">
-          <span class="lab" id="K-lab" title="Subset size">K</span>
+          <span class="lab" id="K-lab" title="Subset size">K <button type="button" class="xbtn" data-x="K" aria-label="What is K?">?</button></span>
           <div class="stepper" role="group" aria-labelledby="K-lab">
             <button class="btn icon" id="K-minus" aria-label="Decrease K">−</button>
             <input id="K" type="number" min="1" max="20" value="3" aria-labelledby="K-lab">
             <button class="btn icon" id="K-plus" aria-label="Increase K">+</button>
           </div>
         </div>
-        <button id="resample" class="btn">Resample</button>
+        <button id="resample" class="btn">Resample</button><button type="button" class="xbtn" data-x="resample" aria-label="What does Resample do?">?</button>
       </div>
+      <details class="advanced expert-only" id="adv-pick">
+        <summary>Method details <span class="chg" id="chg-pick" hidden>changed</span></summary>
+        <div class="adv-body">
+          <div class="crow presetrow">
+            <span class="clab" id="preset-lab">Paper settings</span>
+            <button type="button" class="xbtn" data-x="preset" aria-label="What do the paper settings do?">?</button>
+            <div class="seg small" id="preset-seg" role="group" aria-labelledby="preset-lab">
+              <button type="button" data-p="map" aria-pressed="false">MAP, paper</button>
+              <button type="button" data-p="samp" aria-pressed="false">Samp, paper</button>
+            </div>
+          </div>
+          <div class="ticks" id="T-ticks"></div>
+          <label class="toggle tlink"><input type="checkbox" id="T-link" checked><span>Same T for both picking modes</span></label>
+          <div class="crow tprow" id="tp-wrap">
+            <span class="clab" id="tp-lab">Importance target T</span>
+            <button type="button" class="xbtn" data-x="Tprime" aria-label="What is the importance target T?">?</button>
+            <div class="seg small" id="tp-seg" role="radiogroup" aria-labelledby="tp-lab" hidden></div>
+            <span class="val" id="tp-text" hidden></span>
+          </div>
+          <div class="lockgroup">
+            <div class="lockline"><button type="button" class="lockbtn" id="len-lock" aria-pressed="true" aria-label="Draw the vectors the DPP uses" title="Draw the vectors the DPP uses">
+              <svg class="i-locked" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+              <svg class="i-unlocked" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/></svg></button></div>
+            <div class="lockrows">
+              <div class="crow" id="wt-row">
+                <span class="lhead"><span class="clab" id="wt-lab">DPP weight</span>
+                <button type="button" class="xbtn" data-x="weight" aria-label="What is the DPP weight?">?</button></span>
+                <div class="seg small" role="radiogroup" aria-labelledby="wt-lab">
+                  <label><input type="radio" name="wt" value="quality" checked><span>Quality</span></label>
+                  <label><input type="radio" name="wt" value="importance"><span>Importance</span></label>
+                  <label><input type="radio" name="wt" value="unit"><span>Unit</span></label>
+                </div>
+                <span class="wt-now" id="wt-now"></span>
+              </div>
+              <div class="crow" id="len-row">
+                <span class="lhead"><span class="clab" id="len-lab">Vector length</span>
+                <button type="button" class="xbtn" data-x="scale" aria-label="What does vector length do?">?</button></span>
+                <div class="seg small" role="radiogroup" aria-labelledby="len-lab">
+                  <label><input type="radio" name="len" value="unit"><span>Unit</span></label>
+                  <label><input type="radio" name="len" value="quality" checked><span>Quality</span></label>
+                  <label><input type="radio" name="len" value="importance"><span>Importance</span></label>
+                </div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="size-toggle"><span>Point size shows quality</span> <button type="button" class="xbtn" data-x="sizeq" aria-label="What does point size do?">?</button></label>
+            </div>
+          </div>
+        </div>
+      </details>
+      <details class="advanced expert-only" id="adv-view">
+        <summary>View <span class="chg" id="chg-view" hidden>changed</span></summary>
+        <div class="adv-body">
+          <div class="checks">
+            <label class="toggle"><input type="checkbox" id="color-toggle" checked><span>Color by cluster</span></label>
+            <details class="advanced sub" id="adv-cl">
+              <summary>Clustering</summary>
+              <div class="adv-body">
+                <div class="crow">
+                  <span class="clab" id="clm-lab">Method</span>
+                  <button type="button" class="xbtn" data-x="clustering" aria-label="What do the clustering settings do?">?</button>
+                  <div class="seg small" role="radiogroup" aria-labelledby="clm-lab">
+                    <label><input type="radio" name="clm" value="tree" checked><span>Tree</span></label>
+                    <label><input type="radio" name="clm" value="far"><span>Far apart</span></label>
+                    <label><input type="radio" name="clm" value="avg"><span>Average</span></label>
+                    <label><input type="radio" name="clm" value="kmeans"><span>k-means</span></label>
+                  </div>
+                </div>
+                <div class="crow">
+                  <span class="clab" id="clk-lab">Clusters</span>
+                  <div class="stepper" role="group" aria-labelledby="clk-lab">
+                    <button type="button" class="btn icon" id="cl-minus" aria-label="Fewer clusters">−</button>
+                    <input id="cl-k" type="number" min="2" max="8" value="6" aria-labelledby="clk-lab">
+                    <button type="button" class="btn icon" id="cl-plus" aria-label="More clusters">+</button>
+                  </div>
+                </div>
+                <div class="crow">
+                  <span class="clab" id="cln-lab">Group names</span>
+                  <div class="seg small" role="radiogroup" aria-labelledby="cln-lab">
+                    <label><input type="radio" name="cln" value="num" checked><span>Numbers</span></label>
+                    <label><input type="radio" name="cln" value="kw"><span>Keywords</span></label>
+                    <label><input type="radio" name="cln" value="medoid"><span>Typical member</span></label>
+                  </div>
+                  <label class="toggle"><input type="checkbox" id="llm-names" disabled><span>LLM names (experimental, not available)</span></label>
+                </div>
+                <div class="crow">
+                  <span class="clab" id="cls-lab">Space</span>
+                  <div class="seg small" role="radiogroup" aria-labelledby="cls-lab">
+                    <label><input type="radio" name="cls" value="emb"><span>Embedding</span></label>
+                    <label><input type="radio" name="cls" value="view" checked><span>View</span></label>
+                  </div>
+                </div>
+              </div>
+            </details>
+            <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Label selected points</span></label>
+            <label class="toggle"><input type="checkbox" id="ghost-toggle"><span>Show unit positions</span> <button type="button" class="xbtn" data-x="ghost" aria-label="What are the faint dots?">?</button></label>
+            <label class="toggle"><input type="checkbox" id="cone-toggle"><span>Open the cone</span> <button type="button" class="xbtn" data-x="cone" aria-label="What does opening the cone do?">?</button></label>
+          </div>
+          <div class="crow">
+            <span class="clab" id="axes-lab">Axes</span>
+            <button type="button" class="xbtn" data-x="span" aria-label="What do the axes options do?">?</button>
+            <div class="seg small" role="radiogroup" aria-labelledby="axes-lab">
+              <label><input type="radio" name="axes" value="fixed" checked><span>Fixed</span></label>
+              <label><input type="radio" name="axes" value="span"><span>Fit to selection</span></label>
+            </div>
+          </div>
+        </div>
+      </details>
     </section>
   </aside>
 
@@ -103,24 +217,62 @@
     </div>
     <div class="stage-foot">
       <div class="legend">
-        <span class="lg"><span class="sw ramp"></span>more likely</span>
-        <span class="lg"><span class="sw sel"></span>selected</span>
+        <span id="lg-ramp" class="lg"><span class="sw ramp"></span>more likely</span>
+        <span id="lg-sel" class="lg"><span class="sw sel"></span>selected</span>
+        <span id="cl-legend" class="lg cl-legend" hidden></span>
         <span id="vol-hint" class="lg"></span>
       </div>
       <div id="readout" class="readout"></div>
+      <div id="rnotes" class="rnotes" hidden></div>
     </div>
     <div class="stage-bar">
       <span id="stage-note" class="note"></span>
-      <details class="viewmenu" id="viewmenu">
-        <summary>View</summary>
-        <div class="menu">
-          <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Label selected points</span></label>
-          <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale points by quality</span> <button type="button" class="xbtn" data-x="scale" aria-label="What does scaling do?">?</button></label>
-        </div>
-      </details>
     </div>
   </section>
 </main>
+
+<section class="datapanel">
+  <details class="advanced" id="adv-mat">
+    <summary>Similarity matrices</summary>
+    <div class="adv-body" id="mat-body">
+      <p class="mat-note">Both matrices are built from the weight in use. <button type="button" class="xbtn" data-x="matrices" aria-label="What are the primal and dual matrices?">?</button></p>
+      <div class="mat-grid">
+        <div class="mat-block">
+          <div class="crow"><span class="mat-title" id="mord-lab">Pairs of completions</span> <button type="button" class="xbtn" data-x="primal" aria-label="What is the primal matrix?">?</button>
+            <div class="seg small" role="radiogroup" aria-labelledby="mord-lab">
+              <label><input type="radio" name="mord" value="blocks" checked><span>Blocks</span></label>
+              <label><input type="radio" name="mord" value="cluster"><span>Groups</span></label>
+              <label><input type="radio" name="mord" value="weight"><span>Weight</span></label>
+              <label><input type="radio" name="mord" value="pool"><span>Pool order</span></label>
+            </div>
+          </div>
+          <p class="mat-cap">One entry per pair of completions. Bright blocks are groups of similar completions.</p>
+          <div id="mat-pwrap"></div>
+          <div id="mat-sub" class="mat-block expert-only"></div>
+        </div>
+        <div class="mat-block">
+          <div class="crow"><span class="mat-title" id="dmode-lab">Pairs of embedding directions</span> <button type="button" class="xbtn" data-x="dual" aria-label="What is the dual matrix?">?</button>
+            <div class="seg small expert-only" role="radiogroup" aria-labelledby="dmode-lab">
+              <label><input type="radio" name="dmode" value="axes" checked><span>Principal axes</span></label>
+              <label><input type="radio" name="dmode" value="coords"><span>Embedding coordinates</span></label>
+            </div>
+          </div>
+          <p class="mat-cap">One entry per pair of embedding directions, shown in the pool's principal axes. It shows no block structure.</p>
+          <div class="crow expert-only" id="dpar">
+            <span class="clab" id="dr-lab">Axes shown</span>
+            <div class="seg small" role="radiogroup" aria-labelledby="dr-lab">
+              <label><input type="radio" name="dr" value="16"><span>16</span></label>
+              <label><input type="radio" name="dr" value="32" checked><span>32</span></label>
+              <label><input type="radio" name="dr" value="64"><span>64</span></label>
+            </div>
+            <label class="toggle"><input type="checkbox" id="mat-norm" checked><span>Normalize</span></label>
+          </div>
+          <div id="mat-dual"></div>
+        </div>
+      </div>
+    </div>
+  </details>
+</section>
 
 <section class="subset">
   <div class="subset-head">

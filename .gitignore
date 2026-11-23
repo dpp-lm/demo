@@ -1,1 +1,5 @@
 node_modules/
+__pycache__/
+# precomputed pools and embeddings: node scripts/fetch-data.mjs
+data/pools/
+data/emb/
