@@ -20,6 +20,8 @@ const fmt = (x, d = 2) => (Number.isFinite(x) ? x.toFixed(d) : '—');
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
 // For browser tests: how many morphs ran, in which plot, how long the last one took, and how many model switches had no view to morph from.
 const DBG = (window.__dppDebug = { morphs: 0, lastMorphMs: 0, lastKind: '', skipped: 0 });
+DBG.state = () => S; // for browser tests with a mocked backend
+DBG.backends = () => BACKENDS;
 
 // ---------------------------------------------------------------- state
 const S = {
@@ -192,7 +194,7 @@ async function showExample(id, { key = S.model, tp = S.tp, morph = false } = {})
   const combo = comboFor(id, key, tp);
   if (!combo) return showLegacyExample(id, seq);
   const sameEx = S.source === 'example' && S.exId === id && !!S.pool && !!S.shared;
-  S.source = 'example'; S.exId = id; S.model = combo.key; S.tp = combo.tp;
+  S.source = 'example'; S.exId = id; S.model = combo.key; S.tp = combo.tp; S.shownModel = combo.key;
   updatePickers();
   const emb = S.embedder, bk = basisKey(emb, id, combo.tp), embNote = emb === DEF_EMB ? '' : ` with ${embInfo(emb).name} embeddings`;
   let entry, basis;
@@ -1528,18 +1530,23 @@ function setEmbedder(key) {
 }
 // A live pool under another embedder: the backend embeds the existing completions (POST {url}/embed), nothing is resampled.
 async function embedCustom(key, prev) {
-  const b = backendById(S.where);
-  const samples = S.pool.samples;
+  const b = backendById(S.where), samples = S.pool.samples, seq = ++S.runSeq, ctl = new AbortController();
+  run = { seq, abort: ctl, kind: 'embed' };
+  S.pending = true; setBusy(true);
   $('#live-status').textContent = `Embedding ${samples.length} completions with ${embInfo(key).name}…`;
   try {
-    const r = await b.embed({ texts: samples.map((x) => x.text), embedder: key, model: S.model, prompt: S.pool.prompt ?? S.cust?.prompt, ended: samples.map((x) => !!x.ended) });
+    const r = await b.embed({ texts: samples.map((x) => x.text), embedder: key, model: S.model, prompt: S.pool.prompt ?? S.cust?.prompt, ended: samples.map((x) => !!x.ended) }, { signal: ctl.signal });
+    if (seq !== S.runSeq) return;
     const N = samples.length;
     if (r.emb.length !== N * r.D) throw new Error('the backend returned a different number of embeddings');
+    run = null; S.pending = false; setBusy(false);
     const rec = { ...S.pool, D: r.D, embedder: key };
     const e = makeEntry(rec, unitRows(r.emb, N, r.D));
     setPool(rec, e.phi, { entry: e, keepPlot: false });
     $('#live-status').textContent = `${N} completions embedded with ${embInfo(key).name}.${r.approximate && r.note ? ` ${r.note}` : r.approximate ? ' This embedding is approximate.' : ''}`;
   } catch (err) {
+    if (err.name === 'AbortError' || seq !== S.runSeq) { if (seq === S.runSeq || err.name === 'AbortError') { S.embedder = prev ?? DEF_EMB; syncEmbedder(); } return; }
+    run = null; S.pending = false; setBusy(false);
     S.embedder = prev ?? DEF_EMB; syncEmbedder();
     $('#live-status').textContent = `Could not embed: ${err.message || err}`;
   }
@@ -1666,11 +1673,10 @@ function pickModel(key, { auto = false } = {}) {
     const ex = CATALOG.examples[S.exId]?.[key] ?? [];
     showExample(S.exId, { key, tp: ex.includes(S.tp) ? S.tp : ex[0] ?? S.tp, morph: true });
   } else if (S.cust) {
-    clearTimeout(rerunTimer);
-    rerunTimer = setTimeout(() => startRun(key), 300);
+    $('#live-status').textContent = `Running your prompt on ${info(key).name}…`;
+    startRun(key);
   }
 }
-let rerunTimer = 0;
 
 // ---------------------------------------------------------------- live mode
 // A finished run of the user's own prompt is kept in memory by (prompt, model, where, N, T′, max tokens), so switching back is instant.
@@ -1685,7 +1691,13 @@ function remember(ck, e) {
 }
 
 let run = null; // { seq, abort, kind } of the run in flight
-const setBusy = (b) => { $('#live-go').hidden = b; $('#live-stop').hidden = !b; };
+// While a request of this client is in flight (a run, an embed, "Add more samples") the pickers and the send button are off: the
+// server allows one request per client, and a second one would only fail. The stop button cancels the request.
+const setBusy = (b) => {
+  $('#live-go').hidden = b; $('#live-stop').hidden = !b;
+  $('#lm-select').disabled = b; $('#emb-select').disabled = b;
+  updateMore();
+};
 function cancelRun() {
   if (!run) return;
   run.abort?.abort();
@@ -1698,6 +1710,7 @@ function cancelRun() {
 
 function showCustom(e, key, where, text) {
   S.source = 'custom'; S.model = key; S.where = where; S.pending = false; S.exId = null;
+  S.shownModel = key; S.shownWhere = where;
   markExample(null);
   $('#progress').hidden = true;
   $('#live-status').textContent = text;
@@ -1791,7 +1804,6 @@ async function runBackend(b, key, c, seq, done, fail) {
 function runLive() {
   const prompt = $('#prompt').value.trim();
   if (!prompt) return;
-  clearTimeout(rerunTimer);
   const L = liveLimits();
   S.cust = { prompt, N: clampInt($('#live-N').value, 2, L.maxN), Tp: Math.min(2, Math.max(0.2, +$('#live-Tp').value || 1)), max: clampInt($('#live-max').value, 8, L.maxTokens) };
   let key = S.model;
@@ -2015,7 +2027,9 @@ function wire() {
   $('#live-stop').onclick = () => {
     S.runSeq++;
     cancelRun();
-    $('#live-status').textContent = 'Stopped. Press ↑ to start again.';
+    // A stopped model change goes back to the model whose pool is on screen.
+    if (S.source === 'custom' && S.shownModel && (S.model !== S.shownModel || S.where !== S.shownWhere)) { S.model = S.shownModel; S.where = S.shownWhere; }
+    $('#live-status').textContent = S.source === 'custom' ? 'Stopped. The pool on screen is unchanged.' : 'Stopped. Press ↑ to start again.';
     updatePickers();
     window.__refreshCache?.();
   };

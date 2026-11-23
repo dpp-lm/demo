@@ -119,6 +119,8 @@ test('errors: 429 with Retry-After in words, 503 restarting, waitWords', () => {
   assert.equal(e.code, 'rate_limited'); assert.equal(e.retryAfter, 125); assert.match(e.message, /about 2 minutes/);
   assert.match(mapError(429, { detail: 'Busy.' }, '30').message, /30 seconds/);
   assert.equal(mapError(429, { detail: 'Busy.' }, null).message, 'Busy.');
+  const dup = mapError(429, { detail: 'You already have a request running. Wait for it to finish, then try again.' }, '5');
+  assert.equal(dup.message, 'You already have a request running. Wait for it to finish, then try again.'); assert.equal(dup.retryAfter, 5);
   assert.equal(mapError(503, { detail: 'engine died' }).message, 'The model is restarting. Try again in a minute.');
   assert.equal(mapError(413, { detail: 'too large' }).code, 'bad_request');
   assert.equal(waitWords(1), '1 second'); assert.equal(waitWords(3600), 'about 60 minutes'); assert.equal(waitWords(7200), 'about 2 hours');

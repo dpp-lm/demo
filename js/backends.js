@@ -34,7 +34,8 @@ export function mapError(status, body, retryAfter = null) {
   if (status === 429) {
     const sec = Number(retryAfter);
     err.retryAfter = Number.isFinite(sec) && sec > 0 ? sec : null;
-    err.message = `${msg}${err.retryAfter ? ` Try again in ${waitWords(err.retryAfter)}.` : ''}`;
+    // One instruction: the wait is appended only when the server's message does not already say to try again.
+    err.message = err.retryAfter && !/try again/i.test(msg) ? `${msg} Try again in ${waitWords(err.retryAfter)}.` : msg;
   } else if (status === 503) err.message = 'The model is restarting. Try again in a minute.';
   return err;
 }
