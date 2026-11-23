@@ -56,6 +56,12 @@ export const EXPLAIN = {
     title: 'Scale points by quality',
     body: `<p>When on, each point sits at length $\\sqrt{\\kappa(y)}$ along its embedding direction: the same arrows the score measures, so changing $T$ grows or shrinks them. When off, every completion is drawn at unit length, showing meaning only.</p>`,
   },
+  embed: {
+    title: 'Similarity',
+    body: `<p>The DPP measures diversity with unit vectors $\\phi(y)$, one per completion: two completions are similar when their vectors point the same way.</p>
+      <p><b>Embedding model</b>: a separate model trained to put texts with similar meaning close together.</p>
+      <p><b>Activations</b>: the language model's own hidden state at the last token of the completion, at the chosen layer (the final layer by default). Earlier layers tend to track wording; later ones what comes next.</p>`,
+  },
   pca: {
     title: 'Projection',
     body: `<p>The embeddings have 384 dimensions. The plot shows the top principal axes (uncentered, so arrows start at the origin, where volume is measured from). The bars show how much of the spread each axis captures; click 1, 2 or 3 to change the view.</p>`,

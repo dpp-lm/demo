@@ -17,6 +17,8 @@ const S = {
   pool: null,        // { prompt, samples, N, D, Tprime, ... }
   phi: null,         // Float32Array[] unit embeddings
   G: null,           // Gram ΦᵀΦ
+  kernels: [],       // available φ for this pool: [{ id, kind: 'emb'|'h', label, layer?, numLayers?, G }]
+  kernel: null, kernelKind: 'emb', layerFrac: 1,
   logp: null, logq: null,
   proj: null,        // { coords: [N][3], frac: number[] }
   dims: 3,
@@ -43,7 +45,7 @@ function decodeEmb(b64, N, D) {
   return Array.from({ length: N }, (_, i) => f.subarray(i * D, (i + 1) * D));
 }
 
-const EXAMPLE_LABELS = { sort: 'Sort a list', story: 'Story opening', bike: 'Old bicycle', bank: 'What is a bank?', language: 'Learn a language' };
+const EXAMPLE_LABELS = { sort: 'Sorting algorithm', story: 'Story opening', bike: 'Old bicycle', bank: 'What is a bank?', language: 'Learn a language', joke: 'Tell a joke' };
 
 async function loadGallery() {
   const idx = await (await fetch('data/index.json')).json();
@@ -64,7 +66,23 @@ async function loadGalleryItem(id) {
   markExample(id);
   $('#progress').hidden = true;
   $('#live-status').textContent = `Example: ${rec.N} completions from ${modelByKey(MODELS.find((m) => m.repo === rec.model)?.key).name}. Edit the prompt to try your own.`;
-  setPool(rec, decodeEmb(rec.emb, rec.N, rec.D));
+  setPool(rec, rec.emb ? decodeEmb(rec.emb, rec.N, rec.D) : null);
+}
+
+// A pool can carry several similarity kernels φ (as N×N Gram matrices of unit vectors):
+// an embedding model's, and the generating LM's final-token activations at several layers.
+function decodeGram(b64, N) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return Float64Array.from(new Float32Array(bytes.buffer, 0, N * N));
+}
+const shortName = (repo) => (repo ?? '').split('/').pop();
+function kernelsOf(pool, phi) {
+  const N = pool.samples.length;
+  const ks = (pool.kernels ?? []).map((k) => ({ ...k, G: decodeGram(k.gram, N) }));
+  if (phi) ks.push({ id: 'emb:' + shortName(pool.embedder), kind: 'emb', label: shortName(pool.embedder), G: gram(phi) });
+  return ks;
 }
 
 function setPool(pool, phi) {
@@ -74,8 +92,22 @@ function setPool(pool, phi) {
   S.phi = phi;
   S.logp = pool.samples.map((s) => s.logp);
   S.logq = pool.samples.map((s) => s.logq);
-  const N = pool.samples.length;
-  S.G = gram(phi);
+  S.kernels = kernelsOf(pool, phi);
+  // Keep the visitor's choice of kind (embedding model vs activations) and layer across pools.
+  const emb = S.kernels.filter((k) => k.kind === 'emb'), act = S.kernels.filter((k) => k.kind === 'h');
+  const pick = S.kernelKind === 'h' && act.length
+    ? act.reduce((a, b) => (Math.abs(b.layer / b.numLayers - S.layerFrac) < Math.abs(a.layer / a.numLayers - S.layerFrac) ? b : a))
+    : emb[0] ?? act.at(-1);
+  renderKernelControls();
+  useKernel(pick.id, { reset: true });
+}
+
+function useKernel(id, { reset = false } = {}) {
+  const k = S.kernels.find((x) => x.id === id);
+  S.kernel = k.id;
+  const N = S.logp.length;
+  S.G = k.G;
+  syncKernelControls();
   // Uncentered PCA of the unit embeddings via the N×N Gram matrix.
   const { values, vectors } = symEig(S.G, N);
   const tot = values.reduce((a, b) => a + Math.max(0, b), 0);
@@ -83,12 +115,35 @@ function setPool(pool, phi) {
     frac: values.slice(0, 8).map((v) => Math.max(0, v) / tot),
     coords: Array.from({ length: N }, (_, n) => [0, 1, 2].map((k) => Math.sqrt(Math.max(0, values[k])) * vectors[k][n])),
   };
-  S.K = Math.min(S.K, N - 1);
-  $('#K').max = String(Math.min(20, N - 1));
-  $('#K').value = S.K;
-  S.rng = mulberry32(12345);
+  if (reset) {
+    S.K = Math.min(S.K, N - 1);
+    $('#K').max = String(Math.min(20, N - 1));
+    $('#K').value = S.K;
+    S.rng = mulberry32(12345);
+  }
   plot.reset();
   recompute({ newDraw: true });
+}
+
+// The "Similarity" controls in the View menu: which φ, and for activations, which layer.
+function renderKernelControls() {
+  const emb = S.kernels.find((k) => k.kind === 'emb'), act = S.kernels.filter((k) => k.kind === 'h');
+  const opts = [];
+  if (emb) opts.push(`<option value="emb">Embedding model (${escapeHtml(emb.label)})</option>`);
+  if (act.length) opts.push(`<option value="h">${escapeHtml(shortName(S.pool.model).replace(/-ONNX$/, ''))} activations (final token)</option>`);
+  $('#embed').innerHTML = opts.join('');
+  $('#embed-field').hidden = opts.length < 2;
+  $('#layer').max = String(Math.max(0, act.length - 1));
+}
+function syncKernelControls() {
+  const k = S.kernels.find((x) => x.id === S.kernel);
+  $('#embed').value = k.kind;
+  const act = S.kernels.filter((x) => x.kind === 'h');
+  $('#layer-field').hidden = k.kind !== 'h';
+  if (k.kind === 'h') {
+    $('#layer').value = String(act.indexOf(k));
+    $('#layer-out').textContent = k.layer === k.numLayers ? `${k.layer} (final)` : `${k.layer} of ${k.numLayers}`;
+  }
 }
 
 // ---------------------------------------------------------------- inference
@@ -510,7 +565,7 @@ async function runCloud(M, { prompt, N, Tprime, maxNewTokens }, done) {
       $('#live-status').textContent = `${body.N} completions from ${M.name}, in ${((performance.now() - t0) / 1000).toFixed(0)}s.`;
       $('#progress').hidden = true;
       markExample(null);
-      setPool(body, decodeEmb(body.emb, body.N, body.D));
+      setPool(body, body.emb ? decodeEmb(body.emb, body.N, body.D) : null);
       return;
     }
     $('#live-status').textContent = `Sending to ${M.name} on Hugging Face…`;
@@ -691,6 +746,16 @@ function wire() {
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => recompute({ newDraw: true }));
   });
+  $('#embed').onchange = () => {
+    S.kernelKind = $('#embed').value;
+    const act = S.kernels.filter((k) => k.kind === 'h');
+    useKernel(S.kernelKind === 'h' ? act.at(-1).id : S.kernels.find((k) => k.kind === 'emb').id);
+  };
+  $('#layer').oninput = () => {
+    const k = S.kernels.filter((x) => x.kind === 'h')[+$('#layer').value];
+    S.layerFrac = k.layer / k.numLayers;
+    useKernel(k.id);
+  };
   document.querySelectorAll('input[name=mode]').forEach((r) => (r.onchange = () => setMode(r.value)));
   $('#K').onchange = () => setK($('#K').value);
   $('#K-minus').onclick = () => setK(S.K - 1);

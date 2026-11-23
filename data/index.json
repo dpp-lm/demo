@@ -1,7 +1,7 @@
 [
  {
   "id": "sort",
-  "prompt": "Write a short Python function that sorts a list without using sorted() or .sort(). Reply with code only.",
+  "prompt": "Implement a sorting algorithm from scratch in Python.",
   "N": 100,
   "Tprime": 1,
   "model": "onnx-community/Qwen2.5-Coder-1.5B-Instruct"
@@ -30,6 +30,13 @@
  {
   "id": "language",
   "prompt": "What is the best way to learn a new language? Answer in one sentence.",
+  "N": 100,
+  "Tprime": 1,
+  "model": "onnx-community/Qwen3-1.7B-ONNX"
+ },
+ {
+  "id": "joke",
+  "prompt": "Tell me a joke.",
   "N": 100,
   "Tprime": 1,
   "model": "onnx-community/Qwen3-1.7B-ONNX"
