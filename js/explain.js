@@ -106,6 +106,12 @@ export const EXPLAIN = {
     title: 'Pairs of embedding directions',
     body: `<p>The matrix $C = B^\\top B$ has one entry per pair of embedding directions, here expressed in the pool's principal axes (the directions of largest variation, axis 1 first). Under the Unit weight it is diagonal. Other weights add off-diagonal entries. It shows no block structure. It has the same nonzero eigenvalues as the matrix of pairs of completions.</p>`,
   },
+  embed: {
+    title: 'Similarity',
+    body: `<p>The DPP measures diversity with unit vectors $\\phi(y)$, one per completion: two completions are similar when their vectors point the same way.</p>
+      <p><b>Embedding model</b>: a separate model trained to put texts with similar meaning close together.</p>
+      <p><b>Activations</b>: the language model's own hidden state at the last token of the completion, at the chosen layer (the final layer by default). Earlier layers tend to track wording; later ones what comes next.</p>`,
+  },
   pca: {
     title: 'Axes',
     body: `<p>Embeddings have hundreds of dimensions (384 for MiniLM-L6) and the plot shows 3. The axes are fixed for a pool: they do not change with the selection, the picking mode, $T$ or $K$, so a different set is a different choice in the same space.</p>

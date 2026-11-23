@@ -58,6 +58,10 @@
           <label class="pill" title="Language model"><select id="lm-select" aria-label="Language model"></select></label>
           <label class="pill" id="emb-row" hidden title="Embedder"><select id="emb-select" aria-label="Embedder"></select></label>
           <button type="button" class="xbtn" data-x="model" aria-label="What do the model and embedder choices do?">?</button>
+          <span class="actrow expert-only" id="act-row" hidden>
+            <label class="layerfield" id="layer-field" hidden><span>Layer</span><input type="range" id="layer" min="0" max="0" step="1" value="0" aria-label="Layer of the language model"><output id="layer-out"></output></label>
+            <button type="button" class="xbtn" data-x="embed" aria-label="What is the similarity?">?</button>
+          </span>
           <span class="grow"></span>
           <button id="live-stop" class="sendbtn stop" aria-label="Stop" title="Stop" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg></button>
           <button id="live-go" class="sendbtn" aria-label="Generate completions" title="Generate (Enter)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg></button>

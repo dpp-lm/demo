@@ -8,7 +8,7 @@
 //   open:   m (tangent direction), gbar (mean of the tangent-plane points) and U (3×D); a point goes to
 //           (g − gbar)·u_k with g = φ/(φ·m) − m, and the tangent point (g = 0) to (−gbar)·u_k.
 
-import { columnLogScale, greedyMAPLog, kdpp, logDetSub, quality, mulberry32, ess } from './dpp.js';
+import { columnLogScale, greedyMAPLog, kdpp, logDetSub, quality, mulberry32, ess, eigSym } from './dpp.js';
 
 /** The T slider spans 10^T_LOG_MIN to 10^T_LOG_MAX on a log scale. */
 export const T_LOG_MIN = -1, T_LOG_MAX = 3;
@@ -33,6 +33,43 @@ export function unitRows(flat, N, D) {
     if (n > 0) for (let d = 0; d < D; d++) r[d] /= n;
     return r;
   });
+}
+
+/**
+ * Unit vectors whose Gram matrix is G (N×N, flat, symmetric, unit diagonal): row i is V·√Λ at i from the
+ * eigendecomposition G = VΛVᵀ, negative eigenvalues set to 0, then renormalized. A kernel stored only as a
+ * Gram matrix (the LM's activations) gets the vectors the PCA, clustering and matrices need.
+ * Returns N Float32Array rows of equal length (the number of positive eigenvalues, at least 1).
+ */
+export function gramToVectors(G, N) {
+  const { values, vectors } = eigSym(G, N);
+  const top = Math.max(values[0] ?? 0, 0), tol = 1e-9 * Math.max(top, 1e-300);
+  const keep = [];
+  for (let k = 0; k < N; k++) if (values[k] > tol) keep.push(k);
+  if (!keep.length) keep.push(0);
+  return Array.from({ length: N }, (_, i) => {
+    const r = new Float32Array(keep.length);
+    let n = 0;
+    keep.forEach((k, j) => { const x = Math.sqrt(Math.max(values[k], 0)) * vectors[k][i]; r[j] = x; n += x * x; });
+    n = Math.sqrt(n);
+    if (n > 0) for (let j = 0; j < r.length; j++) r[j] /= n;
+    return r;
+  });
+}
+
+/**
+ * Which similarity kernel to show. kernels: [{ id, kind: 'emb' | 'h', layer?, numLayers? }]. With kind 'h' (and
+ * activations allowed) it takes the activation kernel whose relative depth layer/numLayers is closest to layerFrac;
+ * otherwise the embedding kernel, else the deepest activation kernel. Returns null for an empty list.
+ */
+export function pickKernel(kernels, { kind = 'emb', layerFrac = 1, allowActivations = true } = {}) {
+  const emb = kernels.find((k) => k.kind === 'emb');
+  const act = allowActivations ? kernels.filter((k) => k.kind === 'h') : [];
+  if (kind === 'h' && act.length) {
+    const depth = (k) => k.layer / k.numLayers;
+    return act.reduce((a, b) => (Math.abs(depth(b) - layerFrac) < Math.abs(depth(a) - layerFrac) ? b : a));
+  }
+  return emb ?? act.at(-1) ?? null;
 }
 
 export function b64ToF32(b64) {

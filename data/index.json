@@ -54,5 +54,21 @@
   "Tprime": 1.5,
   "model": "Qwen/Qwen3-14B-AWQ",
   "label": "Dinner idea"
+ },
+ {
+  "id": "sort",
+  "prompt": "Implement a sorting algorithm from scratch in Python.",
+  "N": 100,
+  "Tprime": 1,
+  "model": "onnx-community/Qwen2.5-Coder-1.5B-Instruct",
+  "label": "Sorting algorithm"
+ },
+ {
+  "id": "joke",
+  "prompt": "Tell me a joke.",
+  "N": 100,
+  "Tprime": 1,
+  "model": "onnx-community/Qwen3-1.7B-ONNX",
+  "label": "Tell a joke"
  }
 ]

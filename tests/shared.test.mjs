@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import { gram, columnLogScale } from '../js/dpp.js';
-import { parseBasis, sharedArrows, sharedOpen, pairSelected, seedFor, easeInOut, relevantSets, displayScale, matchPreset, f16ToF32, unitRows, PRESETS, presetDiff, weightLogScale, resolveWeight, paperWeight, weightOnModeSwitch, weightEss, visibleModels, readoutNotes, effectiveK, normText, distinctCount, guardModel, comboFor, planRun, NO_SERVER } from '../js/shared.js';
+import { gram, columnLogScale, mulberry32 } from '../js/dpp.js';
+import { parseBasis, sharedArrows, sharedOpen, pairSelected, seedFor, easeInOut, relevantSets, displayScale, matchPreset, f16ToF32, unitRows, PRESETS, presetDiff, weightLogScale, resolveWeight, paperWeight, weightOnModeSwitch, weightEss, visibleModels, readoutNotes, effectiveK, normText, distinctCount, guardModel, comboFor, planRun, NO_SERVER, gramToVectors, pickKernel } from '../js/shared.js';
 
 const dec = (b64, N, D) => { const f = new Float32Array(Buffer.from(b64, 'base64').buffer.slice(0)); return Array.from({ length: N }, (_, i) => f.subarray(i * D, (i + 1) * D)); };
 const have = existsSync(new URL('../data/basis/story_T1.5.json', import.meta.url));
@@ -225,4 +225,37 @@ test('weightEss: unit is N, quality tends to N at large T, importance is smaller
   const w = logp.map((lp, i) => Math.exp(lp / 2 - logq[i]));
   const s1 = w.reduce((a, b) => a + b, 0), s2 = w.reduce((a, b) => a + b * b, 0);
   assert.ok(Math.abs(weightEss('importance', 'sample', logp, logq, 2) - (s1 * s1) / s2) < 1e-9);
+});
+
+test('gramToVectors reproduces a Gram matrix', () => {
+  const rnd = mulberry32(3), N = 12, D = 5;
+  const phi = Array.from({ length: N }, () => { const v = Float32Array.from({ length: D }, () => rnd() - 0.5); const n = Math.hypot(...v); return v.map((x) => x / n); });
+  const G = gram(phi), V = gramToVectors(G, N);
+  assert.equal(V.length, N);
+  assert.equal(V[0].length, D); // rank D: only the positive eigenvalues are kept
+  const G2 = gram(V);
+  for (let i = 0; i < N * N; i++) assert.ok(Math.abs(G[i] - G2[i]) < 1e-4, `entry ${i}`);
+  for (const r of V) assert.ok(Math.abs(Math.hypot(...r) - 1) < 1e-5);
+});
+
+test('gramToVectors on an indefinite or non-unit Gram', () => {
+  // Off-diagonals of 0.9 and -0.9 together are not positive semidefinite for 3 points.
+  const G = Float64Array.from([1, 0.9, -0.9, 0.9, 1, 0.9, -0.9, 0.9, 1]);
+  const V = gramToVectors(G, 3);
+  for (const r of V) { assert.ok(r.every(Number.isFinite)); assert.ok(Math.abs(Math.hypot(...r) - 1) < 1e-5); }
+  // identical rows stay identical
+  const G1 = Float64Array.from([1, 1, 1, 1]);
+  const W = gramToVectors(G1, 2);
+  assert.ok(Math.abs(W[0][0] * W[1][0] - 1) < 1e-6);
+});
+
+test('pickKernel', () => {
+  const ks = [{ id: 'emb', kind: 'emb' }, { id: 'h4', kind: 'h', layer: 4, numLayers: 24 }, { id: 'h12', kind: 'h', layer: 12, numLayers: 24 }, { id: 'h24', kind: 'h', layer: 24, numLayers: 24 }];
+  assert.equal(pickKernel(ks, { kind: 'emb' }).id, 'emb');
+  assert.equal(pickKernel(ks, { kind: 'h', layerFrac: 1 }).id, 'h24');
+  assert.equal(pickKernel(ks, { kind: 'h', layerFrac: 0.4 }).id, 'h12');
+  assert.equal(pickKernel(ks, { kind: 'h', allowActivations: false }).id, 'emb');
+  assert.equal(pickKernel(ks.slice(1), { kind: 'emb' }).id, 'h24');
+  assert.equal(pickKernel(ks.slice(1), { kind: 'emb', allowActivations: false }), null);
+  assert.equal(pickKernel([], {}), null);
 });

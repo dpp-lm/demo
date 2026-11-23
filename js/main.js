@@ -11,7 +11,7 @@ import { MODELS, modelByKey } from './lm.js';
 import { createBackends, loadBackendConfigs, chooseBackend, embeddersFor } from './backends.js';
 import { authEnabled, getAuth, signIn, signOut, finishSignIn } from './hfauth.js';
 import {
-  parseBasis, sharedArrows, relevantSets, displayScale, weightLogScale, weightEss, resolveWeight, paperWeight, weightOnModeSwitch, visibleModels, readoutNotes, effectiveK, distinctCount, guardModel, comboFor as pickCombo, planRun, PRESETS, matchPreset, presetDiff, f16ToF32, unitRows, T_LOG_MIN, T_LOG_MAX, easeInOut, pairSelected, seedFor,
+  parseBasis, sharedArrows, relevantSets, displayScale, weightLogScale, weightEss, resolveWeight, paperWeight, weightOnModeSwitch, visibleModels, readoutNotes, effectiveK, distinctCount, guardModel, comboFor as pickCombo, planRun, PRESETS, matchPreset, presetDiff, f16ToF32, unitRows, T_LOG_MIN, T_LOG_MAX, easeInOut, pairSelected, seedFor, gramToVectors, pickKernel,
 } from './shared.js';
 
 const $ = (s) => document.querySelector(s);
@@ -28,6 +28,10 @@ const S = {
   pool: null,        // { prompt, samples, N, D, Tprime, ... }
   phi: null,         // Float32Array[] unit embeddings as returned by the embedder
   G: null,           // Gram ΦᵀΦ
+  base: null,        // what setPool was given: { phi, entry, basis } of the embedder, kept while an activation kernel is shown
+  kernels: [],       // similarity kernels of the pool: [{ id, kind: 'emb'|'h', layer?, numLayers?, gram? }], see kernelsOf
+  kernel: null,      // id of the kernel in use
+  kernelKind: 'emb', layerFrac: 1, // the visitor's choice: embedding model or LM activations, and the relative layer
   logp: null, logq: null,
   proj: null,        // { coords: [N][3], frac: number[] }: fixed uncentered PCA of the embeddings (shared basis for examples); the reference frame of the exact view
   view: null,        // { coords, exact, frac, barFrac, s }: the coordinates drawn (spanView, then openCone), recomputed on every render
@@ -70,7 +74,7 @@ function decodeEmb(b64, N, D) {
   return Array.from({ length: N }, (_, i) => f.subarray(i * D, (i + 1) * D));
 }
 
-const EXAMPLE_LABELS = { sort: 'Sort a list', story: 'Story opening', bike: 'Old bicycle', bank: 'What is a bank?', language: 'Learn a language' };
+const EXAMPLE_LABELS = { sort: 'Sorting algorithm', story: 'Story opening', bike: 'Old bicycle', bank: 'What is a bank?', language: 'Learn a language', joke: 'Tell a joke' };
 
 // data/models.json drives the model picker: { models: [{ key, name, params, repo, dtype }], Tprimes, examples: { id: { modelKey: [T′, ...] } } }.
 // Without it the picker falls back to the in-browser models plus the 14B and the examples load from data/<id>.json.
@@ -242,25 +246,67 @@ async function showLegacyExample(id, seq) {
   $('#progress').hidden = true;
   $('#live-status').textContent = `Example: ${rec.N} completions from ${rec.modelName ?? modelByKey(MODELS.find((m) => m.repo === rec.model)?.key).name}. Edit the prompt to try your own.`;
   updatePickers();
-  setPool(rec, decodeEmb(rec.emb, rec.N, rec.D), {});
+  setPool(rec, rec.emb ? decodeEmb(rec.emb, rec.N, rec.D) : null, {});
 }
 
-// opt: entry (cached Gram), basis (shared axes), keepPlot (same example: no camera reset), snap (morph start).
+// A pool can carry several similarity kernels φ (as N×N Gram matrices of unit vectors):
+// an embedding model's, and the generating LM's final-token activations at several layers.
+function decodeGram(b64, N) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return Float64Array.from(new Float32Array(bytes.buffer, 0, N * N));
+}
+const shortName = (repo) => (repo ?? '').split('/').pop();
+// The kernels a pool offers: the embedder's (from phi) and the LM's activation kernels (pool.kernels, one per layer, as Gram matrices).
+function kernelsOf(pool, phi) {
+  const ks = phi ? [{ id: 'emb', kind: 'emb' }] : [];
+  for (const k of pool.kernels ?? []) {
+    if (k.kind === 'emb' && phi) continue;
+    ks.push({ id: k.id ?? `${k.kind}${k.layer ?? ''}`, kind: k.kind, layer: k.layer, numLayers: k.numLayers, gram: k.gram });
+  }
+  return ks.sort((a, b) => (a.kind === 'emb' ? -1 : b.kind === 'emb' ? 1 : a.layer - b.layer));
+}
+// Vectors and Gram of a kernel, derived once per pool. The embedder's kernel is the pool's own phi. An activation kernel
+// is stored as a Gram matrix only, so its unit vectors come from the Gram's eigendecomposition (gramToVectors).
+const KDATA = new WeakMap();
+function kernelData(pool, k, base) {
+  if (k.kind === 'emb' && base.phi) return { phi: base.phi, G: base.entry ? gramOf(base.entry) : gram(base.phi) };
+  let m = KDATA.get(pool);
+  if (!m) KDATA.set(pool, (m = new Map()));
+  if (!m.has(k.id)) {
+    const N = pool.samples.length, phi = gramToVectors(decodeGram(k.gram, N), N);
+    m.set(k.id, { phi, G: gram(phi) });
+  }
+  return m.get(k.id);
+}
+// Cached display coordinates, per vector set (a pool under another kernel has other coordinates).
+const FIXED = new WeakMap();
+
+// opt: entry (cached Gram), basis (shared axes), keepPlot (same example: no camera reset), snap (morph start),
+// kernelOnly (only the similarity kernel changed: same pool, K and draw number, phi and Gram come from S.base).
 function setPool(pool, phi, opt = {}) {
   $('#labels').innerHTML = '';
   S.pinned = -1; S.pinned2 = -1;
+  if (!opt.kernelOnly) S.base = { phi, entry: opt.entry, basis: opt.basis };
+  const base = S.base;
   S.pool = pool;
-  S.phi = phi;
+  S.kernels = kernelsOf(pool, base.phi);
+  const kern = pickKernel(S.kernels, { kind: S.kernelKind, layerFrac: S.layerFrac, allowActivations: S.expert });
+  S.kernel = kern.id;
+  const kd = kernelData(pool, kern, base);
+  S.phi = kd.phi;
   S.distinct = distinctCount(pool.samples);
   S.logp = pool.samples.map((s) => s.logp);
   S.logq = pool.samples.map((s) => s.logq);
   const N = pool.samples.length;
-  S.G = opt.entry ? gramOf(opt.entry) : gram(S.phi);
+  S.G = kd.G;
   S.dimCl = null;
-  if (opt.basis) {
+  syncKernelControls();
+  if (base.basis && kern.kind === 'emb') {
     // Shared axes: display coordinates only; the DPP uses the pool's own Gram.
-    S.shared = { basis: opt.basis };
-    S.proj = sharedArrows(phi, opt.basis);
+    S.shared = { basis: base.basis };
+    S.proj = sharedArrows(S.phi, base.basis);
   } else {
     S.shared = null;
     // Uncentered PCA of the unit embeddings via the N×N Gram matrix.
@@ -272,8 +318,8 @@ function setPool(pool, phi, opt = {}) {
       coords: Array.from({ length: N }, (_, n) => [0, 1, 2].map((k) => Math.sqrt(Math.max(0, values[k])) * vectors[k][n])),
     };
   }
-  // Fixed display coordinates: a function of the pool only (not of the selection, mode, T or K), cached on the pool.
-  if (!pool.fixed) {
+  // Fixed display coordinates: a function of the pool only (not of the selection, mode, T or K), cached per vector set (FIXED).
+  if (!FIXED.has(S.phi)) {
     let value;
     try {
       const t0 = performance.now();
@@ -288,16 +334,16 @@ function setPool(pool, phi, opt = {}) {
       console.warn('fitView failed, using the reference coordinates', e);
       value = { coords: S.proj.coords, frac: S.proj.frac.slice(0, 3), coords2: S.proj.coords, frac2: S.proj.frac.slice(0, 3), ms: 0 };
     }
-    Object.defineProperty(pool, 'fixed', { value, enumerable: false });
+    FIXED.set(S.phi, value);
   }
-  S.fixed = pool.fixed;
+  S.fixed = FIXED.get(S.phi);
   S.cl = clustersFor();
   S.manual = false;
   S.Kwant ??= S.K;
   S.K = effectiveK(S.Kwant, S.distinct, N);
   $('#K').max = String(Math.max(1, Math.min(20, N - 1, S.distinct)));
   $('#K').value = S.K;
-  S.drawNo = 0;
+  if (!opt.kernelOnly) S.drawNo = 0;
   if (!opt.keepPlot) plot.reset();
   S.morphFrom = opt.snap ?? (opt.keepPlot && REDUCED.matches ? { kind: 'any', instant: true } : null);
   recompute({ newDraw: true });
@@ -371,6 +417,24 @@ function drawnVolume() {
   const rows = S.sel.map((i) => Array.from(S.view.coords[i], (x) => x * f(i)));
   return displayedFactor(rows, rows.map((_, k) => k));
 }
+
+// Similarity from the LM's activations (expert mode, pools that carry `kernels`): an extra option in the embedder select,
+// and a layer slider while it is active. Changing only the kernel keeps K and the draw number (setPool kernelOnly).
+const ACT_OPT = 'act';
+const actKernels = () => S.kernels.filter((k) => k.kind === 'h');
+const actName = () => `${S.pool?.modelName || shortName(S.pool?.model).replace(/-ONNX$/, '') || 'Model'} activations (final token)`;
+function syncKernelControls() {
+  const act = actKernels(), k = S.kernels.find((x) => x.id === S.kernel), on = S.expert && act.length > 0;
+  $('#act-row').hidden = !on;
+  $('#layer-field').hidden = !(on && k?.kind === 'h');
+  if (on && k?.kind === 'h') {
+    $('#layer').max = String(act.length - 1);
+    $('#layer').value = String(act.indexOf(k));
+    $('#layer-out').textContent = k.layer === k.numLayers ? `${k.layer} (final)` : `${k.layer} of ${k.numLayers}`;
+  }
+  syncEmbedder();
+}
+function applyKernel() { if (S.pool && S.base) setPool(S.pool, S.base.phi, { kernelOnly: true }); }
 
 // ---------------------------------------------------------------- inference
 function recompute({ newDraw = true } = {}) {
@@ -720,9 +784,9 @@ async function addMore() {
     const req = { ...requestFor(c, key), embedder: S.embedder };
     const r = await b.sample(req, { signal: ctl.signal, onProgress: (d) => { if (seq === S.runSeq && d.text) $('#live-status').textContent = d.text; } });
     if (seq !== S.runSeq) return;
-    if (r.pool.D !== S.phi[0].length) throw new Error(`the new samples have embedding size ${r.pool.D}, the pool has ${S.phi[0].length}`);
+    if (r.pool.D !== S.base.phi[0].length) throw new Error(`the new samples have embedding size ${r.pool.D}, the pool has ${S.base.phi[0].length}`);
     const add = entryFromResult(r), samples = S.pool.samples.concat(add.rec.samples);
-    const rec = { ...S.pool, samples, N: samples.length }, phi = S.phi.concat(add.phi);
+    const rec = { ...S.pool, kernels: undefined, samples, N: samples.length }, phi = S.base.phi.concat(add.phi); // kernels of the old N do not fit
     const e = makeEntry(rec, phi);
     remember(ck, e);
     run = null; S.pending = false; setBusy(false);
@@ -1512,17 +1576,31 @@ function embWhy(key) {
 }
 function syncEmbedder() {
   const list = CATALOG.embedders, row = $('#emb-row'), sel = $('#emb-select');
-  row.hidden = list.length < 2;
+  const act = S.expert && actKernels().length > 0, onAct = S.kernels.find((x) => x.id === S.kernel)?.kind === 'h';
+  row.hidden = list.length + (act ? 1 : 0) < 2;
   if (row.hidden) return;
-  const sig = list.map((e) => e.key).join();
+  const sig = list.map((e) => e.key).join() + (act ? `|${actName()}` : '');
   if (sel.dataset.k !== sig) {
     sel.dataset.k = sig;
-    sel.innerHTML = list.map((e) => `<option value="${escapeHtml(e.key)}">${escapeHtml(e.name)}</option>`).join('');
-    sel.onchange = () => { setEmbedder(sel.value); sel.value = S.embedder; };
+    sel.innerHTML = list.map((e) => `<option value="${escapeHtml(e.key)}">${escapeHtml(e.name)}</option>`).join('')
+      + (act ? `<option value="${ACT_OPT}">${escapeHtml(actName())}</option>` : '');
+    sel.onchange = () => onEmbedderSelect(sel.value);
   }
-  [...sel.options].forEach((o) => { const why = embWhy(o.value); o.disabled = !!why; o.title = why || embInfo(o.value).note || ''; });
-  sel.value = S.embedder;
-  sel.title = embInfo(S.embedder).note || '';
+  [...sel.options].forEach((o) => { if (o.value !== ACT_OPT) { const why = embWhy(o.value); o.disabled = !!why; o.title = why || embInfo(o.value).note || ''; } });
+  sel.value = act && onAct ? ACT_OPT : S.embedder;
+  sel.title = act && onAct ? actName() : embInfo(S.embedder).note || '';
+}
+// The select holds the embedders and, when the pool has activation kernels, the LM's own activations.
+function onEmbedderSelect(v) {
+  const onAct = S.kernels.find((x) => x.id === S.kernel)?.kind === 'h';
+  if (v === ACT_OPT) { S.kernelKind = 'h'; applyKernel(); return; }
+  if (onAct) {
+    if (v !== S.embedder) { const why = embWhy(v); if (why) { $('#live-status').textContent = why; syncEmbedder(); return; } }
+    S.kernelKind = 'emb';
+    if (v === S.embedder) { applyKernel(); return; }
+  }
+  setEmbedder(v);
+  $('#emb-select').value = S.embedder;
 }
 function setEmbedder(key) {
   const why = embWhy(key);
@@ -1865,6 +1943,7 @@ function resetExpertSettings() {
   $('#cl-k').value = DEFAULTS.clk;
   for (const [id, v] of [['cone-toggle', DEFAULTS.cone], ['ghost-toggle', DEFAULTS.ghost], ['label-toggle', DEFAULTS.label], ['color-toggle', DEFAULTS.color], ['size-toggle', false], ['mat-norm', true], ['T-link', DEFAULTS.link]]) $('#' + id).checked = v;
   $('#len-lock').setAttribute('aria-pressed', String(DEFAULTS.lock));
+  S.kernelKind = 'emb';
   syncCl();
 }
 // In expert mode the advanced sections open by themselves. One the user closes by hand stays closed for the session.
@@ -1887,7 +1966,11 @@ function applyExpert(on, { save = true } = {}) {
   if (g !== S.model) pickModel(g, { auto: true });
   buildPickers();
   updateBanner();
-  if (S.pool && was !== on) { S.cl = clustersFor(); recompute({ newDraw: false }); }
+  if (S.pool && was !== on) {
+    if (!on && S.kernels.find((k) => k.id === S.kernel)?.kind === 'h') { applyKernel(); return; } // the activation option is expert-only
+    syncKernelControls();
+    S.cl = clustersFor(); recompute({ newDraw: false });
+  }
 }
 function updateBanner() {
   const el = $('.wip');
@@ -1989,6 +2072,12 @@ function wire() {
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => recompute({ newDraw: true }));
   });
+  $('#layer').oninput = () => {
+    const k = actKernels()[+$('#layer').value];
+    if (!k) return;
+    S.kernelKind = 'h'; S.layerFrac = k.layer / k.numLayers;
+    applyKernel();
+  };
   document.querySelectorAll('input[name=mode]').forEach((r) => (r.onchange = () => setMode(r.value)));
   $('#K').onchange = () => setK($('#K').value);
   $('#K-minus').onclick = () => setK(S.K - 1);
