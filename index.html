@@ -46,10 +46,10 @@
           <details class="chipmenu" id="adv">
             <summary class="chip" aria-label="Settings for new runs" title="Settings for your own prompts"><span id="adv-sum"></span></summary>
             <div class="menu">
-              <label class="toggle switch-row"><input type="checkbox" id="browser-toggle" role="switch"><span class="switch" aria-hidden="true"></span><span>Run in this browser</span></label>
-              <p class="menu-note" id="browser-note">Applies to your own prompts. Precomputed examples need no model here.</p>
-              <p class="menu-note cache-row"><span id="cache-info"></span> <button type="button" id="cache-clear" class="link" hidden>Clear</button></p>
-              <p class="menu-note hf-row" id="hf-row" hidden></p>
+              <label class="toggle switch-row expert-only"><input type="checkbox" id="browser-toggle" role="switch"><span class="switch" aria-hidden="true"></span><span>Run in this browser</span></label>
+              <p class="menu-note expert-only" id="browser-note">Applies to your own prompts. Precomputed examples need no model here.</p>
+              <p class="menu-note cache-row expert-only"><span id="cache-info"></span> <button type="button" id="cache-clear" class="link" hidden>Clear</button></p>
+              <p class="menu-note hf-row expert-only" id="hf-row" hidden></p>
               <label class="field"><span class="lab">Samples N</span><input id="live-N" type="number" min="10" max="200" step="10" value="30" inputmode="numeric"></label>
               <label class="field"><span class="lab">Temp. T′ <button type="button" class="xbtn" data-x="Tprime" aria-label="What is T′?">?</button></span><input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0" inputmode="decimal"></label>
               <label class="field"><span class="lab">Max tokens</span><input id="live-max" type="number" min="8" max="256" step="8" value="64" inputmode="numeric"></label>
