@@ -108,8 +108,8 @@ export class Plot3D {
     }
     this.scale = 1 / (m || 1);
     const s = this.scale;
-    // Frame what is drawn (the points, the origin and the spanned volume). Framed when the view first
-    // appears, and again, smoothly, when it switches between fitted axes (K ≤ 3) and principal axes.
+    // Framed when the view first appears, and again, smoothly, when it switches between fitted axes
+    // (K ≤ 3) and principal axes.
     const frame = this.frameFor(o, s);
     this.frameH = frame.h;   // marker and dot sizes follow the frame the view settles on
     if (!this.camSet) {
@@ -201,15 +201,14 @@ export class Plot3D {
     }
   }
 
+  // The view turns about the origin (the point the scored volume is measured from), so the origin is
+  // the centre of the frame, and the frame holds everything drawn: the points and the spanned volume.
   frameFor(o, s) {
     const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
-    pts.push([0, 0, 0]);
     if (o.sel.length >= 2 && o.sel.length <= 3) pts.push([0, 1, 2].map((d) => o.sel.reduce((a, i) => a + pts[i][d], 0)));
-    const lo = [0, 1, 2].map((d) => Math.min(...pts.map((p) => p[d]))), hi = [0, 1, 2].map((d) => Math.max(...pts.map((p) => p[d])));
-    const ctr = lo.map((x, d) => (x + hi[d]) / 2);
-    const r = Math.max(0.3, ...pts.map((p) => Math.hypot(p[0] - ctr[0], p[1] - ctr[1], p[2] - ctr[2])));
+    const r = Math.max(0.3, ...pts.map((p) => Math.hypot(...p)));
     const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450;
-    return { ctr: new THREE.Vector3(...ctr), h: 1.08 * r * Math.max(1, H / W) };
+    return { ctr: new THREE.Vector3(0, 0, 0), h: 1.06 * r * Math.max(1, H / W) };
   }
   setHalfHeight(h) {
     const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, a = W / H;
