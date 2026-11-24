@@ -139,11 +139,24 @@ export class Plot3D {
     const o = this.o;
     const N = o.coords.length;
     for (const ch of [...this.group.children]) { this.group.remove(ch); ch.geometry?.dispose(); ch.material?.dispose(); }
-    // No axes or floor grid: the only meaningful frame is the origin, from which the scored volume is measured.
-    // The x, y, z axes through the origin, which the view turns about.
+    // The x, y, z axes through the origin, which the view turns about, with arrowheads at their positive
+    // ends; and a faint floor grid in the x–z plane through the origin (as in the paper's Fig. 1).
     this.globe = axesLines(this.scale);
     this.globeInk = new THREE.Color(o.text ?? '#555555');
     this.group.add(this.globe);
+    const z = this.frameH ?? this.camera.top;
+    const headMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(o.bg ?? '#fbfaf8').lerp(this.globeInk, 0.55) });
+    for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
+      const dir = new THREE.Vector3(...d), head = new THREE.Mesh(new THREE.ConeGeometry(0.014 * z, 0.045 * z, 14), headMat);
+      head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      head.position.copy(dir).multiplyScalar(this.scale);   // the tip sits just past the end of the axis
+      head.position.addScaledVector(dir, 0.0225 * z);
+      this.group.add(head);
+    }
+    const grid = new THREE.GridHelper(2 * this.scale, 16, o.text, o.text);
+    grid.material.transparent = true; grid.material.opacity = 0.12; grid.material.depthWrite = false;
+    grid.renderOrder = -2;
+    this.group.add(grid);
     // Points.
     // Radius tied to the zoom: about 1.5 px on a 600-px-tall plot, the same as the 2-D dots.
     const sphere = new THREE.SphereGeometry(0.0055 * (this.frameH ?? this.camera.top), 10, 8);
