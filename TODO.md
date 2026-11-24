@@ -38,6 +38,15 @@ routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T�
 - Check the LM's own states against Qwen3-Embedding (the picks on the joke and sorting presets)
   before relying on them.
 
+## Later: pool fit and the default T (see docs/figures/pool-fit-vs-T.png)
+- Report the fit as an effective number of completions, N/ρ̂ = 1/Σ(π_i/K)² (between K and N by
+  construction), e.g. "the target effectively uses 4 of these 200 completions". Keep θ̂ in nats in the
+  popover. Drop the 1-nat warning threshold; the note always shows the count and which way raises it
+  (move T toward T′). Optionally translate θ̂ into a total-variation bound,
+  TV ≤ min(√(θ/2), √(1 − e^(−θ))).
+- Default T = T′ for the Global target (the only point where pool and target match: θ̂ at its floor for
+  T′ = 1); T = ∞ is the matched point for Global and local. Today's T = 20 sits on the poor-fit plateau.
+
 ## Later (from the review of Manuel's demo)
 - Clustering: colour completions by cluster, and/or order completions by cluster (Manuel's demo has
   four methods, a group count and LLM-written group names). Decide whether any of it is faithful and
