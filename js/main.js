@@ -410,6 +410,8 @@ function renderVolHint() {
     : `<span class="muted">volume needs ${S.sel.length}-D</span>`;
 }
 
+// A completion that hit the max-token limit, rather than ending with the end-of-text token: said in words.
+const cutLabel = (s) => (s.ended ? '' : `<span class="cutoff" title="Stopped at the max-token limit (${s.nTokens} tokens), before the model ended it">cut off at ${s.nTokens} tokens</span>`);
 function renderCards() {
   const order = S.sel.slice().sort((a, b) => S.logp[b] - S.logp[a]);
   const incl = inclusionOfText();
@@ -417,7 +419,7 @@ function renderCards() {
     const s = S.pool.samples[i];
     return `<li class="card${s.ended ? '' : ' cut'}" data-i="${i}">
       <div class="txt">${escapeHtml(s.text)}${s.ended ? '' : ' …'}</div>
-      <div class="meta"><span class="dot" style="background:${css('--accent')}"></span>log p ${fmt(s.logp, 1)}<span>·</span><span class="fn">inclusion ${pct(incl(i))}<button type="button" class="xbtn" data-x="inclusion" aria-label="What is the inclusion probability?">?</button></span></div></li>`;
+      <div class="meta"><span class="dot" style="background:${css('--accent')}"></span>log p ${fmt(s.logp, 1)}<span>·</span><span class="fn">inclusion ${pct(incl(i))}<button type="button" class="xbtn" data-x="inclusion" aria-label="What is the inclusion probability?">?</button></span>${cutLabel(s)}</div></li>`;
   }).join('');
   renderAllCards();
   $('#selected').querySelectorAll('.card').forEach((el) => {
@@ -438,12 +440,13 @@ function renderAllCards() {
     const groups = new Map();
     S.pool.samples.forEach((s, i) => { const g = groups.get(s.text); if (g) g.n++; else groups.set(s.text, { i, n: 1 }); });
     const rows = [...groups.values()].sort((a, b) => (incl(b.i) - incl(a.i)) || (S.logp[b.i] - S.logp[a.i]));
-    $('#all-meta').textContent = `${S.pool.samples.length} completions, ${rows.length} distinct · ${S.pi ? 'by inclusion' : 'by log p'}`;
+    const cut = S.pool.samples.filter((s) => !s.ended).length;
+    $('#all-meta').textContent = `${S.pool.samples.length} completions, ${rows.length} distinct${cut ? `, ${cut} cut off at the token limit` : ''} · ${S.pi ? 'by inclusion' : 'by log p'}`;
     $('#all-cards').innerHTML = rows.map(({ i, n }) => {
       const s = S.pool.samples[i], on = sel.has(s.text);
       return `<li class="card${s.ended ? '' : ' cut'}" data-i="${i}">
       <div class="txt">${escapeHtml(s.text)}${s.ended ? '' : ' …'}</div>
-      <div class="meta"><span class="dot" style="background:${on ? css('--accent') : css('--ramp-lo')}"></span>${n > 1 ? `×${n}<span>·</span>` : ''}log p ${fmt(s.logp, 1)}<span>·</span>inclusion ${pct(incl(i))}</div></li>`;
+      <div class="meta"><span class="dot" style="background:${on ? css('--accent') : css('--ramp-lo')}"></span>${n > 1 ? `×${n}<span>·</span>` : ''}log p ${fmt(s.logp, 1)}<span>·</span>inclusion ${pct(incl(i))}${cutLabel(s)}</div></li>`;
     }).join('');
     $('#all-cards').querySelectorAll('.card').forEach((el) => {
       el.onmouseenter = () => plot.highlight(+el.dataset.i);
@@ -465,7 +468,7 @@ const tip = $('#tooltip');
 function showTip(i, x, y) {
   if (i < 0) { tip.hidden = true; return; }
   const s = S.pool.samples[i];
-  tip.innerHTML = `${escapeHtml(s.text)}${s.ended ? '' : '…'}<div class="meta">log p ${fmt(s.logp, 2)} · inclusion ${pct(inclusionOfText()(i))}${S.sel.includes(i) ? ' · <b>selected</b>' : ''}</div>`;
+  tip.innerHTML = `${escapeHtml(s.text)}${s.ended ? '' : '…'}<div class="meta">log p ${fmt(s.logp, 2)} · inclusion ${pct(inclusionOfText()(i))}${S.sel.includes(i) ? ' · <b>selected</b>' : ''}${s.ended ? '' : ` · ${cutLabel(s)}`}</div>`;
   tip.hidden = false;
   const r = tip.getBoundingClientRect();
   tip.style.left = Math.min(window.innerWidth - r.width - 8, x + 14) + 'px';
@@ -672,7 +675,7 @@ function renderInspect() {
   el.hidden = false;
   el.innerHTML = `<div class="ins-txt">${escapeHtml(s.text)}${s.ended ? '' : ' …'}</div>
     <div class="ins-meta">${inSel ? '<span class="pill">selected</span>' : ''}
-      <span>log p ${fmt(s.logp, 2)}</span><span>log p°<sub>T′</sub> ${fmt(s.logq, 2)}</span><span>inclusion ${pct(inclusionOfText()(i))}</span></div>
+      <span>log p ${fmt(s.logp, 2)}</span><span>log p°<sub>T′</sub> ${fmt(s.logq, 2)}</span><span>inclusion ${pct(inclusionOfText()(i))}</span>${cutLabel(s)}</div>
     <button class="ins-close" aria-label="Close">×</button>`;
   el.querySelector('.ins-close').onclick = () => inspect(-1);
 }

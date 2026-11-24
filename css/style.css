@@ -267,7 +267,9 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
 .card .meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font: 11.5px var(--sans); margin-top: auto; }
 .card .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .card.hl { border-color: var(--text-2); box-shadow: var(--shadow); }
-.card.cut .txt::after { content: " …"; color: var(--muted); }
+.cutoff { color: var(--text-2); font-style: italic; }   /* stopped at the token limit, not by the model */
+.card .meta { flex-wrap: wrap; white-space: nowrap; }
+.card .meta .cutoff { flex-basis: 100%; }   /* on its own line */
 
 /* ---------- table ---------- */
 

@@ -31,6 +31,28 @@ function axesLines(scale) {
   return g;
 }
 
+// The floor: a grid in the x–z plane through the origin, cells of 1/8, that fades out with distance
+// from the origin (gone by 6 units), so it reads as endless and no edge ever comes into view.
+function endlessFloor(scale, bg, ink) {
+  const R = 6, step = 1 / 8, seg = 1 / 16, pos = [], col = [], c = new THREE.Color();
+  const shade = (x, z) => { const t = Math.max(0, 1 - Math.hypot(x, z) / R); c.copy(bg).lerp(ink, 0.2 * t); return [c.r, c.g, c.b]; };
+  for (let k = -R; k <= R + 1e-9; k += step) {
+    for (let u = -R; u < R - 1e-9; u += seg) {
+      for (const [x0, z0, x1, z1] of [[k, u, k, u + seg], [u, k, u + seg, k]]) {
+        pos.push(x0, 0, z0, x1, 0, z1);
+        col.push(...shade(x0, z0), ...shade(x1, z1));
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  const floor = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, depthWrite: false }));
+  floor.renderOrder = -2;
+  floor.scale.setScalar(scale);
+  return floor;
+}
+
 export class Plot3D {
   constructor(el, { onHover, onTap }) {
     this.el = el;
@@ -56,7 +78,9 @@ export class Plot3D {
     this.controls.enablePan = false;
     this.turnLeft = 0;
     this.view = { cx: 0, cy: 0, h: 1 };
-    this.pan = { x: 0, y: 0 };   // the visitor's shift of the picture, in units of the frame's half-height
+    // Where the origin sits on screen, as the view centre's offset from it in units of the half-height h.
+    // Fixed (until the visitor moves the picture), so the view visibly turns about the origin.
+    this.anchor = { fx: 0, fy: 0 };
     this.installPan();
     this.group = new THREE.Group();
     this.scene.add(this.group);
@@ -123,6 +147,7 @@ export class Plot3D {
       this.turnLeft = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : (30 * Math.PI) / 180;
       const frame = this.frameFor(o, s, 0);
       this.frameH = frame.h;   // sizes of dots and rods are set for this frame and scaled with the view
+      this.anchor = { fx: frame.cx / frame.h, fy: frame.cy / frame.h };
       this.setView(frame);
     }
     this.targets = o.coords.map((c, i) => {
@@ -153,10 +178,7 @@ export class Plot3D {
       this.heads.push(head);
       this.group.add(head);
     }
-    const grid = new THREE.GridHelper(2 * this.scale, 16, o.text, o.text);
-    grid.material.transparent = true; grid.material.opacity = 0.12; grid.material.depthWrite = false;
-    grid.renderOrder = -2;
-    this.group.add(grid);
+    this.group.add(endlessFloor(this.scale, new THREE.Color(o.bg ?? '#fbfaf8'), new THREE.Color(o.text ?? '#555555')));
     // Points.
     // Radius tied to the zoom: about 1.5 px on a 600-px-tall plot, the same as the 2-D dots.
     const sphere = new THREE.SphereGeometry(0.0055 * (this.frameH ?? this.camera.top), 10, 8);
@@ -299,7 +321,11 @@ export class Plot3D {
     const cv = this.renderer.domElement, touches = new Map();
     let drag = null;
     const perPx = () => (2 * this.view.h) / (this.camera.zoom * (this.el.clientHeight || 450));
-    const shift = (dx, dy) => { const k = perPx() / this.view.h; this.pan.x -= dx * k; this.pan.y += dy * k; };
+    const shift = (dx, dy) => {
+      const k = perPx() / this.view.h, W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, M = 0.85 / 1.08;
+      this.anchor.fx = Math.max(-M * W / H, Math.min(M * W / H, this.anchor.fx - dx * k));
+      this.anchor.fy = Math.max(-M, Math.min(M, this.anchor.fy + dy * k));
+    };
     const stopTurn = () => (this.turnLeft = 0);
     cv.addEventListener('pointerdown', (e) => {
       stopTurn();
@@ -322,21 +348,41 @@ export class Plot3D {
     cv.addEventListener('contextmenu', (e) => e.preventDefault());
     cv.addEventListener('dblclick', () => {
       if (!this.o) return;
-      stopTurn(); this.pan = { x: 0, y: 0 }; this.startView();
+      stopTurn(); this.startView();
+      const f = this.frameFor(this.o, this.scale, 0);
+      this.anchor = { fx: f.cx / f.h, fy: f.cy / f.h };
     });
   }
 
   followFit() {
-    if (this.o && this.camSet) {
-      // Keep everything drawn inside the plot at every angle: follow the fit for the current view
-      // smoothly, plus the visitor's shift. Dots, vectors and arrowheads keep their size on screen.
-      const f = this.frameFor(this.o, this.scale, 0), v = this.view, k = 0.35;
-      const g = { cx: f.cx + this.pan.x * f.h, cy: f.cy + this.pan.y * f.h, h: f.h };
-      if (Math.abs(g.cx - v.cx) + Math.abs(g.cy - v.cy) + Math.abs(g.h - v.h) > 1e-5 * v.h) {
-        this.setView({ cx: v.cx + (g.cx - v.cx) * k, cy: v.cy + (g.cy - v.cy) * k, h: v.h + (g.h - v.h) * k });
-        if (Math.abs(this.view.h - (this.laidH ?? 0)) > 0.01 * this.view.h) this.layout();
-      }
+    if (!this.o || !this.camSet) return;
+    // Keep everything drawn inside the plot at every angle, with the origin fixed on screen: the view
+    // centre is at (fx·h, fy·h) from the origin, and h is the smallest half-height for which every
+    // point and every corner of the volume lies inside (with an 8% margin). Followed smoothly; dots,
+    // vectors and arrowheads keep their size on screen.
+    const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, a = W / H, m = 1.08;
+    const { fx, fy } = this.anchor, ax = a / m, ay = 1 / m;
+    let h = 0.05;
+    for (const [x, y] of this.projected(this.o, this.scale)) {
+      h = Math.max(h, x > 0 ? x / (fx + ax) : -x / (ax - fx), y > 0 ? y / (fy + ay) : -y / (ay - fy));
     }
+    const v = this.view, k = 0.35, g = { cx: fx * h, cy: fy * h, h };
+    if (Math.abs(g.cx - v.cx) + Math.abs(g.cy - v.cy) + Math.abs(g.h - v.h) > 1e-5 * v.h) {
+      this.setView({ cx: v.cx + (g.cx - v.cx) * k, cy: v.cy + (g.cy - v.cy) * k, h: v.h + (g.h - v.h) * k });
+      if (Math.abs(this.view.h - (this.laidH ?? 0)) > 0.01 * this.view.h) this.layout();
+    }
+  }
+  // Everything drawn (points, and for K ≤ 3 every corner of the volume), in screen coordinates
+  // relative to the origin, for the current view.
+  projected(o, s) {
+    const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
+    const sel = o.sel.length >= 2 && o.sel.length <= 3 ? o.sel : [];
+    for (let mask = 3; mask < 1 << sel.length; mask++) {
+      if ((mask & (mask - 1)) === 0) continue;
+      pts.push([0, 1, 2].map((d) => sel.reduce((acc, i, k) => acc + (mask & (1 << k) ? pts[i][d] : 0), 0)));
+    }
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion), up = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
+    return pts.map(([x, y, z]) => [x * right.x + y * right.y + z * right.z, x * up.x + y * up.y + z * up.z]);
   }
 
   tick() {
