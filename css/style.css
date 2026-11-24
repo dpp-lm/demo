@@ -569,3 +569,8 @@ html.booting .shell { visibility: hidden; }
   .step-btn { width: 36px; height: 32px; }   /* finger-sized */
   .step-2 .stepper input, .stepper input { width: 38px; min-height: 32px; font-size: 16px; }
 }
+
+/* Room for a scroll bar is kept from the start, so nothing shifts sideways when one appears: the page
+   scrolls on narrow screens, the rail scrolls on wide ones. */
+@media (max-width: 900px) { html { scrollbar-gutter: stable; } }
+.rail { scrollbar-gutter: stable; }
