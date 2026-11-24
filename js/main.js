@@ -145,7 +145,7 @@ const BACKENDS = [
   { id: 'modal', where: 'Modal', the: 'Modal', label: 'Qwen3 14B, 4-bit (AWQ) · Modal', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
     url: MODAL_URL, auth: true, embedders: [QEMB], up: null },
   { id: 'space', where: 'Hugging Face Space', the: 'the Hugging Face Space', label: 'Qwen3 14B, 4-bit (AWQ) · HF Space', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
-    url: SPACE_URL, auth: true, embedders: [QEMB], up: null },
+    url: SPACE_URL, auth: true, embedders: [QEMB4], up: null },
 ];
 const cap = (t) => t[0].toUpperCase() + t.slice(1);
 const backend = () => BACKENDS.find((b) => b.id === $('#model').value) ?? BACKENDS[0];
