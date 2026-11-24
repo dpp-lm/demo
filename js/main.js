@@ -143,7 +143,9 @@ const BACKENDS = [
   { id: 'server', where: 'GPU server', the: 'the GPU server', label: 'Qwen3 14B, 4-bit (AWQ) · GPU server', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
     url: DEMO_SERVER, auth: false, embedders: [QEMB4, QEMB, OWN], up: null },
   { id: 'modal', where: 'Modal', the: 'Modal', label: 'Qwen3 14B, 4-bit (AWQ) · Modal', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
-    url: MODAL_URL, auth: true, embedders: [QEMB], up: null },
+    url: MODAL_URL, auth: true, embedders: [QEMB4, QEMB], up: null,
+    // Listed so the settings look the same everywhere, but not runnable yet (TODO: Modal and the 4B embedder).
+    unavailable: { 'qwen3-emb-4b': 'Modal’s GPU (48 GB) cannot hold Qwen3 14B and Qwen3-Embedding-4B together yet.' } },
   { id: 'space', where: 'Hugging Face Space', the: 'the Hugging Face Space', label: 'Qwen3 14B, 4-bit (AWQ) · HF Space', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
     url: SPACE_URL, auth: true, embedders: [QEMB4], up: null },
 ];
@@ -857,6 +859,16 @@ async function runLive({ k = drawK } = {}) {
     pendingSignIn = { ...cfg, k };
     return;
   }
+  if (B.unavailable?.[cfg.embedderId]) {
+    // An embedder this backend lists but cannot run yet: say why, and offer the two ways forward.
+    stageMsg('error', {
+      title: `${embedderOf(B).label} isn’t available on ${B.the} yet.`,
+      detail: escapeHtml(B.unavailable[cfg.embedderId]),
+      actions: '<button type="button" class="btn" data-act="use-small-emb">Use Qwen3-Embedding-0.6B on Modal</button>' + useServerBtn() + (S.pool ? ' <button type="button" class="btn" data-act="dismiss">Cancel</button>' : ''),
+      sticky: cfgKey(cfg),
+    });
+    return;
+  }
   const start = (k - 1) * cfg.N, end = k * cfg.N;
   if (end > LIMITS.bufferMax) { fail(B, new RunError('limit', `At most ${LIMITS.bufferMax} completions are kept per prompt and settings.`)); return; }
   // Draws are only combined with draws from the same backend (same weights, same arithmetic).
@@ -1108,6 +1120,7 @@ function wire() {
     if (act === 'retry') runLive({ k: drawK });
     if (act === 'dismiss') { stageMsg(null); if (!S.pool) emptyMsg(readConfig()); }
     if (act === 'settings') { stageMsg(S.pool ? null : 'empty', S.pool ? {} : { title: 'Pick another model, then press ↑.' }); $('#adv').open = true; $('#model').focus(); }
+    if (act === 'use-small-emb') { stageMsg(null); $('#embedder').value = 'qwen3-emb'; onSettings(); runLive({ k: 1 }); }
     if (act === 'use-server') { stageMsg(null); $('#model').value = 'server'; onSettings(); if (!S.pool) emptyMsg(readConfig()); }
     if (act === 'signin') {
       // The settings on screen now (a panel may have been up while they changed).

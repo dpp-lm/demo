@@ -47,6 +47,12 @@ routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T�
   how tokens are pooled (meta.json does not say; our note assumed the mean over generated tokens);
   (3) check the own states against Qwen3-Embedding (the picks on the joke and sorting presets).
 
+## Later: Qwen3-Embedding-4B on Modal
+- Modal's L40S (48 GB) cannot hold Qwen3 14B (≈30 GB) plus the 4B embedder in float32 (16 GB) and the
+  generation memory. Options: an 80 GB A100 (≈25–30% more per GPU-second; exact, like the GPU server), or
+  the embedder in bfloat16 on the L40S (similarities off by ~1e-3). Until then the page lists 4B on Modal
+  and explains, with a way forward, if it is chosen.
+
 ## Untested
 - Hugging Face sign-in end to end, now that the page is back at the main address.
 - The Space's /embed end to end (the anonymous ZeroGPU quota ran out during testing).
