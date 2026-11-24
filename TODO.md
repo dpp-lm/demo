@@ -40,6 +40,9 @@ Readouts and plot
     Pr(S) = det(L_S)/Z and the inclusion probability of a completion (copies counted together).
 13. Chip names the target; the status line names the draw shown.
 14. Keep "N completions (M distinct)" and the K message; no near-duplicate threshold.
+18. The PCA spectrum bars move out of the plot: hidden by default, opened from the strip under the
+    plot together with the other health indicators (log P(S), quality, diversity, pool fit). The
+    1-D/2-D/3-D switch moves into that panel with them.
 
 Running, waiting and failing (docs/run-flow.md)
 15. 5-minute time limit; no redirect to Hugging Face without asking (panel with [Sign in] and
