@@ -65,7 +65,13 @@ async function loadGalleryItem(id) {
   $('#prompt').dispatchEvent(new Event('input'));
   markExample(id);
   $('#progress').hidden = true;
-  $('#live-status').textContent = `Example: ${rec.N} completions from ${modelByKey(MODELS.find((m) => m.repo === rec.model)?.key).name}. Edit the prompt to try your own.`;
+  $('#live-status').textContent = `Example: ${rec.N} completions from ${modelByKey(MODELS.find((m) => m.repo === rec.model)?.key).name} at T′ ${(+rec.Tprime).toFixed(1)}. Edit the prompt to try your own.`;
+  // The run settings follow the example, so ↑ repeats it (with the model chosen in the menu).
+  $('#live-N').value = rec.N;
+  $('#live-Tp').value = (+rec.Tprime).toFixed(1);
+  $('#live-max').value = rec.maxNewTokens;
+  $('#live-N').dispatchEvent(new Event('input'));
+  window.__followExampleModel?.(MODELS.find((m) => m.repo === rec.model)?.key);
   setPool(rec, rec.emb ? decodeEmb(rec.emb, rec.N, rec.D) : null);
 }
 
@@ -587,7 +593,9 @@ async function runCloud(M, { prompt, N, Tprime, maxNewTokens }, done) {
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.detail || `the server answered ${r.status}`);
       M.cold = false;
-      $('#live-status').textContent = `${body.N} completions from ${M.name}, in ${((performance.now() - t0) / 1000).toFixed(0)}s.`;
+      const capped = [N > M.maxN && `${M.maxN} samples`, maxNewTokens > M.maxNewTokens && `${M.maxNewTokens} tokens`].filter(Boolean);
+      $('#live-status').textContent = `${body.N} completions from ${M.name}, in ${((performance.now() - t0) / 1000).toFixed(0)}s.` +
+        (capped.length ? ` (This server allows at most ${capped.join(' and ')} per run.)` : '');
       $('#progress').hidden = true;
       markExample(null);
       setPool(body, decodeEmb(body.emb, body.N, body.D));
@@ -602,7 +610,9 @@ async function runCloud(M, { prompt, N, Tprime, maxNewTokens }, done) {
       const body = await r.json().catch(() => ({}));
       if (r.status === 401) signOut();
       if (!r.ok) throw new Error(body.detail || `the server answered ${r.status}`);
-      $('#live-status').textContent = `${body.N} completions from ${M.name}, in ${((performance.now() - t0) / 1000).toFixed(0)}s.`;
+      const capped = [body.N < N && `${body.N} samples`, body.maxNewTokens < maxNewTokens && `${body.maxNewTokens} tokens`].filter(Boolean);
+      $('#live-status').textContent = `${body.N} completions from ${M.name}, in ${((performance.now() - t0) / 1000).toFixed(0)}s.` +
+        (capped.length ? ` (This server allows at most ${capped.join(' and ')} per run.)` : '');
       $('#progress').hidden = true;
       markExample(null);
       setPool(body, body.emb ? decodeEmb(body.emb, body.N, body.D) : null);
@@ -641,7 +651,7 @@ async function runCloud(M, { prompt, N, Tprime, maxNewTokens }, done) {
 let worker = null;
 function runLive() {
   const N = clampInt($('#live-N').value, 2, 200), Tp = Math.min(2, Math.max(0.2, +$('#live-Tp').value || 1));
-  const maxNewTokens = clampInt($('#live-max').value, 8, 256);
+  const maxNewTokens = clampInt($('#live-max').value, 8, 640);
   const prompt = $('#prompt').value.trim();
   if (!prompt) return;
   const cloud = cloudByKey($('#model').value);
@@ -777,6 +787,13 @@ function wire() {
     $('#cache-info').textContent = 'Downloaded models deleted.';
   };
   window.__refreshCache = refreshCache;
+  // Examples switch the model too, unless the visitor picked one or the GPU server is in use.
+  window.__followExampleModel = (key) => {
+    let saved = null;
+    try { saved = localStorage.getItem('dpp-lm-model'); } catch {}
+    if (!key || saved || SERVER.length || !usable(key)) return;
+    $('#model').value = key; advSum(); modelNote();
+  };
   // Offer the GPU server's models if it answers; first-time visitors get it as the default.
   probeServer().then(async (ok) => {
     if (!ok) return;
