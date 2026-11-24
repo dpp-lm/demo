@@ -170,8 +170,8 @@ summary.chip { max-width: none; overflow: hidden; text-overflow: ellipsis; displ
 /* "?" explainer buttons and their popover */
 /* Footnote-style: a small raised "?" right after the thing it explains. */
 .fn { white-space: nowrap; }
-.xbtn { display: inline-block; padding: 0 1px; margin: 0 0 0 1px; vertical-align: super; border: 0; background: none; color: var(--text-2); font: 600 9.5px/1 var(--sans); cursor: pointer; position: relative; flex: none; }
-.xbtn:hover, .xbtn[aria-expanded=true] { color: var(--text); text-decoration: underline; }
+.xbtn { display: inline-block; padding: 1px 3.5px; margin: 0 0 0 1px; vertical-align: baseline; position: relative; top: -0.55em; border: 1px solid #cfc8bc; border-radius: 999px; background: #fff; color: var(--text-2); font: 600 8.5px/1 var(--sans); cursor: pointer; position: relative; flex: none; }
+.xbtn:hover, .xbtn[aria-expanded=true] { color: var(--text); border-color: var(--text-2); }
 .xbtn::after { content: ""; position: absolute; inset: -10px; }
 .xpop { position: absolute; z-index: 100; background: #fff; color: var(--text); border: 1px solid var(--border); border-left: 3px solid var(--text-2); border-radius: var(--r); box-shadow: 0 6px 22px rgb(0 0 0 / .14); padding: 10px 34px 10px 14px; font: 15.5px/1.45 var(--serif); }
 .xpop p { margin: .4em 0; }
@@ -330,7 +330,7 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .stepper input { width: 48px; }
   .seg span { padding: 7px 10px; font-size: 13.5px; }
   .seg.small span { padding: 5px 11px; font-size: 12.5px; }
-    .xbtn { font-size: 10.5px; }
+    .xbtn { font-size: 9.5px; }
   .chip { font-size: 14px; }
   .chipmenu .menu { grid-template-columns: repeat(3, minmax(0, 1fr)); width: min(320px, calc(100vw - 48px)); }
   .viewmenu summary { padding: 5px 10px; font-size: 13px; }
@@ -413,4 +413,4 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
 }
 /* The View menu opens above the subset controls docked at the bottom of phone screens. */
 .viewmenu { z-index: 35; }
-.xbtn:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 1px; border-radius: 2px; }
+.xbtn:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 1px; }
