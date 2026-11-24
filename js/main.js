@@ -410,8 +410,10 @@ function renderVolHint() {
 // A completion that hit the max-token limit, rather than ending with the end-of-text token: said in words.
 const cutLabel = (s) => (s.ended ? '' : `<span class="cutoff" title="Stopped at the max-token limit (${s.nTokens} tokens), before the model ended it">cut off at ${s.nTokens} tokens</span>`);
 function renderCards() {
-  const order = S.sel.slice().sort((a, b) => S.logp[b] - S.logp[a]);
-  const incl = inclusionOfText();
+  // Most likely to be included first, like All completions; log p breaks ties (and orders them when
+  // inclusion is undefined because no K-subset exists).
+  const incl = inclusionOfText(), by = (i) => (Number.isFinite(incl(i)) ? incl(i) : 0);
+  const order = S.sel.slice().sort((a, b) => (by(b) - by(a)) || (S.logp[b] - S.logp[a]));
   $('#selected').innerHTML = order.map((i) => {
     const s = S.pool.samples[i];
     return `<li class="card${s.ended ? '' : ' cut'}" data-i="${i}">
