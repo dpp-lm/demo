@@ -136,39 +136,47 @@ def unpack_awq(qweight, qzeros, scales, group_size, bits=4):
     return w.t().contiguous()
 
 
-def load_awq_unpacked(repo, device):
+def load_awq_unpacked(repo, device, path=None):
     """The AWQ checkpoint as a plain fp16 model: every 4-bit weight unpacked to (q - zero) * scale.
-    These are exactly the 4-bit model's weights; only the matrix kernels differ from an int4 engine."""
+    These are exactly the 4-bit model's weights; only the matrix kernels differ from an int4 engine.
+    The model is built on `device` without random initialisation, then filled tensor by tensor."""
     import glob, json, os
     import torch
-    from huggingface_hub import snapshot_download
     from safetensors import safe_open
     from transformers import AutoConfig, AutoModelForCausalLM
-    path = snapshot_download(repo)
+    from transformers.initialization import no_init_weights
+    if path is None:
+        from huggingface_hub import snapshot_download
+        path = snapshot_download(repo)
     qc = json.load(open(os.path.join(path, "config.json")))["quantization_config"]
     assert qc["quant_method"] == "awq" and qc["version"] == "gemm" and qc["bits"] == 4 and qc["zero_point"]
-    cfg = AutoConfig.from_pretrained(repo)
-    cfg.quantization_config = None
-    if hasattr(cfg, "__dict__"):
-        cfg.__dict__.pop("quantization_config", None)
-    with torch.device("meta"):
+    cfg = AutoConfig.from_pretrained(path)
+    cfg.__dict__.pop("quantization_config", None)
+    with no_init_weights(), torch.device(device):
         model = AutoModelForCausalLM.from_config(cfg, dtype=torch.float16)
-    state, packed = {}, {}
+    params = dict(model.named_parameters())
+    done, packed = set(), {}
     for f in sorted(glob.glob(os.path.join(path, "*.safetensors"))):
-        with safe_open(f, framework="pt", device=device) as st:
+        with safe_open(f, framework="pt", device=str(device)) as st:
             for k in st.keys():
                 if k.endswith((".qweight", ".qzeros", ".scales")):
                     base, part = k.rsplit(".", 1)
                     packed.setdefault(base, {})[part] = st.get_tensor(k)
+                    t = packed[base]
+                    if len(t) == 3:
+                        w = unpack_awq(t["qweight"], t["qzeros"], t["scales"].to(torch.float16), qc["group_size"])
+                        params[base + ".weight"].data.copy_(w)
+                        done.add(base + ".weight")
+                        del packed[base], w
                 else:
-                    state[k] = st.get_tensor(k).to(torch.float16)
-    for base, t in packed.items():
-        state[base + ".weight"] = unpack_awq(t["qweight"], t["qzeros"], t["scales"].to(torch.float16), qc["group_size"])
-    missing, unexpected = model.load_state_dict(state, strict=False, assign=True)
-    missing = [k for k in missing if not k.endswith("rotary_emb.inv_freq")]
-    assert not missing and not unexpected, (missing[:5], unexpected[:5])
-    model.tie_weights()
-    return model.to(device).eval()
+                    params[k].data.copy_(st.get_tensor(k))
+                    done.add(k)
+    if getattr(cfg, "tie_word_embeddings", False):
+        model.tie_weights()
+        done |= {k for k in params if k.startswith("lm_head")}
+    missing = set(params) - done
+    assert not missing and not packed, (sorted(missing)[:5], list(packed)[:5])
+    return model.eval()
 
 
 def sample(tok, model, chat, prompt, n, t_prime, max_new_tokens, batch_size, seed):

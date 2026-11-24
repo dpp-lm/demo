@@ -18,7 +18,9 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install modal==1.6.3
-      - name: One small GPU run against the deployed app
-        run: modal run modal/app.py::smoke
       - name: Check the 4-bit weights and log p against the demo server's pools
+        timeout-minutes: 20
         run: modal run modal/app.py::verify
+      - name: One small GPU run against the deployed app
+        timeout-minutes: 10
+        run: modal run modal/app.py::smoke
