@@ -35,7 +35,7 @@ function axesLines(scale) {
 // from the origin (gone by 6 units), so it reads as endless and no edge ever comes into view.
 function endlessFloor(scale, bg, ink) {
   const R = 6, step = 1 / 8, seg = 1 / 16, pos = [], col = [], c = new THREE.Color();
-  const shade = (x, z) => { const t = Math.max(0, 1 - Math.hypot(x, z) / R); c.copy(bg).lerp(ink, 0.2 * t); return [c.r, c.g, c.b]; };
+  const shade = (x, z) => { const t = Math.max(0, 1 - Math.hypot(x, z) / R); c.copy(bg).lerp(ink, 0.3 * t); return [c.r, c.g, c.b]; };
   for (let k = -R; k <= R + 1e-9; k += step) {
     for (let u = -R; u < R - 1e-9; u += seg) {
       for (const [x0, z0, x1, z1] of [[k, u, k, u + seg], [u, k, u + seg, k]]) {
