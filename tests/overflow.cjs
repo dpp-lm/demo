@@ -1,7 +1,7 @@
 // Finds content spilling out of its box: every descendant of a bordered container must lie inside it.
 const { chromium } = require('playwright');
 const WIDTHS = [320, 360, 390, 430, 600, 700, 768, 900, 1024, 1280, 1440];
-const CONTAINERS = '.step, .stage, .composer, .chipmenu .menu, .viewmenu .menu, .card, .stage-foot, .stage-bar, .wip, .pool-table, .eigbars, .pick, .stepper, .tfield, .mode-row';
+const CONTAINERS = '.step, .stage, .composer, .chipmenu .menu, .viewmenu .menu, .card, .stage-foot, .stage-bar, .wip, .pool-table, .eigbars, .pick, .stepper';  // boxes with a visible edge or background
 (async () => {
   const b = await chromium.launch(); let problems = 0;
   for (const w of WIDTHS) {
