@@ -54,7 +54,8 @@ function endlessFloor(scale, bg, ink) {
 }
 
 export class Plot3D {
-  constructor(el, { onHover, onTap, safeRect }) {
+  constructor(el, { onHover, onTap, safeRect, onFrame }) {
+    this.onFrame = onFrame;
     this.el = el;
     // The open part of the plot, in canvas pixels, not covered by panels floating over it.
     this.safeRect = safeRect ?? (() => ({ L: 8, T: 8, R: (el.clientWidth || 600) - 8, B: (el.clientHeight || 450) - 8 }));
@@ -124,6 +125,7 @@ export class Plot3D {
       this.controls.update();
       this.shadeDepth();
       this.renderer.render(this.scene, this.camera);
+      this.onFrame?.();
     };
     loop();
   }

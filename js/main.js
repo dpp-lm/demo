@@ -601,7 +601,7 @@ class Plot2D {
       .attr('r', 1.6)
       .sort((a, b) => sel.has(a) - sel.has(b)))
       .attr('cx', (i) => this.pos[i][0]).attr('cy', (i) => this.pos[i][1]);
-    if (!animate) renderLabels();
+    if (!animate) renderLabels(false);   // at once while panning or zooming, never trailing
   }
   drawGrid(on, ox, oy) {
     if (!on) { this.gGrid.selectAll('line').remove(); return; }
@@ -638,6 +638,8 @@ const plot = {
           onHover: (i, x, y) => { showTip(i, x, y); S.hover = i < 0 ? S.pinned : i; this.highlightCards(S.hover); },
           onTap: (i) => inspect(i),
           safeRect: openArea,
+          // Labels follow the points in the same frame the scene is drawn, so they never trail it.
+          onFrame: () => { if ($('#labels').childElementCount) placeLabels(); },
         });
       }
       this.p3.update({
@@ -657,7 +659,7 @@ const plot = {
 // ---------------------------------------------------------------- labels
 const MAX_LABELS = 6;
 function labelText(s) { const w = s.text.replace(/\s+/g, ' ').trim().split(' '); return w.length > 5 ? w.slice(0, 5).join(' ') + '…' : w.join(' '); }
-function renderLabels() {
+function renderLabels(animate = true) {
   const layer = $('#labels');
   const show = $('#label-toggle').checked && S.sel.length && S.sel.length <= MAX_LABELS;
   if (!show) { layer.innerHTML = ''; return; }
@@ -674,7 +676,7 @@ function renderLabels() {
     el.onmouseleave = () => plot.highlight(-1);
     layer.appendChild(el);
   }
-  layer.classList.toggle('anim', S.dims !== 3);
+  layer.classList.toggle('anim', animate && S.dims !== 3);
   placeLabels();
 }
 function placeLabels() {
@@ -708,10 +710,6 @@ function openArea() {
   const left = Math.max($('.dock').getBoundingClientRect().right, $('.top').getBoundingClientRect().right);
   return { L: left + 20 - p.left, T: 20 - p.top, R: $('.rail').getBoundingClientRect().left - 20 - p.left, B: $('#details').getBoundingClientRect().top - 20 - p.top };
 }
-(function follow3D() {
-  if (S.dims === 3 && $('#labels').childElementCount) placeLabels();
-  requestAnimationFrame(follow3D);
-})();
 
 // ---------------------------------------------------------------- inspector
 function inspect(i) {
