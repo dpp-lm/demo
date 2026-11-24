@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Diverse Sampling from Language Models</title>
+<meta name="description" content="Sample a pool of language-model completions, embed them, and pick a diverse subset with a K-DPP (arXiv:2611.25003). Runs in your browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400..800;1,400..800&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<link rel="stylesheet" href="css/style.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+  "d3": "https://cdn.jsdelivr.net/npm/d3@7.9.0/+esm"
+} }
+</script>
+</head>
+<body>
+<div class="shell">
+<header class="top">
+  <div class="brand">
+    <h1>Diverse Sampling from Language Models</h1>
+    <nav class="links"><a href="https://arxiv.org/abs/2611.25003" target="_blank" rel="noopener">Paper ↗</a></nav>
+  </div>
+  <div class="top-row">
+    <p class="wip" role="note"><b>Work in progress.</b> This demo is still being built.</p>
+    <button type="button" id="details-btn" class="btn details-btn" aria-controls="details" aria-expanded="false">Details<span class="flag" aria-hidden="true"></span></button>
+  </div>
+</header>
+
+<main class="app">
+  <!-- The plot: on wide screens, the page's backdrop (everything left of the rail and above the dock). -->
+  <section class="stage" aria-label="Embeddings">
+    <div id="stage-msg" class="stage-msg" role="status" aria-live="polite" hidden></div>
+    <div class="plot-wrap">
+      <div class="plot-box">
+        <div id="plot" class="plot" aria-label="Projection of the completions' embeddings"></div>
+        <div id="labels" class="labels" aria-hidden="true"></div>
+      </div>
+      <div id="inspect" class="inspect" aria-live="polite" hidden></div>
+    </div>
+  </section>
+
+  <!-- The selected completions: a rail on the right on wide screens, under the plot on phones. -->
+  <aside class="rail subset" aria-label="Selected subset">
+    <div class="subset-head">
+      <h2>Selected subset</h2>
+      <span id="subset-meta" class="note"></span>
+    </div>
+    <ol id="selected" class="cards" aria-label="Selected subset"></ol>
+  </aside>
+
+  <!-- Prompt and subset controls: docked at the bottom on wide screens. -->
+  <div class="dock">
+    <section class="step step-1">
+      <div class="composer">
+        <textarea id="prompt" rows="2" spellcheck="false" aria-label="Prompt" placeholder="Ask for something with many good answers"></textarea>
+        <div class="comp-row">
+          <details class="chipmenu" id="exmenu">
+            <summary class="plusbtn" aria-label="Example prompts" title="Example prompts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></summary>
+            <div class="menu list" id="examples" role="menu"></div>
+          </details>
+          <details class="chipmenu" id="adv">
+            <summary class="chip" aria-label="Settings"><span id="adv-sum"></span></summary>
+            <div class="menu">
+              <label class="field model-field"><span class="lab">Model<button type="button" class="xbtn" data-x="model" aria-label="About the model">?</button></span><select id="model"></select></label>
+              <p class="menu-note" id="model-note"></p>
+              <label class="field model-field"><span class="lab">Embedding<button type="button" class="xbtn" data-x="embedder" aria-label="About the embedding">?</button></span><select id="embedder"></select></label>
+              <label class="field"><span class="lab">Samples N<button type="button" class="xbtn" data-x="N" aria-label="What is N?">?</button></span><input id="live-N" type="number" min="2" max="200" step="10" value="200" inputmode="numeric"></label>
+              <label class="field"><span class="lab">Temp. T′<button type="button" class="xbtn" data-x="Tprime" aria-label="What is T′?">?</button></span><input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0" inputmode="decimal"></label>
+              <label class="field"><span class="lab">Max tokens<button type="button" class="xbtn" data-x="maxtok" aria-label="What is max tokens?">?</button></span><input id="live-max" type="number" min="8" max="256" step="8" value="128" inputmode="numeric"></label>
+              <p class="menu-note limits" id="limits-note"></p>
+              <label class="field model-field"><span class="lab">Target quality<button type="button" class="xbtn" data-x="target" aria-label="What is the target quality?">?</button></span><select id="target"></select></label>
+            </div>
+          </details>
+          <span class="grow"></span>
+          <button id="live-stop" class="sendbtn stop" aria-label="Stop" title="Stop" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg></button>
+          <button id="live-go" class="sendbtn" aria-label="Generate completions" title="Generate (Enter)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg></button>
+        </div>
+      </div>
+      <p id="live-status" class="status" aria-live="polite"></p>
+    </section>
+
+    <section class="step step-2" aria-label="Subset">
+      <div class="tfield">
+        <span class="tlab"><span class="fn"><label for="T-slider" title="Temperature">T</label><button type="button" class="xbtn" data-x="T" aria-label="What does T do?">?</button></span> <output id="T-out" class="val">1.00</output></span>
+        <input id="T-slider" type="range" min="0" max="1000" step="1" value="500" aria-label="Temperature T">
+        <span class="ends" aria-hidden="true"><span>quality</span><span>diversity</span></span>
+      </div>
+      <div class="mode-row">
+        <div class="field kfield">
+          <span class="lab" id="K-lab" title="Subset size">K</span>
+          <div class="stepper" role="group" aria-labelledby="K-lab">
+            <button class="btn icon" id="K-minus" aria-label="Decrease K">−</button>
+            <input id="K" type="number" min="1" max="20" value="3" aria-labelledby="K-lab">
+            <button class="btn icon" id="K-plus" aria-label="Increase K">+</button>
+          </div>
+        </div>
+        <span class="grow"></span>
+        <span class="fn"><span class="pick" role="group" aria-label="How to choose the subset">
+          <button type="button" class="pick-btn" data-mode="map" aria-pressed="true">Most likely</button>
+          <button type="button" class="pick-btn" data-mode="sample" aria-pressed="false">Sample</button>
+        </span><button type="button" class="xbtn" data-x="subset" aria-label="How is the subset chosen?">?</button></span>
+      </div>
+    </section>
+  </div>
+
+  <!-- Details: a drawer from the left on wide screens, a collapsible section on phones. -->
+  <section id="details" class="drawer" aria-label="Details">
+    <div class="drawer-head">
+      <button type="button" class="drawer-title" id="details-toggle" aria-controls="details" aria-expanded="false">Details<span class="flag" aria-hidden="true"></span></button>
+      <button type="button" class="drawer-close" id="details-close" aria-label="Close details">×</button>
+    </div>
+    <div class="drawer-body">
+      <div class="stage-foot">
+        <div class="legend">
+          <span class="lg"><span class="sw sel"></span>selected</span>
+          <span id="vol-hint" class="lg"></span>
+        </div>
+        <div id="readout" class="readout"></div>
+        <details class="viewmenu specmenu" id="specmenu">
+          <summary>Spectrum</summary>
+          <div class="menu" id="spectrum"></div>
+        </details>
+      </div>
+      <p id="fit-note" class="fit-note" hidden></p>
+      <div class="stage-bar">
+        <span id="stage-note" class="note"></span>
+        <details class="viewmenu" id="viewmenu">
+          <summary>View</summary>
+          <div class="menu">
+            <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Label selected points</span></label>
+            <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale points by quality<button type="button" class="xbtn" data-x="scale" aria-label="What does scaling do?">?</button></span></label>
+          </div>
+        </details>
+      </div>
+      <details class="pool-table">
+        <summary>All completions</summary>
+        <div id="pool-table"></div>
+      </details>
+    </div>
+  </section>
+</main>
+<svg id="leaders" class="leaders" aria-hidden="true"></svg>
+</div>
+<div id="tooltip" class="tooltip" hidden></div>
+<div id="xpop" class="xpop" role="dialog" aria-modal="false" hidden></div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
