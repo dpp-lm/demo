@@ -558,7 +558,7 @@ const plot = {
       }
       this.p3.update({
         coords: S.proj.coords, c: S.c, sel: S.sel, scaled: $('#scale-toggle').checked, fitted: S.proj.fitted,
-        color: () => css('--ink'), selColor: () => css('--accent'), accent: css('--accent'), text: css('--text-2'), bg: css('--surface'),
+        color: () => css('--ink'), selColor: () => css('--accent'), accent: css('--accent'), text: css('--text-2'), muted: css('--muted'), bg: css('--surface'),
       });
     } else this.p2.update();
   },

@@ -11,6 +11,27 @@ function rod(a, b, r, color) {
   return m;
 }
 
+// "origin", written just left of the origin (a sprite, so it always faces the viewer). The selected
+// vectors are drawn from the origin, so their meeting point marks it; the word names it.
+function originMarker(color, h) {
+  const W = 256, H = 64, cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  g.fillStyle = color;
+  g.font = '500 30px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif';
+  g.textAlign = 'right'; g.textBaseline = 'middle';
+  g.fillText('origin', W - 14, H / 2);
+  g.beginPath(); g.arc(W - 4, H / 2, 4, 0, 2 * Math.PI); g.fill();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  sp.center.set((W - 4) / W, 0.5);        // the dot sits exactly on the origin, the word to its left
+  const s = 0.085 * h;                    // about 13 px tall on a 450-px plot, at any zoom
+  sp.scale.set(s * W / H, s, 1);
+  sp.renderOrder = 2;
+  return sp;
+}
+
 export class Plot3D {
   constructor(el, { onHover, onTap }) {
     this.el = el;
@@ -108,18 +129,8 @@ export class Plot3D {
     const o = this.o;
     const N = o.coords.length;
     for (const ch of [...this.group.children]) { this.group.remove(ch); ch.geometry?.dispose(); ch.material?.dispose(); }
-    // Axes through the origin.
-    const axMat = new THREE.LineBasicMaterial({ color: o.text, transparent: true, opacity: 0.35 });
-    for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
-      const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(...d).multiplyScalar(0.9)]);
-      this.group.add(new THREE.Line(g, axMat));
-    }
-    // Faint floor grid through the origin (as in the paper's Fig. 1).
-    const grid = new THREE.GridHelper(2, 16, o.text, o.text);
-    grid.material.transparent = true;
-    grid.material.opacity = 0.12;
-    grid.material.depthWrite = false;
-    this.group.add(grid);
+    // No axes or floor grid: the only meaningful frame is the origin, from which the scored volume is measured.
+    this.group.add(originMarker(o.text ?? '#555555', this.camera.top));
     // Points.
     // Radius tied to the zoom: about 2.5 px on a 450-px-tall plot, the same as the 2-D dots.
     const sphere = new THREE.SphereGeometry(0.011 * this.camera.top, 10, 8);
