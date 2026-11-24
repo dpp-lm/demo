@@ -21,6 +21,9 @@ requests with the same meaning. `scripts/conformance.mjs` checks a backend again
 `G` is the N×N matrix of inner products of the unit embeddings, computed in float64 from the float32
 vectors, diagonal set to exactly 1, sent as little-endian float32, row-major, base64. The page builds
 every view (plot, spectrum, DPP) from G alone, so no random projection or PCA happens on a backend.
+Identical completions must have identical rows: batched embedding can make copies of a string differ
+by ~1e-5, so the page replaces every copy's row by the first copy's (the embedding is a function of
+the string).
 
 (The GPU server currently returns the vectors as `emb` + `D` instead; the page computes G from them in
 float64. It should move to `G`.)

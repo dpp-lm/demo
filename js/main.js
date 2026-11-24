@@ -209,7 +209,18 @@ async function drawNext() {
 }
 
 // ---------------------------------------------------------------- pool on screen
+// φ is a function of the string, so identical completions must have identical rows of G. Batched
+// embedding on a GPU can make copies differ by ~1e-5 (padding changes the arithmetic), which would let
+// a set of two copies of one string have a tiny positive volume. Use the first copy's row for every copy.
+function sameStringsSameRows(samples, G) {
+  const N = samples.length, first = new Map(), c = samples.map((s, i) => (first.has(s.text) ? first.get(s.text) : (first.set(s.text, i), i)));
+  if (c.every((x, i) => x === i)) return G;
+  const H = new Float64Array(N * N);
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) H[i * N + j] = G[c[i] * N + c[j]];
+  return H;
+}
 function setPool(pool, G, view) {
+  G = sameStringsSameRows(pool.samples, G);
   $('#labels').innerHTML = '';
   S.pinned = -1;
   S.pool = pool;
@@ -242,9 +253,12 @@ function recompute({ newDraw = true } = {}) {
   // Most likely scores sets by Π κ · det G_S; Sample draws from the K-DPP with the importance weights.
   const scale = S.mode === 'map' ? lk : lw;
   const dist = kdpp(G, N, scale, K);
-  if (S.mode === 'map') S.sel = greedyMAPLog(G, N, lk, K).set;
+  // Greedy stops at the rank of G, so it also tells whether any K-subset has positive volume.
+  const greedy = greedyMAPLog(G, N, lk, K).set;
+  S.hasK = greedy.length === K;
+  if (S.mode === 'map') S.sel = greedy;
   else if (newDraw || !S.sel.length) S.sel = dist.sample(S.rng) ?? [];
-  S.pi = dist.pi;
+  S.pi = S.hasK ? dist.pi : null;   // no K-DPP exists without a K-subset of positive volume
   S.logP = S.sel.length === K ? dist.logProb(S.sel) : NaN;
   // Pool fit to the target (paper, Thm 5.2): θ̂ = K²ρ̂/(N−K+1), ρ̂ = N Σ (π_i/K)² with π the inclusion
   // probabilities of the importance-weighted K-DPP, i.e. the pool's estimate of the target.
@@ -364,7 +378,7 @@ function renderReadout() {
     stat('log P(S)', ok ? fmt(S.logP) : '—', 'logp') +
     stat('quality', ok ? fmt(quality(S.logp, S.sel)) : '—', 'quality') +
     stat('diversity', ok ? fmt(diversity(S.G, N, S.sel)) : '—', 'diversity') +
-    stat('pool fit', `${fmt(S.fit)} nats`, 'fit', poor ? 'warn' : '');
+    stat('pool fit', ok ? `${fmt(S.fit)} nats` : '—', 'fit', ok && poor ? 'warn' : '');
   $('#readout').title = ok ? '' : `No subset of size ${K}: the pool spans fewer than ${K} independent directions.`;
   const note = $('#fit-note');
   if (!ok) {
@@ -406,7 +420,7 @@ function renderCards() {
 // together, so the probability that the string appears is the sum over its copies.
 function inclusionOfText() {
   const byText = new Map();
-  S.pool.samples.forEach((s, i) => byText.set(s.text, (byText.get(s.text) ?? 0) + S.pi[i]));
+  S.pool.samples.forEach((s, i) => byText.set(s.text, (byText.get(s.text) ?? 0) + (S.pi ? S.pi[i] : NaN)));
   return (i) => byText.get(S.pool.samples[i].text);
 }
 
