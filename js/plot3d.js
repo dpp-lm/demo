@@ -13,10 +13,24 @@ function rod(a, b, r, color) {
 
 // "origin", written just left of the origin (a sprite, so it always faces the viewer). The selected
 // vectors are drawn from the origin, so their meeting point marks it; the word names it.
-// The unit sphere (every embedding has length 1), drawn as a faint globe.
-function globe(scale, color) {
-  const g = new THREE.Group(), mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.13, depthWrite: false });
-  const circle = (f) => { const pts = []; for (let t = 0; t <= 96; t++) pts.push(f((2 * Math.PI * t) / 96)); return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat); };
+// The unit sphere (every embedding has length 1), drawn as a faint globe. Its lines are coloured per
+// vertex so that the near side can be drawn darker than the far side (see shadeDepth).
+function globe(scale) {
+  // Drawn first and without depth writes, so points, vectors and the volume always sit on top of it.
+  const g = new THREE.Group(), mat = new THREE.LineBasicMaterial({ vertexColors: true, depthWrite: false });
+  const line = (pts, ink) => {
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(pts.length * 3), 3));
+    const l = new THREE.Line(geo, mat);
+    l.renderOrder = -1; l.userData.ink = ink;   // how dark the line is, near side (shadeDepth)
+    return l;
+  };
+  const circle = (f) => { const pts = []; for (let t = 0; t <= 96; t++) pts.push(f((2 * Math.PI * t) / 96)); return line(pts, 0.26); };
+  // The x, y, z axes: the globe's three diameters through the origin, a little darker than its lines.
+  for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
+    const pts = []; for (let t = -1; t <= 1.0001; t += 0.05) pts.push(new THREE.Vector3(d[0] * t, d[1] * t, d[2] * t));
+    g.add(line(pts, 0.6));
+  }
   for (let lat = -60; lat <= 60; lat += 30) { const y = Math.sin(lat * Math.PI / 180), r = Math.cos(lat * Math.PI / 180); g.add(circle((a) => new THREE.Vector3(r * Math.cos(a), y, r * Math.sin(a)))); }
   for (let lon = 0; lon < 180; lon += 30) { const c = Math.cos(lon * Math.PI / 180), sn = Math.sin(lon * Math.PI / 180); g.add(circle((a) => new THREE.Vector3(Math.cos(a) * c, Math.sin(a), Math.cos(a) * sn))); }
   g.scale.setScalar(scale);
@@ -91,6 +105,7 @@ export class Plot3D {
       requestAnimationFrame(loop);
       this.tick();
       this.controls.update();
+      this.shadeDepth();
       this.renderer.render(this.scene, this.camera);
     };
     loop();
@@ -138,13 +153,19 @@ export class Plot3D {
     this.group.add(originMarker(o.text ?? '#555555', this.frameH ?? this.camera.top));
     // The unit sphere: every embedding has length 1, so the completions lie on it (or inside it, when
     // scaled by quality). It is the one piece of "room" the model itself has.
-    this.group.add(globe(this.scale, o.text ?? '#555555'));
+    this.globe = globe(this.scale);
+    this.globeInk = new THREE.Color(o.text ?? '#555555');
+    this.group.add(this.globe);
     // Points.
     // Radius tied to the zoom: about 2.5 px on a 450-px-tall plot, the same as the 2-D dots.
     const sphere = new THREE.SphereGeometry(0.011 * (this.frameH ?? this.camera.top), 10, 8);
     this.mesh = new THREE.InstancedMesh(sphere, new THREE.MeshLambertMaterial(), N);
     const sel = new Set(o.sel);
-    for (let i = 0; i < N; i++) this.mesh.setColorAt(i, new THREE.Color(sel.has(i) ? o.selColor(i) : o.color(i)));
+    // Base colours; shadeDepth() fades each toward the background by its distance from the viewer.
+    this.base = Array.from({ length: N }, (_, i) => new THREE.Color(sel.has(i) ? o.selColor(i) : o.color(i)));
+    this.isSel = Array.from({ length: N }, (_, i) => sel.has(i));
+    this.bgCol = new THREE.Color(o.bg ?? '#fbfaf8');
+    for (let i = 0; i < N; i++) this.mesh.setColorAt(i, this.base[i]);
     this.group.add(this.mesh);
     // Arrows + parallelepiped edges are rebuilt every tick from current positions.
     this.dyn = new THREE.Group();
@@ -203,6 +224,34 @@ export class Plot3D {
 
   // The view turns about the origin (the point the scored volume is measured from), so the origin is
   // the centre of the frame, and the frame holds everything drawn: the points and the spanned volume.
+  // Depth shading: a point's colour moves toward the background the farther it is from the viewer
+  // (up to 60% for grey points, 35% for the selected ones), so the cloud's depth reads as it turns.
+  shadeDepth() {
+    if (!this.mesh || !this.current || !this.base) return;
+    const fwd = new THREE.Vector3(); this.camera.getWorldDirection(fwd);
+    const ds = this.current.map((p) => p.dot(fwd));
+    let lo = Infinity, hi = -Infinity; for (const d of ds) { if (d < lo) lo = d; if (d > hi) hi = d; }
+    const span = Math.max(hi - lo, 1e-6), c = new THREE.Color();
+    ds.forEach((d, i) => {
+      const t = (d - lo) / span;   // 0 nearest, 1 farthest
+      c.copy(this.base[i]).lerp(this.bgCol, (this.isSel[i] ? 0.35 : 0.6) * t);
+      this.mesh.setColorAt(i, c);
+    });
+    this.mesh.instanceColor.needsUpdate = true;
+    // The globe and its axes: near side `ink` of the way from the background to the ink colour, far side 5%.
+    if (this.globe) {
+      for (const line of this.globe.children) {
+        const pos = line.geometry.attributes.position, col = line.geometry.attributes.color;
+        for (let k = 0; k < pos.count; k++) {
+          const t = (1 - (pos.getX(k) * fwd.x + pos.getY(k) * fwd.y + pos.getZ(k) * fwd.z)) / 2;   // 1 nearest
+          c.copy(this.bgCol).lerp(this.globeInk, 0.05 + (line.userData.ink - 0.05) * t);
+          col.setXYZ(k, c.r, c.g, c.b);
+        }
+        col.needsUpdate = true;
+      }
+    }
+  }
+
   frameFor(o, s) {
     const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
     if (o.sel.length >= 2 && o.sel.length <= 3) pts.push([0, 1, 2].map((d) => o.sel.reduce((a, i) => a + pts[i][d], 0)));
