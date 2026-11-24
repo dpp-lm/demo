@@ -243,3 +243,88 @@ export function treeOf(G, N) {
   if (!t) { t = seriation(G, N); TREES.set(G, t); }
   return t;
 }
+
+
+// ---------- "Not super principled": options the default page leaves out ----------
+
+/** The note under the section title and at the end of each option's "?" text. */
+export const NP_NOTE = 'Options the default page leaves out because they have no principled justification. The paper does not use them.';
+
+/** Defaults of the section. `weight` and `len` are 'follow' or a family; `axes` is 'fit' (his default) or 'fixed'. */
+export const NP_DEFAULTS = { sharedT: true, weight: 'follow', len: 'follow', sizeQ: false, ghost: false, cone: false, axes: 'fit' };
+export const WEIGHT_FAMILIES = ['quality', 'importance', 'unit'];
+export const FAMILY_NAME = { quality: 'Quality', importance: 'Importance', unit: 'Unit' };
+
+/** True when every option of the section is at its default (a switch-off then needs no recompute). */
+export const npIsDefault = (st) => Object.keys(NP_DEFAULTS).every((k) => st[k] === NP_DEFAULTS[k]);
+
+/** The weight family the kernel uses to pick the subset: the override when one is set, else the mode's weight (Most likely κ, Sample κ/q). `xo` is the section's state or null. */
+export const kernelFamily = (xo, mode) => (xo && WEIGHT_FAMILIES.includes(xo.weight) ? xo.weight : mode === 'map' ? 'quality' : 'importance');
+
+/**
+ * The family the arrow lengths are drawn from. "Scale points by quality" off (`scaled` false) and Point size showing quality
+ * draw unit length; a Vector length choice wins next; 'follow' follows the weight override, and without one is √κ.
+ */
+export function drawnFamily(xo, mode, scaled = true) {
+  if (!scaled) return 'unit';
+  if (!xo) return 'quality';
+  if (xo.sizeQ) return 'unit';
+  if (WEIGHT_FAMILIES.includes(xo.len)) return xo.len;
+  return WEIGHT_FAMILIES.includes(xo.weight) ? xo.weight : 'quality';
+}
+
+/** log w for a weight family from log κ (`lk`) and log κ/q (`lw`): Quality κ, Importance κ/q, Unit 1. */
+export const weightScale = (fam, lk, lw) => (fam === 'unit' ? lk.map(() => 0) : fam === 'importance' ? lw : lk);
+
+/** Drawn lengths in (0, 1] from a family's log weights: √w relative to the largest; Unit is all 1. */
+export function lengthsFrom(fam, lk, lw) {
+  if (fam === 'unit') return lk.map(() => 1);
+  const ls = weightScale(fam, lk, lw), m = Math.max(...ls);
+  return ls.map((s) => Math.exp(0.5 * (s - m)));
+}
+
+/** Point radius factors 0.35 + 0.65 √κ/max √κ, so the least likely point stays visible. */
+export function pointRadii(lk) {
+  const m = Math.max(...lk);
+  return lk.map((s) => 0.35 + 0.65 * Math.exp(0.5 * (s - m)));
+}
+
+const ARROWS = { quality: '√κ arrows', importance: '√(κ/q) arrows', unit: 'unit-length arrows' };
+/** What the drawn volume shows when the arrows are not the kernel's: '' when the drawn length is the kernel's weight, else " of the … arrows" (with the muted span). */
+export function volumeSuffix(kernelFam, drawnFam) {
+  return kernelFam === drawnFam ? '' : ` <span class="muted">of the ${ARROWS[drawnFam]}</span>`;
+}
+
+/**
+ * T of the picking mode `to` after leaving `from`. With one T for both modes (`shared`) it stays. Otherwise each mode keeps its own:
+ * `Tby` is { map?, sample? } (mutated), and a mode not visited yet starts at the T in use.
+ */
+export function modeT({ shared, Tby, from, to, T }) {
+  if (shared || !Tby) return T;
+  Tby[from] = T;
+  return Tby[to] ?? T;
+}
+
+const DIFF_NAME = { mode: 'picking mode', T: 'T', K: 'K', tp: 'T′', weight: 'DPP weight', len: 'vector length' };
+/**
+ * The note under the paper-settings buttons. `now` and `preset` carry { mode, T, K, tp, weight, len, lock }. With a match: "Matches MAP, paper".
+ * Without one, after a button was pressed (`last`): "Differs from MAP, paper in T and K". Else ''.
+ */
+export function presetNote({ match, last, now }) {
+  const name = (k) => PRESETS[k].label;
+  if (match) return `Matches ${name(match)}.`;
+  if (!last) return '';
+  const p = PRESETS[last];
+  const want = { mode: p.mode, T: p.T, K: p.K, tp: p.Tprime, weight: p.weight, len: now.len, lock: now.lock };   // the page's default draws √κ in both modes, so a preset does not dictate the length
+  if (p.mode === now.mode && p.Ts.some((t) => Math.abs(t - now.T) <= 1e-6 * t)) want.T = now.T;   // any T of the paper's grid counts
+  const diff = presetDiff(now, want).filter((k) => k in DIFF_NAME).map((k) => DIFF_NAME[k]);
+  return diff.length ? `Differs from ${name(last)} in ${diff.length > 1 ? `${diff.slice(0, -1).join(', ')} and ${diff[diff.length - 1]}` : diff[0]}.` : `Matches ${name(last)}.`;
+}
+
+/** Largest absolute difference between two lists of coordinate rows (null when the shapes differ). */
+export function maxShift(A, B) {
+  if (!A || !B || A.length !== B.length) return null;
+  let m = 0;
+  for (let i = 0; i < A.length; i++) for (let d = 0; d < A[i].length; d++) m = Math.max(m, Math.abs(A[i][d] - B[i][d]));
+  return m;
+}

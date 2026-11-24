@@ -145,7 +145,7 @@ function render() {
   const seg = (name, opts, cur) => `<div class="seg small" role="radiogroup" aria-label="${name}">${opts.map((o) => `<label><input type="radio" name="g-${name}" value="${o.id}" data-f="g-${name}-${o.id}"${o.id === cur ? ' checked' : ''}${dis}><span>${o.label}</span></label>`).join('')}</div>`;
   return `<label class="toggle"><input type="checkbox" data-f="g-on"${st.on ? ' checked' : ''}><span>Color by group${q('groups', 'What are groups?')}</span></label>
     <div class="x-row"><span class="x-lab">Method${q('gmethod', 'What do the grouping methods do?')}</span>${seg('method', GROUP_METHODS, st.method)}</div>
-    <div class="x-row"><span class="x-lab" id="g-k-lab">Groups${q('gcount', 'How many groups?')}</span>
+    <div class="x-row"><span class="x-lab" id="g-k-lab">Number${q('gcount', 'How many groups?')}</span>
       <div class="stepper" role="group" aria-labelledby="g-k-lab">
         <button type="button" class="btn icon" data-f="g-minus" aria-label="Fewer groups"${dis}>−</button>
         <input type="number" id="g-k" data-f="g-k" min="${K_MIN}" max="${K_MAX}" value="${st.k}" aria-labelledby="g-k-lab"${dis}>
@@ -185,8 +185,7 @@ export function initGroups(c) {
   EXPLAIN.groups = {
     title: 'Groups',
     body: `<p>Groups only color the completions in the plot and on the cards. They never affect the subset.</p>
-      <p><b>Tree</b> cuts the average-linkage tree on $1 - \\cos$ (the one that orders the similarity matrices) into the chosen number of groups. <b>Far apart</b> uses complete linkage: no group holds two completions farther apart than the height at which it formed, so distant completions get different colors. <b>Average</b> balances that with group size. <b>k-means</b> builds compact groups around centers, so an isolated completion can join the nearest group.</p>
-      <p>Every completion gets a color; groups are numbered from the largest. Selected points are outlined.</p>`,
+      <p>Method, number and names each have their own help.</p>`,
   };
   EXPLAIN.describe = {
     title: 'Described by the language model',

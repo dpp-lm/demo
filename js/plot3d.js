@@ -135,7 +135,7 @@ export class Plot3D {
     // Fit points and (for K ≤ 3) the far corner of the spanned volume inside the unit ball.
     let m = 0;
     for (const c of o.coords) m = Math.max(m, Math.hypot(...c));
-    if (o.sel.length >= 2 && o.sel.length <= 3) {
+    if (o.sel.length >= 2 && o.sel.length <= 3 && o.volume !== false) {   // expert: no box while the cone is open
       const far = [0, 1, 2].map((d) => o.sel.reduce((acc, i) => acc + o.coords[i][d] * (o.scaled ? o.c[i] : 1), 0));
       m = Math.max(m, Math.hypot(...far));
     }
@@ -160,6 +160,9 @@ export class Plot3D {
       return new THREE.Vector3(c[0] * f, c[1] * f, c[2] * f);
     });
     if (!this.current || this.current.length !== N) this.current = this.targets.map((v) => v.clone());
+    // expert: unit positions (faint dots at length 1), moved like the points
+    this.gtar = o.ghost && o.scaled ? o.coords.map((c) => new THREE.Vector3(c[0] * s, c[1] * s, c[2] * s)) : null;
+    if (this.gtar && (!this.gcur || this.gcur.length !== N)) this.gcur = this.gtar.map((v) => v.clone());
     this.rebuildStatic();
   }
 
@@ -195,6 +198,11 @@ export class Plot3D {
     this.bgCol = new THREE.Color(o.bg ?? '#fbfaf8');
     for (let i = 0; i < N; i++) this.mesh.setColorAt(i, this.base[i]);
     this.group.add(this.mesh);
+    this.gmesh = null;
+    if (this.gtar) {   // expert
+      this.gmesh = new THREE.InstancedMesh(sphere, new THREE.MeshBasicMaterial({ color: new THREE.Color(o.ghostColor ?? '#c9c1b4'), transparent: true, opacity: 0.85, depthWrite: false }), N);
+      this.group.add(this.gmesh);
+    }
     // Arrows + parallelepiped edges are rebuilt every tick from current positions.
     this.dyn = new THREE.Group();
     this.group.add(this.dyn);
@@ -210,10 +218,19 @@ export class Plot3D {
     this.laidH = this.view.h;
     for (const hd of this.heads ?? []) hd.scale.setScalar(sc);
     this.current.forEach((p, i) => {
-      m.makeScale(sc, sc, sc).setPosition(p);   // all points the same size; colour marks the selected ones
+      const r = sc * (o.rs ? o.rs[i] : 1);   // expert: o.rs, radius from quality; otherwise all points the same size
+      m.makeScale(r, r, r).setPosition(p);
       this.mesh.setMatrixAt(i, m);
     });
     this.mesh.instanceMatrix.needsUpdate = true;
+    if (this.gmesh && this.gcur) {   // expert: a unit position is drawn only where it differs from its point
+      this.gcur.forEach((g, i) => {
+        const far = g.distanceTo(this.current[i]) >= 0.03;
+        m.makeScale(far ? sc : 0, far ? sc : 0, far ? sc : 0).setPosition(g);
+        this.gmesh.setMatrixAt(i, m);
+      });
+      this.gmesh.instanceMatrix.needsUpdate = true;
+    }
     for (const ch of [...this.dyn.children]) { this.dyn.remove(ch); ch.geometry?.dispose(); ch.material?.dispose?.(); }
     const few = o.sel.length <= 3;
     const O = new THREE.Vector3();
@@ -233,7 +250,7 @@ export class Plot3D {
     const disc = (p, r, c, side) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), new THREE.MeshBasicMaterial({ color: c, side })); m.position.copy(p); this.dyn.add(m); };
     if (o.selRing) for (const i of o.sel) { disc(this.current[i], 2.5 * r0, o.selRing, THREE.BackSide); disc(this.current[i], 1.6 * r0, o.selColor(i), THREE.FrontSide); }
     for (const i of this.marks ?? []) if (this.current[i]) disc(this.current[i], 3.4 * r0, new THREE.Color(o.text ?? '#555555'), THREE.BackSide);
-    if (o.sel.length >= 2 && few) {
+    if (o.sel.length >= 2 && few && o.volume !== false) {
       const v = o.sel.map((i) => this.current[i]);
       const n = v.length;
       const corner = (mask) => v.reduce((c, x, k) => (mask & (1 << k) ? c.add(x) : c), new THREE.Vector3());
@@ -302,7 +319,8 @@ export class Plot3D {
   frameFor(o, s, turn) {
     const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
     pts.push([0, 0, 0]);
-    const sel = o.sel.length >= 2 && o.sel.length <= 3 ? o.sel : [];
+    if (o.ghost && o.scaled) for (const c of o.coords) pts.push(c.map((x) => x * s));   // expert: unit positions
+    const sel = o.sel.length >= 2 && o.sel.length <= 3 && o.volume !== false ? o.sel : [];
     for (let mask = 3; mask < 1 << sel.length; mask++) {
       if ((mask & (mask - 1)) === 0) continue;   // single vectors are points already
       pts.push([0, 1, 2].map((d) => sel.reduce((a, i, k) => a + (mask & (1 << k) ? pts[i][d] : 0), 0)));
@@ -402,7 +420,8 @@ export class Plot3D {
   // relative to the origin, for the current view.
   projected(o, s) {
     const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
-    const sel = o.sel.length >= 2 && o.sel.length <= 3 ? o.sel : [];
+    const sel = o.sel.length >= 2 && o.sel.length <= 3 && o.volume !== false ? o.sel : [];
+    if (o.ghost && o.scaled) for (const c of o.coords) pts.push(c.map((x) => x * s));   // expert: unit positions
     for (let mask = 3; mask < 1 << sel.length; mask++) {
       if ((mask & (mask - 1)) === 0) continue;
       pts.push([0, 1, 2].map((d) => sel.reduce((acc, i, k) => acc + (mask & (1 << k) ? pts[i][d] : 0), 0)));
@@ -426,6 +445,10 @@ export class Plot3D {
     this.current.forEach((p, i) => {
       const t = this.targets[i];
       if (p.distanceToSquared(t) > 1e-10) { p.lerp(t, 0.18); moving = true; }
+    });
+    this.gcur?.forEach((p, i) => {   // expert: unit positions
+      const t = this.gtar?.[i];
+      if (t && p.distanceToSquared(t) > 1e-10) { p.lerp(t, 0.18); moving = true; }
     });
     if (moving) this.layout();
   }

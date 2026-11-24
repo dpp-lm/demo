@@ -8,10 +8,11 @@
 // Pure parts are in matrices.js and expert-lib.js; main.js reaches this file through expert.js.
 
 import { EXPLAIN } from './explain.js';
-import { dendrogramLayout, nodeGroups, weightedGram, dualInAxes, normalizeCorr, heatmapPixels, range, viridis, rampBetween, parseHex, fmtSig, weightsFromLog, rowOrder, permuted } from './matrices.js';
+import { symEig } from './dpp.js';
+import { dendrogramLayout, nodeGroups, weightedGram, submatrix, dualInAxes, normalizeCorr, heatmapPixels, range, viridis, rampBetween, parseHex, fmtSig, weightsFromLog, rowOrder, permuted } from './matrices.js';
 import { selectionLogScale, treeOf } from './expert-lib.js';
 
-const DEFAULTS = { color: 'ink', order: 'blocks', r: 32 };
+const DEFAULTS = { color: 'ink', order: 'blocks', r: 32, ls: false };
 const COLORS = [{ id: 'ink', label: 'Ink' }, { id: 'viridis', label: 'Viridis' }];
 const ORDERS = [{ id: 'blocks', label: 'Blocks' }, { id: 'groups', label: 'Groups' }, { id: 'weight', label: 'Weight' }, { id: 'pool', label: 'Pool order' }];
 const AXES = [16, 32, 64];
@@ -76,14 +77,14 @@ function render(force = false) {
   const expert = ctx.isExpert(), grp = expert ? ctx.groups() : null;
   const opts = $('.mp-opts');
   opts.hidden = !expert;
-  if (expert) opts.innerHTML = optionsHtml(grp);
+  if (expert) opts.innerHTML = optionsHtml(grp, H.selection().length);
   const sel = H.selection(), N = pool.samples.length, G = H.G();
   if (!ids.has(pool)) ids.set(pool, nextId++);
-  const sig = [ids.get(pool), wts.mode, wts.T, wts.target, wts.K, sel.join(','), expert, expert ? JSON.stringify(opt) : '', norm, grp ? `${grp.method}${grp.k}${Array.from(grp.label).join('')}` : ''].join('|');
+  const sig = [ids.get(pool), wts.mode, wts.T, wts.target, wts.K, sel.join(','), wts.ov, expert, expert ? JSON.stringify(opt) : '', norm, grp ? `${grp.method}${grp.k}${Array.from(grp.label).join('')}` : ''].join('|');
   if (!force && sig === lastSig) return;
   lastSig = sig;
 
-  const w = weightsFromLog(selectionLogScale(wts.mode, wts.logKappa, wts.logq));
+  const w = weightsFromLog(wts.scale ?? selectionLogScale(wts.mode, wts.logKappa, wts.logq));   // the weights the subset was picked with, including an override from the expert panel
   const L = weightedGram(G, N, w), tree = treeOf(G, N), { cmap, stops } = colormap();
   let order = expert ? opt.order : 'blocks';
   if (order === 'groups' && !grp) order = 'blocks';
@@ -116,6 +117,7 @@ function render(force = false) {
       <div class="mp-hover" id="mp-phover">Hover a cell to see the pair.</div>
       ${colorbar(scL, { stops })}
       <p class="mp-cap">L = diag(√w) G diag(√w), ${N} × ${N}, in ${orderText}. Red marks are the ${sel.length} selected completions.</p>
+      ${expert && opt.ls && sel.length >= 1 && sel.length <= LS_MAX ? submatrixHtml(L, N, sel, pool) : ''}
     </section>
     <section class="mp-col">
       <div class="mp-sub"><span class="fn">Pairs of embedding directions<button type="button" class="xbtn" data-x="dual" aria-label="What is the matrix of pairs of embedding directions?">?</button></span></div>
@@ -144,18 +146,32 @@ function render(force = false) {
   $('#mp-norm').onchange = (e) => { norm = e.target.checked; render(); };
 }
 
+// The selected submatrix L_S as numbers (expert mode, K <= LS_MAX): rows and columns are the selected completions, in the order of the cards.
+const LS_MAX = 6;
+function submatrixHtml(L, N, selected, pool) {
+  const sel = selected.slice().sort((a, b) => pool.samples[b].logp - pool.samples[a].logp), k = sel.length;   // the order of the cards
+  const A = submatrix(L, N, sel), det = symEig(A, k).values.reduce((a, x) => a * x, 1);
+  const head = sel.map((i, r) => `<th scope="col" title="${escapeHtml(clip(pool.samples[i].text, 60))}">${r + 1}</th>`).join('');
+  const rows = sel.map((i, r) => `<tr><th scope="row" title="${escapeHtml(clip(pool.samples[i].text, 60))}">${r + 1}</th>${Array.from({ length: k }, (_, c) => `<td${r === c ? ' class="diag"' : ''}>${fmtSig(A[r * k + c])}</td>`).join('')}</tr>`).join('');
+  return `<div class="mp-sub"><span class="fn">Selected submatrix L<sub>S</sub></span></div>
+    <div class="mp-lsw"><table class="mp-ls" aria-label="Selected submatrix, ${k} by ${k}"><thead><tr><td></td>${head}</tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="mp-cap">Rows and columns are the ${k} selected completions, numbered as the cards of the selected subset (hover a number for the text). det L<sub>S</sub> = ${fmtSig(det)}, √det L<sub>S</sub> = ${fmtSig(Math.sqrt(Math.max(0, det)))}, with w scaled so the largest is 1.</p>`;
+}
+
 // ---------------------------------------------------------------- expert options, inside the panel
 const seg = (name, list, cur) => `<div class="seg small" role="radiogroup" aria-label="${name}">${list.map((o) => { const id = o.id ?? o, label = o.label ?? o; return `<label><input type="radio" name="m-${name}" value="${id}" data-f="m-${name}-${id}"${String(id) === String(cur) ? ' checked' : ''}><span>${label}</span></label>`; }).join('')}</div>`;
 const q = (x, what) => `<button type="button" class="xbtn" data-x="${x}" aria-label="${what}">?</button>`;
-const optionsHtml = (grp) => `<div class="mp-opt"><span class="x-lab">Color${q('mcolor', 'What do the color options do?')}</span>${seg('color', COLORS, opt.color)}</div>
+const optionsHtml = (grp, K) => `<div class="mp-opt"><span class="x-lab">Color${q('mcolor', 'What do the color options do?')}</span>${seg('color', COLORS, opt.color)}</div>
   <div class="mp-opt"><span class="x-lab">Order${q('morder', 'What do the orders do?')}</span>${seg('order', ORDERS, opt.order)}${opt.order === 'groups' && !grp ? '<span class="mp-opt-note">Turn on Color by group in the expert panel.</span>' : ''}</div>
-  <div class="mp-opt"><span class="x-lab">Axes shown${q('maxes', 'How many axes are shown?')}</span>${seg('axes', AXES, opt.r)}</div>`;
+  <div class="mp-opt"><span class="x-lab">Axes shown${q('maxes', 'How many axes are shown?')}</span>${seg('axes', AXES, opt.r)}</div>
+  <div class="mp-opt"><label class="toggle"><input type="checkbox" data-f="m-ls"${opt.ls ? ' checked' : ''}><span>Print the selected submatrix${q('mls', 'What is the selected submatrix?')}</span></label>${opt.ls && K > LS_MAX ? `<span class="mp-opt-note">Shown for K up to ${LS_MAX}.</span>` : ''}</div>`;
 function onOption(e) {
   const f = e.target.dataset?.f;
   if (!f?.startsWith('m-')) return;
   if (f.startsWith('m-color-')) opt.color = f.slice(8);
   else if (f.startsWith('m-order-')) opt.order = f.slice(8);
   else if (f.startsWith('m-axes-')) opt.r = +f.slice(7);
+  else if (f === 'm-ls') opt.ls = e.target.checked;
   render(true);
 }
 
@@ -200,6 +216,7 @@ export function initMatrices(c) {
   };
   panel.innerHTML = `<div class="mp-head"><span class="mp-title fn">Similarity matrices<button type="button" class="xbtn" data-x="matrices" aria-label="What are the similarity matrices?">?</button></span><button type="button" class="mp-close" aria-label="Close the matrices">×</button></div><div class="mp-opts" hidden></div><div class="mp-body"></div>`;
   panel.querySelector('.mp-opts').addEventListener('change', onOption);
+  EXPLAIN.mls = { title: 'Selected submatrix', body: `<p>The $K \\times K$ block $\\mathbf L_S$ of $\\mathbf L$ for the selected completions, printed with its numbers (for $K \\le ${LS_MAX}$). $\\det \\mathbf L_S$ is the subset's score under the weights in use, and its square root is the volume of the arrows $\\sqrt{w_i}\\,\\phi_i$. The weights are scaled so the largest is 1.</p>` };
   EXPLAIN.mcolor = { title: 'Matrix colors', body: '<p><b>Ink</b> shades each entry from the page\'s paper color to its ink color. <b>Viridis</b> uses the viridis scale, which separates close values more but is less quiet. Both run from the smallest to the largest entry of the matrix.</p>' };
   EXPLAIN.morder = { title: 'Row order', body: '<p>The order of rows and columns of the matrix of pairs of completions. <b>Blocks</b> puts similar completions next to each other (leaf order of average-linkage clustering) and draws the tree in the margins, in group colors when Groups uses Tree. <b>Groups</b> orders by the groups of the expert panel, then by weight. <b>Weight</b> puts the largest weights first. <b>Pool order</b> is the order the completions were drawn.</p>' };
   EXPLAIN.maxes = { title: 'Axes shown', body: '<p>The matrix of pairs of embedding directions is shown in the pool\'s principal axes. This sets how many of them, from the one with the most variation. Axes with almost no variation are dropped.</p>' };

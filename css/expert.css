@@ -33,7 +33,7 @@ label.expert-switch input[type=checkbox]:focus-visible { outline: 2px solid var(
 /* ---------- shared bits of the expert menu sections ---------- */
 .x-row { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
 .x-lab { font: 12px var(--sans); color: var(--muted); }
-.toggle { white-space: normal; }
+.xsec .toggle, .matpanel .toggle { white-space: normal; }   /* not the View menu's: its width comes from nowrap text */
 .seg.small span { padding: 3px 9px; font-size: 12.5px; white-space: nowrap; }
 input:disabled + span, .btn:disabled { opacity: .45; cursor: default; }
 .stepper input { width: 44px; min-height: 28px; padding-block: 2px; }
@@ -130,3 +130,19 @@ input:disabled + span, .btn:disabled { opacity: .45; cursor: default; }
 .matpanel .seg.small span { padding: 3px 9px; font-size: 12.5px; white-space: nowrap; }
 @media (min-width: 901px) { .matpanel { max-height: min(calc(100vh - var(--bar-h, 40px) - 100px), 62vh); } }
 .mp-hover { min-height: 3.4em; }
+
+/* ---------- "Not super principled" section and the printed submatrix ---------- */
+.x-ticks { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.x-tick { border: 1px solid var(--btn-line); background: none; border-radius: 10px; padding: 0 7px; font: 12px var(--sans); color: var(--text-2); cursor: pointer; font-variant-numeric: tabular-nums; }
+.x-tick:hover { background: var(--surface-2); }
+.x-tick[aria-pressed="true"] { background: var(--btn); color: var(--text); border-color: var(--text-2); }
+.x-tick:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.xsec .pick { flex-wrap: wrap; }
+.x-val, .x-num { font-variant-numeric: tabular-nums; }
+.x-wt-note { margin: -2px 0 0; font: 12px var(--sans); color: var(--muted); }
+.mp-ls { border-collapse: collapse; font: 12.5px var(--sans); font-variant-numeric: tabular-nums; color: var(--text); }
+.mp-lsw { overflow-x: auto; max-width: 100%; }
+.mp-ls th { font-weight: 500; color: var(--muted); padding: 2px 5px; text-align: right; }
+.mp-ls td { padding: 2px 5px; text-align: right; border: 1px solid var(--border); }
+.mp-ls td.diag { background: var(--surface-2); }
+.mp-ls thead td { border: 0; }

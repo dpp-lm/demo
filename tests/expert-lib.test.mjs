@@ -238,3 +238,71 @@ test('treeOf caches the seriation per Gram matrix', async () => {
   assert.equal(t.order.length, 3);
   assert.equal(t.merges.length, 2);
 });
+
+// ---------- "Not super principled" ----------
+import { NP_NOTE, NP_DEFAULTS, npIsDefault, kernelFamily, drawnFamily, weightScale, lengthsFrom, pointRadii, volumeSuffix, modeT, presetNote, maxShift } from '../js/expert-lib.js';
+
+test('kernelFamily and drawnFamily: defaults are the paper weights and √κ; an override moves both; size and unit win for the drawing', () => {
+  assert.equal(kernelFamily(null, 'map'), 'quality');
+  assert.equal(kernelFamily(null, 'sample'), 'importance');
+  assert.equal(kernelFamily({ ...NP_DEFAULTS }, 'sample'), 'importance');
+  assert.equal(kernelFamily({ ...NP_DEFAULTS, weight: 'unit' }, 'map'), 'unit');
+  assert.equal(drawnFamily(null, 'sample'), 'quality');
+  assert.equal(drawnFamily({ ...NP_DEFAULTS }, 'sample'), 'quality');
+  assert.equal(drawnFamily({ ...NP_DEFAULTS, weight: 'importance' }, 'map'), 'importance');
+  assert.equal(drawnFamily({ ...NP_DEFAULTS, weight: 'importance', len: 'unit' }, 'map'), 'unit');
+  assert.equal(drawnFamily({ ...NP_DEFAULTS, len: 'importance', sizeQ: true }, 'map'), 'unit');
+  assert.equal(drawnFamily({ ...NP_DEFAULTS }, 'map', false), 'unit');
+  assert.equal(drawnFamily(null, 'map', false), 'unit');   // the default page too: View's "Scale points by quality" off draws unit length
+  assert.equal(drawnFamily({ ...NP_DEFAULTS, len: 'importance' }, 'map', false), 'unit');
+});
+
+test('weightScale, lengthsFrom and pointRadii', () => {
+  const lk = [-1, -4, -2], logq = [-1.5, -2, -3], lw = lk.map((x, i) => x - logq[i]);
+  assert.deepEqual(weightScale('quality', lk, lw), lk);
+  assert.deepEqual(weightScale('importance', lk, lw), lw);
+  assert.deepEqual(weightScale('unit', lk, lw), [0, 0, 0]);
+  assert.deepEqual(lengthsFrom('unit', lk, lw), [1, 1, 1]);
+  const c = lengthsFrom('quality', lk, lw);
+  assert.equal(Math.max(...c), 1);
+  assert.ok(Math.abs(c[1] / c[0] - Math.exp(-1.5)) < 1e-12);
+  const ci = lengthsFrom('importance', lk, lw);
+  assert.ok(Math.abs(ci[2] / ci[0] - Math.exp(0.5 * (lw[2] - lw[0]))) < 1e-12);
+  const r = pointRadii(lk);
+  assert.equal(Math.max(...r), 1);
+  assert.ok(r.every((x) => x > 0.35 && x <= 1));
+  assert.ok(Math.abs(r[1] - (0.35 + 0.65 * Math.exp(-1.5))) < 1e-12);
+});
+
+test('volumeSuffix: empty when the drawn length is the kernel weight, else names the arrows (Sample default keeps its wording)', () => {
+  assert.equal(volumeSuffix('quality', 'quality'), '');
+  assert.equal(volumeSuffix('importance', 'quality'), ' <span class="muted">of the √κ arrows</span>');
+  assert.match(volumeSuffix('quality', 'unit'), /unit-length arrows/);
+  assert.match(volumeSuffix('unit', 'importance'), /√\(κ\/q\) arrows/);
+});
+
+test('modeT: one T when shared; otherwise each mode keeps its own and a new mode starts at the T in use', () => {
+  assert.equal(modeT({ shared: true, Tby: null, from: 'map', to: 'sample', T: 5 }), 5);
+  const Tby = {};
+  assert.equal(modeT({ shared: false, Tby, from: 'map', to: 'sample', T: 3 }), 3);   // sample not visited: starts at 3
+  assert.equal(modeT({ shared: false, Tby, from: 'sample', to: 'map', T: 0.8 }), 3);
+  assert.equal(modeT({ shared: false, Tby, from: 'map', to: 'sample', T: 3 }), 0.8);
+  assert.deepEqual(Tby, { map: 3, sample: 0.8 });
+});
+
+test('presetNote: matches, differs in the named settings, or nothing before a button was pressed', () => {
+  const now = { mode: 'map', T: 3, K: 3, tp: 1.5, weight: 'quality', len: 'follow', lock: true };
+  assert.equal(presetNote({ match: 'map', last: 'map', now }), 'Matches MAP, paper.');
+  assert.equal(presetNote({ match: null, last: null, now }), '');
+  assert.equal(presetNote({ match: null, last: 'map', now: { ...now, T: 4 } }), 'Differs from MAP, paper in T.');
+  assert.equal(presetNote({ match: null, last: 'map', now: { ...now, T: 4, K: 5, weight: 'unit' } }), 'Differs from MAP, paper in T, K and DPP weight.');
+  assert.equal(presetNote({ match: null, last: 'samp', now: { ...now, T: 1 } }), 'Differs from Samp, paper in picking mode, T, T′ and DPP weight.');
+});
+
+test('maxShift, npIsDefault, NP_NOTE', () => {
+  assert.equal(maxShift([[0, 1], [2, 3]], [[0, 1.5], [2, 3]]), 0.5);
+  assert.equal(maxShift([[0]], [[0], [1]]), null);
+  assert.ok(npIsDefault({ ...NP_DEFAULTS }));
+  assert.ok(!npIsDefault({ ...NP_DEFAULTS, cone: true }));
+  assert.ok(!NP_NOTE.includes('—'));
+});

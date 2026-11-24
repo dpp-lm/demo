@@ -73,3 +73,13 @@ routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T�
   heatmaps are the starting point). Design it to fit the demo: house colours, compact, no hand-picking of the subset.
 - When K is too large for the pool, explain it from the spectrum (effective dimension), not a threshold.
 
+
+## Fork: expert tools
+Our fork adds a switch, "Expert tools", in the bottom bar. With it off the page behaves as upstream. With it on, a panel under the prompt and subset controls has these sections (code in `js/expert.js`, one file per tool):
+- Extra models and embeddings: the expert switch adds what the GPU server offers to the Settings selects (`js/expert.js`); there is no panel section for them.
+- Groups: color the completions by cluster, with names and a legend over the plot (`js/groups.js`).
+- Not super principled: the options listed above under "Cut (not doing)" that have no principled justification, kept here and marked as such: paper settings and paper T values, one T per picking mode, an override of the DPP weight, the vector length, point size for quality, unit positions, opening the cone, and fixed axes (`js/unprincipled.js`).
+
+Also in the fork:
+- The similarity matrices (primal L and dual C) have a Matrices button in the default view (`js/matrix-panel.js`). With the switch on they get color, order, axes and printed-submatrix options.
+- Most likely and Sample draw the same cloud: the arrow lengths are √κ in both modes, so switching changes the selected set and not the picture.

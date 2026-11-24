@@ -15,6 +15,7 @@
 import { EXPLAIN } from './explain.js';
 import { serverExtras, queueText, newRequestId } from './expert-lib.js';
 import { groupsSection, initGroups, groupColors, groupInfo } from './groups.js';
+import { principledSection, initUnprincipled, npState, npModeT } from './unprincipled.js';
 import { initMatrices, matricesRefresh, matricesReset, panelBottom as matPanelBottom } from './matrix-panel.js';
 
 const KEY = 'dpp-expert';
@@ -34,6 +35,10 @@ export const poolChanged = () => { if (on) listeners.pool.forEach((f) => f()); }
 export const selectionChanged = () => { matricesRefresh(); if (on) listeners.selection.forEach((f) => f()); };   // the matrices panel is in the default view too
 /** Group colors for the points and card dots, or null (his colors) with the switch off or Groups off. */
 export const pointColors = () => (on ? groupColors() : null);
+/** The "Not super principled" options while the switch is on, else null (the default page). */
+export const xopt = () => (on ? npState() : null);
+/** T of the picking mode `to` after leaving `from`: one T unless the switch is on and each mode keeps its own. */
+export const xModeT = (from, to, T) => (on ? npModeT(from, to, T) : T);
 /** Top of the similarity-matrices panel when it is open on a wide screen (viewport pixels), else null. */
 export const panelBottom = matPanelBottom;
 
@@ -45,7 +50,7 @@ const $ = (s) => document.querySelector(s);
 export function noteStatus(B, body) {
   B.statusBody = body ?? null;
   B.queue = !!(body && typeof body.queue === 'object' && body.queue);
-  if (on) { applyServerExtras(); renderPanel(); }
+  if (on) applyServerExtras();
 }
 
 /**
@@ -111,40 +116,16 @@ const CLOSED_KEY = 'dpp-expert-closed';
 const readClosed = () => { try { return new Set(JSON.parse(localStorage.getItem(CLOSED_KEY) ?? '[]')); } catch { return new Set(); } };
 const writeClosed = (set) => { try { localStorage.setItem(CLOSED_KEY, JSON.stringify([...set])); } catch { /* storage may be blocked */ } };
 
-/** A select that mirrors one of the page's own selects (Settings) and drives it. `data-mirror` names the original's id. */
-const mirror = (id, label, x) => {
-  const src = $(`#${id}`);
-  if (!src) return '';
-  const opts = [...src.options].map((o) => `<option value="${escapeHtml(o.value)}"${o.value === src.value ? ' selected' : ''}>${escapeHtml(o.textContent)}</option>`).join('');
-  return `<label class="x-row"><span class="x-lab">${label}<button type="button" class="xbtn" data-x="${x}" aria-label="About ${label.toLowerCase()}">?</button></span><select class="x-select" data-mirror="${id}">${opts}</select></label>`;
-};
-
-registerSection({
-  id: 'models', title: 'Models and embeddings',
-  render: () => {
-    const B = SERVER(), x = serverExtras(B.statusBody, { known: ['qwen3-emb', 'own'], defKey: 'qwen3-14b' });
-    const rows = [mirror('model', 'Model', 'model'), mirror('embedder', 'Embedding', 'embedder'), mirror('target', 'Target quality', 'target')];
-    if (!B.statusBody) rows.push('<p class="x-note">The GPU server did not answer, so its extra models and embeddings are not listed.</p>');
-    else if (!x.embedders.length && !x.models.length) rows.push('<p class="x-note">The GPU server offers no models or embeddings beyond the default ones.</p>');
-    return rows.join('');
-  },
-  on(e) {
-    const id = e.target.dataset?.mirror;
-    if (e.type !== 'change' || !id) return;
-    const src = $(`#${id}`);
-    src.value = e.target.value;
-    src.dispatchEvent(new Event('change', { bubbles: true }));   // the page reacts as if Settings had been used
-  },
-});
 registerSection(groupsSection);
+registerSection(principledSection);   // last
 
 function renderPanel() {
   const body = $('#expert-body');
   if (!body || !on) return;
-  const focus = document.activeElement?.dataset?.f ?? document.activeElement?.dataset?.mirror;
+  const focus = document.activeElement?.dataset?.f;
   const closed = readClosed();
   body.innerHTML = SECTIONS.map((s) => `<details class="xsec" data-sec="${s.id}"${closed.has(s.id) ? '' : ' open'}><summary>${s.title}</summary><div class="xsec-body">${s.render()}</div></details>`).join('');
-  if (focus) (body.querySelector(`[data-f="${focus}"]`) ?? body.querySelector(`[data-mirror="${focus}"]`))?.focus();
+  if (focus) body.querySelector(`[data-f="${focus}"]`)?.focus();
   fitPanel();
 }
 
@@ -180,7 +161,7 @@ export function initExpert(hooks) {
   H = hooks;
   EXPLAIN.expert = {
     title: 'Expert tools',
-    body: `<p>Extra controls for people who know the paper. They appear in a panel under the prompt and subset controls: the models and embeddings the GPU server offers, grouping of the completions, and further tools as they are added. The similarity matrices get extra options in their own panel.</p>
+    body: `<p>Extra controls for people who know the paper. A panel under the prompt and subset controls groups the completions and has the options the default page leaves out. The similarity matrices get extra options in their own panel. Extra models and embeddings the GPU server offers appear in Settings.</p>
       <p>Turning the switch off puts every setting back to the default page.</p>`,
   };
   EXPLAIN.gmethod = { title: 'Grouping method', body: '<p>How the completions are split into groups. All methods use only the similarity between completions.</p><ul><li><b>Tree</b> cuts the average-linkage tree on $1 - \\cos$, the one that orders the similarity matrices.</li><li><b>Far apart</b> uses complete linkage: no group holds two completions farther apart than the height at which it formed.</li><li><b>Average</b> uses average linkage, which balances that with group size.</li><li><b>k-means</b> builds compact groups around centers, so an isolated completion can join the nearest group.</li></ul>' };
@@ -204,6 +185,7 @@ export function initExpert(hooks) {
   // The tools: the page's own bits of state they read, and how they redraw.
   const ctx = { H, isExpert, rerender: renderPanel, onPool, onSelection, onOff, groups: groupInfo };
   initGroups(ctx);
+  initUnprincipled(ctx);
   initMatrices(ctx);
   for (const type of ['change', 'click']) $('#expert-body').addEventListener(type, (e) => SECTIONS.forEach((s) => s.on?.(e)));
   $('#expert-body').addEventListener('toggle', (e) => {
@@ -213,8 +195,7 @@ export function initExpert(hooks) {
     if (d.open) c.delete(d.dataset.sec); else c.add(d.dataset.sec);
     writeClosed(c);
   }, true);
-  // The mirrored selects follow Settings, whoever changes them.
-  for (const id of ['model', 'embedder', 'target']) $(`#${id}`)?.addEventListener('change', () => setTimeout(renderPanel, 0));
+  $('#scale-toggle').addEventListener('change', () => setTimeout(renderPanel, 0));   // the Vector length select follows View
   window.addEventListener('resize', fitPanel);
   new ResizeObserver(fitPanel).observe(document.querySelector('.dock'));
   if (read()) setOn(true, { save: false });

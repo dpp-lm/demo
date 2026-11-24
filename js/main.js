@@ -1,9 +1,11 @@
 import * as d3 from 'd3';
 import { eigSym, kdpp, greedyMAPLog, quality, diversity, mulberry32 } from './dpp.js';
 import { Plot3D } from './plot3d.js';
+import { openCone } from './layout.js';   // expert:
 import { initExplainers } from './explain.js';
 import { authEnabled, getAuth, signIn, signOut, finishSignIn } from './hfauth.js';
-import { initExpert, noteStatus, queueWatch, poolChanged, selectionChanged, pointColors, panelBottom } from './expert.js';   // expert:
+import { initExpert, noteStatus, queueWatch, poolChanged, selectionChanged, pointColors, panelBottom, xopt, xModeT } from './expert.js';   // expert:
+import { kernelFamily, drawnFamily, weightScale, lengthsFrom, pointRadii, volumeSuffix } from './expert-lib.js';   // expert:
 
 const $ = (s) => document.querySelector(s);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -257,10 +259,13 @@ function recompute({ newDraw = true } = {}) {
   const lk = logKappa();
   const lw = lk.map((x, i) => x - S.logq[i]);
   // Most likely scores sets by Π κ · det G_S; Sample draws from the K-DPP with the importance weights.
-  const scale = S.mode === 'map' ? lk : lw;
+  // expert: "Not super principled" can replace the weight that picks the subset (not the pool-fit computation below).
+  const ov = xopt()?.weight ?? 'follow';
+  const scale = ov !== 'follow' ? weightScale(ov, lk, lw) : S.mode === 'map' ? lk : lw;
+  S.scale = scale; S.ov = ov;
   const dist = kdpp(G, N, scale, K);
   // Greedy stops at the rank of G, so it also tells whether any K-subset has positive volume.
-  const greedy = greedyMAPLog(G, N, lk, K).set;
+  const greedy = greedyMAPLog(G, N, ov !== 'follow' ? scale : lk, K).set;
   S.hasK = greedy.length === K;
   if (S.mode === 'map') S.sel = greedy;
   else if (newDraw || !S.sel.length) S.sel = dist.sample(S.rng) ?? [];
@@ -268,14 +273,16 @@ function recompute({ newDraw = true } = {}) {
   S.logP = S.sel.length === K ? dist.logProb(S.sel) : NaN;
   // Pool fit to the target (paper, Thm 5.2): θ̂ = K²ρ̂/(N−K+1), ρ̂ = N Σ (π_i/K)² with π the inclusion
   // probabilities of the importance-weighted K-DPP, i.e. the pool's estimate of the target.
-  const piW = S.mode === 'sample' ? dist.pi : kdpp(G, N, lw, K).pi;
+  const piW = S.mode === 'sample' && ov === 'follow' ? dist.pi : kdpp(G, N, lw, K).pi;   // expert: ov
   let s2 = 0; for (const p of piW) s2 += (p / K) ** 2;
   S.fit = (K * K * N * s2) / (N - K + 1);
   // Drawn length of each point: √κ relative to the largest, in both modes (the mode changes which points are
   // selected, not where the points are drawn). Most likely scores exactly these arrows; Sample scores them
   // reweighted by 1/p°_{T′}.
-  const m = Math.max(...lk);
-  S.c = lk.map((s) => Math.exp(0.5 * (s - m)));
+  // expert: Vector length and Point size choose another family (default: √κ).
+  const xo = xopt();
+  S.c = lengthsFrom(xo ? drawnFamily(xo, S.mode) : 'quality', lk, lw);
+  S.rs = xo?.sizeQ ? pointRadii(lk) : null;
   S.proj = project();
   render();
 }
@@ -284,13 +291,15 @@ function recompute({ newDraw = true } = {}) {
 // drawn parallelepiped is exactly the volume being scored; the remaining axes are the main directions
 // of what is left. Otherwise plain uncentred PCA. Computed from G alone. Successive views are aligned
 // by a rotation (Kabsch) so the plot turns smoothly instead of jumping.
+const coneOpen = () => !!xopt()?.cone && S.dims > 1;   // expert: "Open the cone" has an effect from 2-D on
 function project() {
   const N = S.logp.length, G = S.G, sel = S.sel, k = sel.length;
   const vals = S.eig.values, vecs = S.eig.vectors;
   const tot = vals.reduce((a, b) => a + Math.max(0, b), 0);
   const frac = vals.slice(0, 8).map((v) => Math.max(0, v) / tot);
   let coords, fitted = false;
-  if (k >= 1 && k <= 3 && k <= S.dims && k === S.K) {
+  const fixedAxes = xopt()?.axes === 'fixed';   // expert: plain uncentered PCA for every K
+  if (!fixedAxes && k >= 1 && k <= 3 && k <= S.dims && k === S.K) {
     // Cholesky of G_SS, then a_i = R⁻¹ G_{S,i}.
     const R = new Float64Array(k * k);
     let ok = true;
@@ -321,9 +330,13 @@ function project() {
   }
   if (!coords) coords = Array.from({ length: N }, (_, n) => [0, 1, 2].map((d) => Math.sqrt(Math.max(0, vals[d])) * vecs[d][n]));
   // Align to the previous view of the same pool with a proper rotation of the drawn dimensions.
-  const prev = S.proj?.pool === S.pool ? S.proj.coords : null;
+  // expert: fixed axes are never rotated, so the cloud does not move at all.
+  const prev = S.proj?.pool === S.pool && !fixedAxes ? S.proj.coords : null;
   if (prev) coords = kabsch(coords, prev, S.dims);
-  return { coords, frac, fitted, pool: S.pool };
+  // expert: Open the cone changes only what is drawn; the next view still aligns to the unopened coordinates.
+  const cone = coneOpen() ? openCone(coords.map((c) => Array.from(c).slice(0, S.dims))) : null;
+  const shown = cone ? cone.coords.map((c) => [c[0], c[1] ?? 0, c[2] ?? 0]) : null;
+  return { coords, frac, fitted, pool: S.pool, shown, coneS: cone?.s ?? null };
 }
 function kabsch(P, Q, d) {
   // Rotation R (d×d, det +1) minimising Σ‖R p_i − q_i‖² over the first d coordinates.
@@ -411,9 +424,16 @@ function renderReadout() {
 function renderVolHint() {
   const el = $('#vol-hint');
   if (S.sel.length > 3 || S.sel.length < 2) { el.innerHTML = S.sel.length > 3 ? '<span class="muted">volume drawn for K ≤ 3</span>' : ''; return; }
+  if (coneOpen()) {   // expert: the box assumes the origin as a vertex, so it is not drawn while the cone is open
+    const s = S.proj.coneS ?? 1, f = S.dims === 3 ? s * s : s;
+    el.innerHTML = `<span class="muted">cone opened: widths ×${s.toFixed(2)}, every ${S.dims === 3 ? 'volume' : 'area'} ×${f.toFixed(2)}; the box is not drawn</span>`;
+    return;
+  }
+  // expert: what the drawn volume belongs to when the drawn length is not the kernel's weight (default: Sample draws the √κ arrows)
+  const xo = xopt(), suffix = volumeSuffix(kernelFamily(xo, S.mode), drawnFamily(xo, S.mode, $('#scale-toggle').checked));   // unit-length arrows when View's scaling is off
   el.innerHTML = S.proj.fitted
-    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg><span class="fn">spanned volume<button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button></span>${S.mode === 'sample' ? ' <span class="muted">of the √κ arrows</span>' : ''}`
-    : `<span class="muted">volume needs ${S.sel.length}-D</span>`;
+    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg><span class="fn">spanned volume<button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button></span>${suffix}`
+    : `<span class="muted">${xo?.axes === 'fixed' ? 'on fixed axes the box is a projection' : `volume needs ${S.sel.length}-D`}</span>`;
 }
 
 // A completion that hit the max-token limit, rather than ending with the end-of-text token: said in words.
@@ -508,6 +528,7 @@ class Plot2D {
     const svg = d3.select(el).append('svg').attr('viewBox', `0 0 ${this.W} ${this.H}`);
     this.gOrigin = svg.append('g');
     this.gOrigin.append('path').attr('stroke', css('--muted')).attr('stroke-width', 1);
+    this.gGhost = svg.append('g');   // expert: unit positions
     this.gPara = svg.append('g');
     this.gArrow = svg.append('g');
     this.gDot = svg.append('g');
@@ -528,7 +549,7 @@ class Plot2D {
       .on('click', (ev) => inspect(nearest(ev, ev.pointerType === 'mouse' ? 14 : 28)));
   }
   dataXY(i, scale) {
-    const c = S.proj.coords[i];
+    const c = (S.proj.shown ?? S.proj.coords)[i];   // expert: shown = the opened cone
     return S.dims === 1 ? [c[0] * scale, this.jit[i] * 1.6] : [c[0] * scale, c[1] * scale];
   }
   fit(points) {
@@ -553,9 +574,10 @@ class Plot2D {
     const sel = new Set(S.sel);
     const idx = d3.range(N);
     const posD = idx.map((i) => (dims === 1 ? [this.dataXY(i, scaled ? S.c[i] : 1)[0], this.dataXY(i, 1)[1]] : this.dataXY(i, scaled ? S.c[i] : 1)));
-    const vol = dims === 2 && S.sel.length === 2 && S.proj.fitted;
+    const vol = dims === 2 && S.sel.length === 2 && S.proj.fitted && !coneOpen();   // expert: no box while the cone is open
     const volD = vol ? parallelotope([0, 0], S.sel.map((i) => posD[i])) : { faces: [], corners: [] };
-    this.fit([...posD, ...volD.corners.map((c) => c.p)]);
+    const ghostD = xopt()?.ghost && scaled ? idx.map((i) => this.dataXY(i, 1)) : [];   // expert: unit positions
+    this.fit([...posD, ...ghostD, ...volD.corners.map((c) => c.p)]);
     const px = (q) => [this.x(q[0]), this.y(q[1])];
     this.pos = posD.map(px);
     const ox = this.x(0), oy = this.y(0);
@@ -573,11 +595,14 @@ class Plot2D {
       .attr('fill', css('--text')).attr('fill-opacity', 0.04)
       .attr('stroke', css('--text-2')).attr('stroke-opacity', 0.7).attr('stroke-width', 1).attr('stroke-linejoin', 'round')
       .transition(t).attr('d', face);
+    const gp = ghostD.map(px), gi = idx.filter((i) => ghostD.length && Math.hypot(gp[i][0] - this.pos[i][0], gp[i][1] - this.pos[i][1]) > 2);   // expert: only where it differs from the point
+    this.gGhost.selectAll('circle').data(gi, (i) => i).join('circle').attr('r', 1.6).attr('fill', css('--ghost')).attr('opacity', 0.8)
+      .transition(t).attr('cx', (i) => gp[i][0]).attr('cy', (i) => gp[i][1]);
     const xc = pointColors();   // expert: group colors, selected points larger with an outline
     this.gDot.selectAll('circle').data(idx).join('circle')
       .attr('fill', (i) => (xc ? (sel.has(i) ? xc.selColor(i) : xc.color(i)) : sel.has(i) ? css('--accent') : css('--ink')))
       .attr('stroke', (i) => (xc && sel.has(i) ? css('--text') : css('--surface'))).attr('stroke-width', (i) => (xc && sel.has(i) ? 1.4 : 0.75))
-      .attr('r', (i) => (xc && sel.has(i) ? 3.2 : 1.6))
+      .attr('r', (i) => (xc && sel.has(i) ? 3.2 : 1.6) * (S.rs ? S.rs[i] : 1))   // expert: S.rs, point size shows quality
       .sort((a, b) => sel.has(a) - sel.has(b))
       .transition(t).attr('cx', (i) => this.pos[i][0]).attr('cy', (i) => this.pos[i][1]);
   }
@@ -611,7 +636,8 @@ const plot = {
         });
       }
       this.p3.update({
-        coords: S.proj.coords, c: S.c, sel: S.sel, scaled: $('#scale-toggle').checked, fitted: S.proj.fitted,
+        coords: S.proj.shown ?? S.proj.coords, c: S.c, sel: S.sel, scaled: $('#scale-toggle').checked, fitted: S.proj.fitted,
+        rs: S.rs, ghost: !!xopt()?.ghost, volume: !coneOpen(), ghostColor: css('--ghost'),   // expert:
         ...colorHooks(), accent: css('--accent'), text: css('--text-2'), muted: css('--muted'), bg: css('--surface'),
       });
     } else this.p2.update();
@@ -962,10 +988,13 @@ function syncFieldNotes() {
 }
 
 // ---------------------------------------------------------------- wiring
-function setMode(m) {
+function setMode(m, { recompute: go = true } = {}) {
+  const T0 = S.T;
+  S.T = xModeT(S.mode, m, S.T);   // expert: each mode may keep its own T
+  if (S.T !== T0) { $('#T-slider').value = tToSlider(S.T); $('#T-out').textContent = fmtT(S.T); }
   S.mode = m;
   document.querySelectorAll('.step-2 .pick-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
-  recompute({ newDraw: true });
+  if (go) recompute({ newDraw: true });
 }
 function setK(v) {
   if (!S.pool) return;
@@ -1039,7 +1068,7 @@ function wire() {
   $('#K').onchange = () => setK($('#K').value);
   $('#K-minus').onclick = () => setK(S.K - 1);
   $('#K-plus').onclick = () => setK(S.K + 1);
-  $('#scale-toggle').onchange = () => { plot.update(); renderLabels(); };
+  $('#scale-toggle').onchange = () => { plot.update(); renderLabels(); renderVolHint(); };   // expert: the hint follows the toggle
   $('#label-toggle').onchange = () => renderLabels();
   // Pop-up panels close on an outside click or Escape.
   const pops = ['#viewmenu', '#specmenu', '#adv', '#exmenu'];
@@ -1105,7 +1134,20 @@ function wire() {
     refresh: () => { const keep = $('#model').value; fillModels(); $('#model').value = BACKENDS.some((b) => b.id === keep) ? keep : 'server'; onSettings(); },
     pool: () => S.pool, G: () => S.G, selection: () => S.sel, eig: () => S.eig, embedder: () => S.view?.embedder,
     redraw: () => { if (S.pool) { plot.update(); renderCards(); } }, mark: (i, j) => plot.mark(i, j),
-    weights: () => ({ logp: S.logp, logq: S.logq, logKappa: S.pool ? logKappa() : null, T: S.T, mode: S.mode, target: S.target, K: S.K }),
+    weights: () => ({ logp: S.logp, logq: S.logq, logKappa: S.pool ? logKappa() : null, scale: S.scale, ov: S.ov ?? 'follow', T: S.T, mode: S.mode, target: S.target, K: S.K, dims: S.dims }),
+    recompute: (newDraw) => recompute({ newDraw }),
+    ctrl: {
+      tp: () => readConfig().Tprime,
+      // Set mode, T, K, T′ and the target together and let the page react once (T′ goes through the settings, which pick the stored pool).
+      apply({ mode, T, K, Tprime, target }) {
+        if (target && target !== S.target) { S.target = target; $('#target').value = target; advSum(); }
+        if (mode && mode !== S.mode) setMode(mode, { recompute: false });
+        if (T != null) { S.T = T; $('#T-slider').value = tToSlider(T); $('#T-out').textContent = fmtT(T); }
+        if (K != null) { S.K = S.pool ? clampInt(K, 1, Math.min(20, S.logp.length - 1)) : K; $('#K').value = S.K; }
+        if (S.pool) recompute({ newDraw: true });
+        if (Tprime != null && Math.abs(Tprime - readConfig().Tprime) > 1e-9) { $('#live-Tp').value = Tprime.toFixed(1); $('#live-Tp').dispatchEvent(new Event('change')); }
+      },
+    },
   });
   let rt = 0;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (!S.pool) return; plot.reset(); render(); }, 200); });
