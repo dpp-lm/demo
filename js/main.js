@@ -84,7 +84,6 @@ async function showCached(entry, cfg) {
 
 function setPool(pool, phi, cfg, { cached = false } = {}) {
   $('#labels').innerHTML = '';
-  document.body.classList.remove('empty');
   S.pinned = -1;
   S.pool = pool;
   S.cfg = cfg;
@@ -104,7 +103,8 @@ function setPool(pool, phi, cfg, { cached = false } = {}) {
   $('#K').max = String(Math.min(20, N - 1));
   $('#K').value = S.K;
   S.rng = mulberry32(12345);
-  if (cached) $('#live-status').textContent = pool.mem || CACHE.some((e) => e.mem?.pool === pool) ? 'Your earlier run with these settings.' : 'Precomputed with these settings.';
+  S.poolNote = !cached ? '' : CACHE.some((e) => e.mem?.pool === pool) ? 'Your earlier run with these settings.' : 'Precomputed with these settings.';
+  if (cached) $('#live-status').textContent = S.poolNote;
   plot.reset();
   recompute({ newDraw: true });
 }
@@ -120,15 +120,6 @@ function stageMsg(kind, { title = '', detail = '', actions = '' } = {}) {
     (detail ? `<p class="d">${detail}</p>` : '') + (actions ? `<p class="a">${actions}</p>` : '');
 }
 
-// No pool for the current configuration: show nothing rather than something else.
-function clearPool() {
-  S.pool = null; S.cfg = null; S.sel = [];
-  document.body.classList.add('empty');
-  $('#labels').innerHTML = '';
-  $('#selected').innerHTML = '';
-  $('#readout').innerHTML = '';
-  $('#stage-note').textContent = '';
-}
 
 // ---------------------------------------------------------------- inference
 function recompute({ newDraw = true } = {}) {
@@ -546,10 +537,11 @@ function readConfig() {
 // Called whenever any part of the configuration changes.
 function configChanged() {
   const cfg = readConfig();
-  if (S.cfg && sameCfg(S.cfg, cfg)) return;
+  if (S.cfg && sameCfg(S.cfg, cfg)) { $('#live-status').textContent = S.poolNote ?? ''; return; }
   const hit = CACHE.findLast((e) => sameCfg(e, cfg));   // your latest run first
-  if (hit) { stageMsg(null); showCached(hit, cfg).catch(() => { clearPool(); emptyMsg(cfg); }); return; }
-  clearPool();
+  if (hit) { stageMsg(null); showCached(hit, cfg).catch(() => {}); return; }
+  // Nothing precomputed for these settings: keep the current plot until ↑ is pressed, and say so.
+  if (S.pool) { $('#live-status').textContent = 'The plot is from earlier settings. Press ↑.'; return; }
   emptyMsg(cfg);
   $('#live-status').textContent = '';
 }
@@ -613,7 +605,8 @@ async function runLive() {
     CACHE.push({ ...cfg, mem: { pool, phi } });   // kept for this visit, so going back to these settings shows it again
     setPool(pool, phi, cfg);
     stageMsg(null);
-    $('#live-status').textContent = `Sampled in ${secs()}s.`;
+    S.poolNote = `Sampled in ${secs()}s.`;
+    $('#live-status').textContent = S.poolNote;
   } catch (e) {
     if (e.name === 'AbortError') {
       if (S.pool) stageMsg(null); else emptyMsg(cfg);
