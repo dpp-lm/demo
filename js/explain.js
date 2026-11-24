@@ -43,7 +43,8 @@ export const EXPLAIN = {
   fit: {
     title: 'Pool fit',
     body: `<p>How well these $N$ completions can stand in for all strings when aiming at the target at this $T$. The paper's Theorem 5.2 bounds how far the sets <b>Sample</b> draws are from the target:
-      $$\\mathrm{KL} \\le \\theta = \\frac{K^2 \\rho}{N - K + 1}, \\qquad \\rho = \\mathbb E_{y \\sim p^{\\circ}_{T'}}\\Big[\\Big(\\frac{\\pi_1(y)}{p^{\\circ}_{T'}(y)}\\Big)^2\\Big],$$
+      $$\\mathrm{KL} \\le \\theta = \\frac{K^2 \\rho}{N - K + 1},$$
+      $$\\rho = \\mathbb E_{y \\sim p^{\\circ}_{T'}}\\Big[\\Big(\\frac{\\pi_1(y)}{p^{\\circ}_{T'}(y)}\\Big)^2\\Big],$$
       where $\\pi_1(y)$ is the probability that a set drawn from the target contains $y$, divided by $K$. The page estimates $\\rho$ from the completions' inclusion probabilities and shows $\\theta$ in nats.</p>
       <p>It is an <b>optimistic</b> estimate: it can only see completions the pool contains. Large values mean the pool is a poor match: Sample may be far from its target, and Most likely may miss sets the target favours. Moving $T$ toward $T'$, or sampling at a $T'$ closer to $T$, helps.</p>`,
   },
