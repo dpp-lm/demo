@@ -20,3 +20,13 @@
 - Modal and the Space use MiniLM-L6; give them the same embedders as the server.
 - Check the LM's own states against Qwen3-Embedding (the picks on the joke and sorting presets)
   before relying on them.
+
+## Later (from the review of Manuel's demo)
+- Clustering: colour completions by cluster, and/or order completions by cluster (Manuel's demo has
+  four methods, a group count and LLM-written group names). Decide whether any of it is faithful and
+  useful enough; colour must follow the house style.
+- Views of the similarity structure: show the embedding space's notion of similarity directly
+  (the spectrum; the distribution of pairwise similarities as a whole, not thresholded; possibly
+  a monochrome kernel matrix ordered without clustering). Manuel's primal/dual heatmaps are cut as built.
+- When K is too large for the pool, explain it from the spectrum (effective dimension), not a threshold.
+
