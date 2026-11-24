@@ -32,7 +32,7 @@
     <a href="https://arxiv.org/abs/2611.25003" target="_blank" rel="noopener">Paper ↗</a>
   </nav>
 </header>
-<p class="wip" role="note"><b>Work in progress.</b> This demo is still being built. For now, only small models that run in your browser are available.</p>
+<p class="wip" role="note"><b>Work in progress.</b> This demo is still being built.</p>
 
 <main class="app">
   <aside class="controls" aria-label="Controls">
@@ -45,14 +45,14 @@
             <div class="menu list" id="examples" role="menu"></div>
           </details>
           <details class="chipmenu" id="adv">
-            <summary class="chip" aria-label="Model and sampling settings"><span id="adv-sum"></span></summary>
+            <summary class="chip" aria-label="Settings"><span id="adv-sum"></span></summary>
             <div class="menu">
               <label class="field model-field"><span class="lab">Model</span><select id="model"></select></label>
               <p class="menu-note" id="model-note"></p>
-              <p class="menu-note cache-row"><span id="cache-info"></span> <button type="button" id="cache-clear" class="link" hidden>Clear</button></p>
-              <label class="field"><span class="lab">Samples N</span><input id="live-N" type="number" min="10" max="200" step="10" value="30" inputmode="numeric"></label>
+              <label class="field model-field"><span class="lab">Embedding</span><select id="embedder"></select></label>
+              <label class="field"><span class="lab">Samples N</span><input id="live-N" type="number" min="2" max="200" step="10" value="200" inputmode="numeric"></label>
               <label class="field"><span class="lab">Temp. T′ <button type="button" class="xbtn" data-x="Tprime" aria-label="What is T′?">?</button></span><input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0" inputmode="decimal"></label>
-              <label class="field"><span class="lab">Max tokens</span><input id="live-max" type="number" min="8" max="640" step="8" value="64" inputmode="numeric"></label>
+              <label class="field"><span class="lab">Max tokens</span><input id="live-max" type="number" min="8" max="256" step="8" value="128" inputmode="numeric"></label>
             </div>
           </details>
           <span class="grow"></span>
@@ -60,7 +60,6 @@
           <button id="live-go" class="sendbtn" aria-label="Generate completions" title="Generate (Enter)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg></button>
         </div>
       </div>
-      <div class="progress" id="progress" hidden><div class="bar"><span id="progress-fill"></span></div><p id="progress-last" class="last"></p></div>
       <p id="live-status" class="status" aria-live="polite">Runs on your device; the first run downloads ~0.5&nbsp;GB.</p>
     </section>
 
@@ -116,8 +115,6 @@
         <div class="menu">
           <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Label selected points</span></label>
           <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale points by quality</span> <button type="button" class="xbtn" data-x="scale" aria-label="What does scaling do?">?</button></label>
-          <label class="field" id="embed-field"><span class="lab">Similarity <button type="button" class="xbtn" data-x="embed" aria-label="What is the similarity?">?</button></span><select id="embed"></select></label>
-          <label class="field" id="layer-field" hidden><span class="lab row"><span>Layer</span><output id="layer-out"></output></span><input type="range" id="layer" min="0" max="0" step="1" value="0" aria-label="Layer"></label>
         </div>
       </details>
     </div>

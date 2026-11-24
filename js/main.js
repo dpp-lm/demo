@@ -5,7 +5,6 @@ import {
 } from './dpp.js';
 import { Plot3D } from './plot3d.js';
 import { initExplainers } from './explain.js';
-import { MODELS, modelByKey } from './lm.js';
 import { authEnabled, getAuth, signIn, signOut, finishSignIn } from './hfauth.js';
 
 const $ = (s) => document.querySelector(s);
@@ -17,8 +16,7 @@ const S = {
   pool: null,        // { prompt, samples, N, D, Tprime, ... }
   phi: null,         // Float32Array[] unit embeddings
   G: null,           // Gram ΦᵀΦ
-  kernels: [],       // available φ for this pool: [{ id, kind: 'emb'|'h', label, layer?, numLayers?, G }]
-  kernel: null, kernelKind: 'emb', layerFrac: 1,
+  cfg: null,         // the configuration that made the pool on screen
   logp: null, logq: null,
   proj: null,        // { coords: [N][3], frac: number[] }
   dims: 3,
@@ -45,75 +43,56 @@ function decodeEmb(b64, N, D) {
   return Array.from({ length: N }, (_, i) => f.subarray(i * D, (i + 1) * D));
 }
 
-const EXAMPLE_LABELS = { sort: 'Sorting algorithm', story: 'Story opening', bike: 'Old bicycle', bank: 'What is a bank?', language: 'Learn a language', joke: 'Tell a joke' };
+// float16 little-endian, N×D row-major (the cache's embedding files).
+function decodeF16(buf, N, D) {
+  const h = new Uint16Array(buf);
+  const f = new Float32Array(h.length);
+  for (let i = 0; i < h.length; i++) {
+    const x = h[i], e = (x >> 10) & 31, m = x & 1023, sgn = x & 32768 ? -1 : 1;
+    f[i] = sgn * (e === 0 ? m * 2 ** -24 : e === 31 ? (m ? NaN : Infinity) : (1 + m / 1024) * 2 ** (e - 15));
+  }
+  return Array.from({ length: N }, (_, i) => f.subarray(i * D, (i + 1) * D));
+}
 
-async function loadGallery() {
-  const idx = await (await fetch('data/index.json')).json();
+// Precomputed pools, each with the exact configuration that made it. A pool is shown only when
+// the current configuration matches it exactly (see the "configuration" section below).
+let CACHE = [];
+const sameCfg = (a, b) => a.prompt === b.prompt && a.model === b.model && a.embedder === b.embedder &&
+  a.N === b.N && Math.abs(a.Tprime - b.Tprime) < 1e-9 && a.maxNewTokens === b.maxNewTokens;
+
+async function loadData() {
+  const [presets, cache] = await Promise.all([fetch('data/presets.json').then((r) => r.json()), fetch('data/cache/index.json').then((r) => r.json())]);
+  CACHE = cache;
   const el = $('#examples');
-  el.innerHTML = '<div class="menu-head">Example prompts</div>' + idx.map((g) => `<button type="button" role="menuitem" data-id="${g.id}"><b>${escapeHtml(EXAMPLE_LABELS[g.id] ?? g.id)}</b><span>${escapeHtml(g.prompt)}</span></button>`).join('');
-  el.querySelectorAll('button').forEach((b) => (b.onclick = () => { $('#exmenu').open = false; loadGalleryItem(b.dataset.id); }));
-  await loadGalleryItem(idx.find((g) => g.id === 'story')?.id ?? idx[0].id);
+  el.innerHTML = '<div class="menu-head">Example prompts</div>' + presets.map((g, i) => `<button type="button" role="menuitem" data-i="${i}"><b>${escapeHtml(g.label)}</b><span>${escapeHtml(g.prompt)}</span></button>`).join('');
+  // A preset only fills in the prompt; nothing else in the configuration changes.
+  el.querySelectorAll('button').forEach((b) => (b.onclick = () => {
+    $('#exmenu').open = false;
+    $('#prompt').value = presets[+b.dataset.i].prompt;
+    $('#prompt').dispatchEvent(new Event('input'));
+  }));
+  if (!$('#prompt').value.trim()) { $('#prompt').value = presets[0].prompt; $('#prompt').dispatchEvent(new Event('input')); }
 }
 
-function markExample(id) {
-  document.querySelectorAll('#examples button').forEach((b) => b.toggleAttribute('aria-current', b.dataset.id === id));
+async function showCached(entry, cfg) {
+  if (entry.mem) { setPool(entry.mem.pool, entry.mem.phi, cfg, { cached: true }); return; }   // one of your runs
+  const [rec, buf] = await Promise.all([fetch(`data/cache/${entry.pool}`).then((r) => r.json()), fetch(`data/cache/${entry.emb}`).then((r) => r.arrayBuffer())]);
+  if (!sameCfg(readConfig(), cfg)) return;   // the configuration changed while loading
+  rec.embedder = entry.embedder;
+  setPool(rec, decodeF16(buf, rec.N, entry.D), cfg, { cached: true });
 }
 
-async function loadGalleryItem(id) {
-  const rec = await (await fetch(`data/${id}.json`)).json();
-  $('#prompt').value = rec.prompt;
-  $('#prompt').dispatchEvent(new Event('input'));
-  markExample(id);
-  $('#progress').hidden = true;
-  $('#live-status').textContent = `Example: ${rec.N} completions from ${modelByKey(MODELS.find((m) => m.repo === rec.model)?.key).name} at T′ ${(+rec.Tprime).toFixed(1)}. Edit the prompt to try your own.`;
-  // The run settings follow the example, so ↑ repeats it (with the model chosen in the menu).
-  $('#live-N').value = rec.N;
-  $('#live-Tp').value = (+rec.Tprime).toFixed(1);
-  $('#live-max').value = rec.maxNewTokens;
-  $('#live-N').dispatchEvent(new Event('input'));
-  window.__followExampleModel?.(MODELS.find((m) => m.repo === rec.model)?.key);
-  setPool(rec, rec.emb ? decodeEmb(rec.emb, rec.N, rec.D) : null);
-}
-
-// A pool can carry several similarity kernels φ (as N×N Gram matrices of unit vectors):
-// an embedding model's, and the generating LM's final-token activations at several layers.
-function decodeGram(b64, N) {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return Float64Array.from(new Float32Array(bytes.buffer, 0, N * N));
-}
-const shortName = (repo) => (repo ?? '').split('/').pop();
-function kernelsOf(pool, phi) {
-  const N = pool.samples.length;
-  const ks = (pool.kernels ?? []).map((k) => ({ ...k, G: decodeGram(k.gram, N) }));
-  if (phi) ks.push({ id: 'emb:' + shortName(pool.embedder), kind: 'emb', label: shortName(pool.embedder), G: gram(phi) });
-  return ks;
-}
-
-function setPool(pool, phi) {
+function setPool(pool, phi, cfg, { cached = false } = {}) {
   $('#labels').innerHTML = '';
+  document.body.classList.remove('empty');
   S.pinned = -1;
   S.pool = pool;
+  S.cfg = cfg;
   S.phi = phi;
   S.logp = pool.samples.map((s) => s.logp);
   S.logq = pool.samples.map((s) => s.logq);
-  S.kernels = kernelsOf(pool, phi);
-  // Keep the visitor's choice of kind (embedding model vs activations) and layer across pools.
-  const emb = S.kernels.filter((k) => k.kind === 'emb'), act = S.kernels.filter((k) => k.kind === 'h');
-  const pick = S.kernelKind === 'h' && act.length
-    ? act.reduce((a, b) => (Math.abs(b.layer / b.numLayers - S.layerFrac) < Math.abs(a.layer / a.numLayers - S.layerFrac) ? b : a))
-    : emb[0] ?? act.at(-1);
-  renderKernelControls();
-  useKernel(pick.id, { reset: true });
-}
-
-function useKernel(id, { reset = false } = {}) {
-  const k = S.kernels.find((x) => x.id === id);
-  S.kernel = k.id;
   const N = S.logp.length;
-  S.G = k.G;
-  syncKernelControls();
+  S.G = gram(phi);
   // Uncentered PCA of the unit embeddings via the N×N Gram matrix.
   const { values, vectors } = symEig(S.G, N);
   const tot = values.reduce((a, b) => a + Math.max(0, b), 0);
@@ -121,35 +100,23 @@ function useKernel(id, { reset = false } = {}) {
     frac: values.slice(0, 8).map((v) => Math.max(0, v) / tot),
     coords: Array.from({ length: N }, (_, n) => [0, 1, 2].map((k) => Math.sqrt(Math.max(0, values[k])) * vectors[k][n])),
   };
-  if (reset) {
-    S.K = Math.min(S.K, N - 1);
-    $('#K').max = String(Math.min(20, N - 1));
-    $('#K').value = S.K;
-    S.rng = mulberry32(12345);
-  }
+  S.K = Math.min(S.K, N - 1);
+  $('#K').max = String(Math.min(20, N - 1));
+  $('#K').value = S.K;
+  S.rng = mulberry32(12345);
+  if (cached) $('#live-status').textContent = pool.mem || CACHE.some((e) => e.mem?.pool === pool) ? 'Your earlier run with these settings.' : 'Precomputed with these settings.';
   plot.reset();
   recompute({ newDraw: true });
 }
 
-// The "Similarity" controls in the View menu: which φ, and for activations, which layer.
-function renderKernelControls() {
-  const emb = S.kernels.find((k) => k.kind === 'emb'), act = S.kernels.filter((k) => k.kind === 'h');
-  const opts = [];
-  if (emb) opts.push(`<option value="emb">Embedding model (${escapeHtml(emb.label)})</option>`);
-  if (act.length) opts.push(`<option value="h">${escapeHtml(shortName(S.pool.model).replace(/-ONNX$/, ''))} activations (final token)</option>`);
-  $('#embed').innerHTML = opts.join('');
-  $('#embed-field').hidden = opts.length < 2;
-  $('#layer').max = String(Math.max(0, act.length - 1));
-}
-function syncKernelControls() {
-  const k = S.kernels.find((x) => x.id === S.kernel);
-  $('#embed').value = k.kind;
-  const act = S.kernels.filter((x) => x.kind === 'h');
-  $('#layer-field').hidden = k.kind !== 'h';
-  if (k.kind === 'h') {
-    $('#layer').value = String(act.indexOf(k));
-    $('#layer-out').textContent = k.layer === k.numLayers ? `${k.layer} (final)` : `${k.layer} of ${k.numLayers}`;
-  }
+// No pool for the current configuration: show nothing rather than something else.
+function clearPool() {
+  S.pool = null; S.cfg = null; S.sel = [];
+  document.body.classList.add('empty');
+  $('#labels').innerHTML = '';
+  $('#selected').innerHTML = '';
+  $('#readout').innerHTML = '';
+  $('#stage-note').textContent = 'No completions for these settings yet.';
 }
 
 // ---------------------------------------------------------------- inference
@@ -533,164 +500,101 @@ function renderTable() {
   }));
 }
 
-// ---------------------------------------------------------------- live mode
-// Models served by a Hugging Face Space (ZeroGPU). The Space returns the same pool format
-// (exact log p / log q and embeddings); the DPP still runs here.
-// Anonymous visitors get almost no ZeroGPU quota, so these need "Sign in with Hugging Face":
-// the visitor's token goes with the request and ZeroGPU charges their own daily quota.
-// While this is being tried out, the option only shows with ?cloud in the URL or once signed in.
-// Modal endpoint (modal/app.py); when set it replaces the ZeroGPU Space.
-const MODAL_URL = 'https://timvieira--dpp-lm-sampler-web.modal.run';
-const showCloud = authEnabled() && (!!getAuth() || /[?&](cloud|code)=?/.test(location.search));
-const SIGNED_IN_CLOUD = showCloud ? [
-  MODAL_URL
-    ? { key: 'modal-qwen3-14b', name: 'Qwen3 14B', short: 'Qwen3 14B · cloud', modal: MODAL_URL, model: 'qwen3-14b' }
-    : { key: 'hf-qwen3-14b', name: 'Qwen3 14B', short: 'Qwen3 14B · cloud', space: 'https://xtimv-dpp-lm-sampler.hf.space', model: 'qwen3-14b' },
-] : [];
-
-// A GPU server run by a co-author (Manuel's machine). Used whenever it answers; otherwise the page
-// falls back to the models above. No sign-in: the server applies its own per-visitor limits.
+// ---------------------------------------------------------------- configuration
+// Everything that determines a pool: prompt, language model, embedder, N, T′ and max tokens.
+// The plot always shows a pool made with exactly this configuration (a precomputed one, or one
+// you ran), or nothing. Each choice of "model" names the exact weights and where they run.
 const DEMO_SERVER = 'https://zueri-monstro.rufous-hamlet.ts.net/dpp_api';
-const SERVER_MODELS = ['qwen3-14b', 'gemma-2-9b'];   // the big ones; small models also run in the browser
-const SERVER_EMBEDDER = 'qwen3-emb';
-let SERVER = [];   // filled by probeServer()
-let CLOUD = SIGNED_IN_CLOUD;
-async function probeServer() {
-  try {
-    const r = await fetch(`${DEMO_SERVER}/status`, { signal: AbortSignal.timeout(5000) });
-    if (!r.ok) return false;
-    const st = await r.json();
-    SERVER = (st.models ?? []).filter((m) => SERVER_MODELS.includes(m.key) && m.state !== 'unavailable').map((m) => ({
-      key: 'srv-' + m.key, name: m.name, short: m.name, server: DEMO_SERVER, model: m.key, cold: m.state === 'cold',
-      maxN: st.maxN ?? 200, maxNewTokens: st.maxNewTokens ?? 256,
-      embedder: st.embedders && SERVER_EMBEDDER in st.embedders ? SERVER_EMBEDDER : st.defaultEmbedder,
-    }));
-    CLOUD = [...SERVER, ...SIGNED_IN_CLOUD];
-    return SERVER.length > 0;
-  } catch { return false; }   // down, unreachable, or not allowing this site (CORS)
-}
-const cloudByKey = (k) => CLOUD.find((m) => m.key === k);
-const anyModel = (k) => cloudByKey(k) ?? modelByKey(k);
-let cloudAbort = null;
+const MODAL_URL = 'https://timvieira--dpp-lm-sampler-web.modal.run';
+const SPACE_URL = 'https://xtimv-dpp-lm-sampler.hf.space';
+const MINILM = { id: 'minilm', repo: 'sentence-transformers/all-MiniLM-L6-v2', label: 'MiniLM-L6' };
+const BACKENDS = [
+  { id: 'server', label: 'Qwen3 14B, 4-bit (AWQ) · GPU server', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
+    url: DEMO_SERVER, auth: false, maxN: 200, maxTokens: 256,
+    embedders: [
+      { id: 'qwen3-emb', repo: 'Qwen/Qwen3-Embedding-0.6B', label: 'Qwen3-Embedding-0.6B' },
+      { id: 'own', repo: 'own:Qwen/Qwen3-14B-AWQ', label: 'Qwen3 14B’s own states' },
+    ] },
+  { id: 'modal', label: 'Qwen3 14B, 16-bit (bf16) · Modal, sign-in', short: 'Qwen3 14B 16-bit', repo: 'Qwen/Qwen3-14B',
+    url: MODAL_URL, auth: true, maxN: 100, maxTokens: 256, embedders: [MINILM] },
+  { id: 'space', label: 'Qwen3 14B, 16-bit (bf16) · Hugging Face Space, sign-in', short: 'Qwen3 14B 16-bit', repo: 'Qwen/Qwen3-14B',
+    url: SPACE_URL, auth: true, maxN: 200, maxTokens: 256, embedders: [MINILM] },
+];
+const backend = () => BACKENDS.find((b) => b.id === $('#model').value) ?? BACKENDS[0];
+const embedderOf = (B) => B.embedders.find((e) => e.id === $('#embedder').value) ?? B.embedders[0];
 
-async function runCloud(M, { prompt, N, Tprime, maxNewTokens }, done) {
+function readConfig() {
+  const B = backend();
+  return {
+    prompt: $('#prompt').value.trim(), model: B.repo, embedder: embedderOf(B).repo,
+    N: clampInt($('#live-N').value, 2, B.maxN), Tprime: Math.round(10 * Math.min(2, Math.max(0.2, +$('#live-Tp').value || 1))) / 10,
+    maxNewTokens: clampInt($('#live-max').value, 8, B.maxTokens),
+  };
+}
+
+// Called whenever any part of the configuration changes.
+function configChanged() {
+  const cfg = readConfig();
+  if (S.cfg && sameCfg(S.cfg, cfg)) return;
+  const hit = CACHE.findLast((e) => sameCfg(e, cfg));   // your latest run first
+  if (hit) { showCached(hit, cfg).catch(() => clearPool()); return; }
+  clearPool();
+  $('#live-status').textContent = cfg.prompt ? `Press ↑ to sample ${cfg.N} completions.` : '';
+}
+
+let cloudAbort = null;
+async function runLive() {
+  const cfg = readConfig(), B = backend();
+  if (!cfg.prompt) return;
+  const auth = B.auth ? getAuth() : null;
+  if (B.auth && !auth) return signIn({ cfg: { ...cfg, backend: B.id, embedderId: embedderOf(B).id } });
   cloudAbort = new AbortController();
   const signal = cloudAbort.signal;
-  const auth = M.server ? null : getAuth();
-  if (!M.server && !auth) { done(); return signIn({ prompt, model: M.key }); }
-  const t0 = performance.now();
-  const tick = setInterval(() => ($('#live-status').textContent = `Waiting for ${M.name}… ${((performance.now() - t0) / 1000).toFixed(0)}s`), 1000);
+  $('#live-go').hidden = true; $('#live-stop').hidden = false;
+  const t0 = performance.now(), secs = () => ((performance.now() - t0) / 1000).toFixed(0);
+  $('#live-status').textContent = `Sampling ${cfg.N} completions…`;
+  const tick = setInterval(() => ($('#live-status').textContent = `Sampling ${cfg.N} completions… ${secs()}s`), 1000);
+  const seed = Math.floor(Math.random() * 2 ** 31);
   try {
-    if (M.server) {
-      $('#live-status').textContent = `Sending to ${M.name}…${M.cold ? ' (it loads on first use, about a minute)' : ''}`;
-      const r = await fetch(`${M.server}/sample`, {
-        method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt, model: M.model, embedder: M.embedder, n: Math.min(N, M.maxN), t_prime: Tprime,
-          max_new_tokens: Math.min(maxNewTokens, M.maxNewTokens), seed: Math.floor(Math.random() * 2 ** 31),
-        }),
-      });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.detail || `the server answered ${r.status}`);
-      M.cold = false;
-      const capped = [N > M.maxN && `${M.maxN} samples`, maxNewTokens > M.maxNewTokens && `${M.maxNewTokens} tokens`].filter(Boolean);
-      $('#live-status').textContent = `${body.N} completions from ${M.name}, in ${((performance.now() - t0) / 1000).toFixed(0)}s.` +
-        (capped.length ? ` (This server allows at most ${capped.join(' and ')} per run.)` : '');
-      $('#progress').hidden = true;
-      markExample(null);
-      setPool(body, decodeEmb(body.emb, body.N, body.D));
-      return;
-    }
-    if (M.modal) {
-      $('#live-status').textContent = `Sending to ${M.name}… (the first run starts a GPU, about a minute)`;
-      const r = await fetch(`${M.modal}/sample`, {
+    let pool;
+    if (B.id === 'space') {
+      const r = await fetch(`${B.url}/gradio_api/call/sample`, {
         method: 'POST', signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
-        body: JSON.stringify({ prompt, n: N, t_prime: Tprime, max_new_tokens: maxNewTokens, seed: Math.floor(Math.random() * 2 ** 31) }),
+        body: JSON.stringify({ data: [cfg.prompt, 'qwen3-14b', cfg.N, cfg.Tprime, cfg.maxNewTokens, seed] }),
       });
-      const body = await r.json().catch(() => ({}));
-      if (r.status === 401) signOut();
-      if (!r.ok) throw new Error(body.detail || `the server answered ${r.status}`);
-      const capped = [body.N < N && `${body.N} samples`, body.maxNewTokens < maxNewTokens && `${body.maxNewTokens} tokens`].filter(Boolean);
-      $('#live-status').textContent = `${body.N} completions from ${M.name}, in ${((performance.now() - t0) / 1000).toFixed(0)}s.` +
-        (capped.length ? ` (This server allows at most ${capped.join(' and ')} per run.)` : '');
-      $('#progress').hidden = true;
-      markExample(null);
-      setPool(body, body.emb ? decodeEmb(body.emb, body.N, body.D) : null);
-      return;
+      if (!r.ok) throw new Error(`the Space answered ${r.status}`);
+      const { event_id } = await r.json();
+      const text = await (await fetch(`${B.url}/gradio_api/call/sample/${event_id}`, { signal, headers: { Authorization: `Bearer ${auth.token}` } })).text();
+      const events = [...text.matchAll(/event: (\w+)\ndata: (.*)/g)].map((m) => [m[1], m[2]]);
+      const ok = events.find(([e]) => e === 'complete'), err = events.find(([e]) => e === 'error');
+      if (!ok) throw new Error((err && err[1] !== 'null' && JSON.parse(err[1])) || 'the Space returned no result');
+      pool = JSON.parse(ok[1])[0];
+    } else {
+      const body = { prompt: cfg.prompt, n: cfg.N, t_prime: cfg.Tprime, max_new_tokens: cfg.maxNewTokens, seed };
+      if (B.id === 'server') Object.assign(body, { model: 'qwen3-14b', embedder: embedderOf(B).id });
+      const r = await fetch(`${B.url}/sample`, {
+        method: 'POST', signal, body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${auth.token}` } : {}) },
+      });
+      pool = await r.json().catch(() => ({}));
+      if (r.status === 401 && auth) signOut();
+      if (!r.ok) throw new Error(pool.detail || `the server answered ${r.status}`);
     }
-    $('#live-status').textContent = `Sending to ${M.name} on Hugging Face…`;
-    const r = await fetch(`${M.space}/gradio_api/call/sample`, {
-      method: 'POST', signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
-      body: JSON.stringify({ data: [prompt, M.model, N, Tprime, maxNewTokens, Math.floor(Math.random() * 1e9)] }),
-    });
-    if (!r.ok) throw new Error(`the Space answered ${r.status}${r.status === 404 ? ' (is it running?)' : ''}`);
-    const { event_id } = await r.json();
-    const text = await (await fetch(`${M.space}/gradio_api/call/sample/${event_id}`, { signal, headers: { Authorization: `Bearer ${auth.token}` } })).text();
-    // Server-sent events: the last "event: complete" carries the result, "event: error" a message.
-    const events = [...text.matchAll(/event: (\w+)\ndata: (.*)/g)].map((m) => [m[1], m[2]]);
-    const err = events.find(([e]) => e === 'error');
-    const ok = events.find(([e]) => e === 'complete');
-    if (!ok) {
-      const msg = err && err[1] !== 'null' ? JSON.parse(err[1]) : null;
-      throw new Error(msg || 'the Space returned no result. Your daily GPU quota on Hugging Face may be used up; try again later or use an on-device model.');
-    }
-    const pool = JSON.parse(ok[1])[0];
-    $('#live-status').textContent = `${pool.N} completions from ${M.name} on Hugging Face, in ${((performance.now() - t0) / 1000).toFixed(0)}s.`;
-    $('#progress').hidden = true;
-    markExample(null);
-    setPool(pool, decodeEmb(pool.emb, pool.N, pool.D));
+    // Only a pool made with exactly the requested configuration is shown.
+    if (pool.N !== cfg.N || pool.maxNewTokens !== cfg.maxNewTokens) throw new Error('the server did not run the requested settings');
+    if (!sameCfg(readConfig(), cfg)) { $('#live-status').textContent = 'The settings changed during the run; press ↑ again.'; return; }
+    const phi = decodeEmb(pool.emb, pool.N, pool.D);
+    CACHE.push({ ...cfg, mem: { pool, phi } });   // kept for this visit, so going back to these settings shows it again
+    setPool(pool, phi, cfg);
+    $('#live-status').textContent = `Sampled in ${secs()}s.`;
   } catch (e) {
-    if (e.name !== 'AbortError') $('#live-status').textContent = 'Error: ' + (e.message || e);
+    $('#live-status').textContent = e.name === 'AbortError' ? 'Stopped.'
+      : e instanceof TypeError ? `Could not reach ${B.label.split(' · ')[1]}. Try another model.` : 'Error: ' + (e.message || e);
   } finally {
     clearInterval(tick);
     cloudAbort = null;
-    done();
+    $('#live-go').hidden = false; $('#live-stop').hidden = true;
   }
-}
-
-let worker = null;
-function runLive() {
-  const N = clampInt($('#live-N').value, 2, 200), Tp = Math.min(2, Math.max(0.2, +$('#live-Tp').value || 1));
-  const maxNewTokens = clampInt($('#live-max').value, 8, 640);
-  const prompt = $('#prompt').value.trim();
-  if (!prompt) return;
-  const cloud = cloudByKey($('#model').value);
-  if (cloud) {
-    $('#live-go').hidden = true; $('#live-stop').hidden = false; $('#progress').hidden = true;
-    return runCloud(cloud, { prompt, N, Tprime: Tp, maxNewTokens }, () => { $('#live-go').hidden = false; $('#live-stop').hidden = true; });
-  }
-  navigator.storage?.persist?.().catch(() => {}); // ask the browser not to evict downloaded models
-  worker ??= new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
-  $('#live-go').hidden = true;
-  $('#live-stop').hidden = false;
-  $('#progress').hidden = false;
-  $('#progress-fill').style.width = '0%';
-  $('#progress-last').textContent = '';
-  worker.onmessage = ({ data }) => {
-    if (data.type === 'status' || data.type === 'progress') $('#live-status').textContent = data.text;
-    // Fill the bar while a model downloads or loads ("… a / b MB").
-    const dl = data.type === 'status' && /(\d+) \/ (\d+) MB/.exec(data.text);
-    if (dl) { $('#progress').hidden = false; $('#progress-fill').style.width = `${(100 * +dl[1]) / Math.max(1, +dl[2])}%`; $('#progress-last').textContent = ''; }
-    if (data.type === 'status' && /^Sampling 0\//.test(data.text)) $('#progress-fill').style.width = '0%';
-    if (data.type === 'progress') {
-      $('#progress').hidden = false;
-      $('#progress-fill').style.width = `${(100 * data.n) / data.N}%`;
-      if (data.last?.length) $('#progress-last').textContent = '“' + data.last[data.last.length - 1] + '”';
-    }
-    if (data.type === 'error') { $('#live-status').textContent = 'Error: ' + data.text; done(); }
-    if (data.type === 'done') {
-      const D = data.pool.D;
-      const phi = Array.from({ length: data.pool.N }, (_, i) => data.emb.subarray(i * D, (i + 1) * D));
-      $('#live-status').textContent = `${data.pool.N} completions from ${data.pool.modelName}, on your ${data.device === 'webgpu' ? 'GPU' : 'CPU'}.`;
-      $('#progress').hidden = true;
-      markExample(null);
-      setPool(data.pool, phi);
-      done();
-      window.__refreshCache?.();
-    }
-  };
-  const done = () => { $('#live-go').hidden = false; $('#live-stop').hidden = true; };
-  worker.postMessage({ type: 'run', prompt, N, Tprime: Tp, maxNewTokens, model: $('#model').value });
 }
 const clampInt = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(+v || lo)));
 
@@ -713,102 +617,31 @@ function setK(v) {
 
 function wire() {
   initExplainers();
-  // Collapsed sampling settings: the summary line shows the current values.
-  // Model picker: default to Gemma 3 1B with WebGPU, the small Qwen without; remember the choice.
-  // Models marked cpu: null need a GPU with float16 support (WebGPU 'shader-f16').
-  let hasGPU = false;
-  let cached = new Set();
-  // Without a float16 GPU the model runs in WebAssembly, which must hold the whole file in memory:
-  // phones cope with about 1 GB, desktops with about 2.2 GB.
-  const isPhone = navigator.userAgentData?.mobile ?? /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
-  const sizeMB = (m) => (hasGPU ? m.gpu : m.cpuMB);
-  const fits = (m) => hasGPU || (m.cpu && m.cpuMB <= (isPhone ? 1000 : 2200));
-  const fillModels = () => {
-    const keep = $('#model').value;
-    $('#model').innerHTML = '<optgroup label="On this device">' + MODELS.map((m) => {
-      const why = fits(m) ? '' : !m.cpu ? ' · needs a GPU' : ` · too large for this ${isPhone ? 'phone' : 'device'}`;
-      const size = cached.has(m.repo) ? 'downloaded' : sizeMB(m) ? `${(sizeMB(m) / 1000).toFixed(1)} GB` : '';
-      return `<option value="${m.key}" ${fits(m) ? '' : 'disabled'}>${m.name}${size ? ` · ${size}` : ''}${why}</option>`;
-    }).join('') + '</optgroup>' +
-      (SERVER.length ? '<optgroup label="On a GPU server">' + SERVER.map((m) => `<option value="${m.key}">${m.name}</option>`).join('') + '</optgroup>' : '') +
-      (SIGNED_IN_CLOUD.length ? (MODAL_URL ? '<optgroup label="In the cloud (sign in with Hugging Face)">' : '<optgroup label="On Hugging Face (free daily quota)">') +
-      SIGNED_IN_CLOUD.map((m) => `<option value="${m.key}">${m.name} · cloud GPU</option>`).join('') + '</optgroup>' : '');
-    if (keep && usable(keep)) { $('#model').value = keep; advSum(); modelNote(); return; }
-    let saved = null;
-    try { saved = localStorage.getItem('dpp-lm-model'); } catch {}
-    $('#model').value = usable(saved) ? saved : SERVER.length ? SERVER[0].key : hasGPU ? 'qwen3-1.7b' : isPhone ? 'qwen3-0.6b' : 'qwen3-1.7b';
-    advSum(); modelNote();
+  // Settings: model (exact weights and where they run), embedder, N, T′, max tokens.
+  $('#model').innerHTML = BACKENDS.map((B) => `<option value="${B.id}">${escapeHtml(B.label)}</option>`).join('');
+  const fillEmbedders = () => {
+    const B = backend(), keep = $('#embedder').value;
+    $('#embedder').innerHTML = B.embedders.map((e) => `<option value="${e.id}">${escapeHtml(e.label)}</option>`).join('');
+    if (B.embedders.some((e) => e.id === keep)) $('#embedder').value = keep;
+    $('#live-N').max = String(B.maxN);
+    $('#live-max').max = String(B.maxTokens);
   };
-  const usable = (k) => !!cloudByKey(k) || MODELS.some((m) => m.key === k && fits(m));
   const modelNote = () => {
-    const c = cloudByKey($('#model').value);
-    if (c?.server) {
-      $('#model-note').textContent = `Runs on a GPU server shared by everyone using this demo; your prompt is sent there.${c.cold ? ' It loads on first use (about a minute).' : ''}`;
-      return;
-    }
-    if (c) {
-      const a = getAuth();
-      const where = MODAL_URL ? 'Runs on a cloud GPU (a few free runs a day each)' : `Runs on a Hugging Face GPU and uses your account's daily GPU quota (${a?.isPro ? 'PRO: 40' : 'free: 5'} min)`;
-      $('#model-note').innerHTML = a
-        ? `${where}. Signed in to Hugging Face as <b>${a.user}</b>. <button type="button" class="link" id="hf-signout">Sign out</button>`
-        : `${where}. Pressing ↑ first asks you to sign in with Hugging Face.`;
-      $('#hf-signout')?.addEventListener('click', (e) => { e.stopPropagation(); signOut(); modelNote(); });
-      return;
-    }
-    const m = modelByKey($('#model').value);
-    $('#model-note').textContent = cached.has(m.repo)
-      ? `Runs on your ${hasGPU ? 'GPU' : 'CPU'}. Already downloaded to this browser.`
-      : `Runs on your ${hasGPU ? 'GPU' : 'CPU'}. First use downloads about ${(sizeMB(m) / 1000).toFixed(1)} GB; this browser keeps it for next time.`;
+    const B = backend(), a = getAuth();
+    const where = B.id === 'server' ? 'Runs on a GPU server shared by everyone using this demo.'
+      : B.id === 'modal' ? 'Runs on a cloud GPU (Modal); needs a Hugging Face sign-in.'
+      : 'Runs on a Hugging Face ZeroGPU Space and uses your account’s daily GPU quota; needs a Hugging Face sign-in.';
+    $('#model-note').innerHTML = escapeHtml(where) + (B.auth && a ? ` Signed in as <b>${escapeHtml(a.user)}</b>. <button type="button" class="link" id="hf-signout">Sign out</button>` : '');
+    $('#hf-signout')?.addEventListener('click', (e) => { e.stopPropagation(); signOut(); modelNote(); });
   };
-  // Which models are already in the browser's cache (transformers.js stores files under their URL).
-  const refreshCache = async () => {
-    try {
-      const keys = await (await caches.open('transformers-cache')).keys();
-      // Only the build this device will load counts (float16 on capable GPUs, else the CPU build).
-      const file = (m) => `https://huggingface.co/${m.repo}/resolve/main/onnx/model_${hasGPU ? 'q4f16' : m.cpu}.onnx`;
-      const urls = new Set(keys.map((r) => r.url));
-      cached = new Set(MODELS.filter((m) => fits(m) && urls.has(file(m))).map((m) => m.repo));
-      const est = await navigator.storage?.estimate?.();
-      const gb = est?.usage ? est.usage / 1e9 : 0;
-      $('#cache-info').textContent = cached.size ? `${cached.size} model${cached.size > 1 ? 's' : ''} downloaded (${gb.toFixed(1)} GB).` : '';
-      $('#cache-clear').hidden = !cached.size;
-    } catch { cached = new Set(); }
-    fillModels();
-  };
-  // Two-step clear: the first click asks, the second deletes.
-  let armed = false;
-  $('#cache-clear').onclick = async (e) => {
-    e.stopPropagation();
-    if (!armed) { armed = true; $('#cache-clear').textContent = 'Click again to delete them'; setTimeout(() => { armed = false; $('#cache-clear').textContent = 'Clear'; }, 4000); return; }
-    armed = false; $('#cache-clear').textContent = 'Clear';
-    try { await caches.delete('transformers-cache'); } catch {}
-    worker?.terminate(); worker = null; // drop models held in memory too
-    await refreshCache();
-    $('#cache-info').textContent = 'Downloaded models deleted.';
-  };
-  window.__refreshCache = refreshCache;
-  // Examples switch the model too, unless the visitor picked one or the GPU server is in use.
-  window.__followExampleModel = (key) => {
-    let saved = null;
-    try { saved = localStorage.getItem('dpp-lm-model'); } catch {}
-    if (!key || saved || SERVER.length || !usable(key)) return;
-    $('#model').value = key; advSum(); modelNote();
-  };
-  // Offer the GPU server's models if it answers; first-time visitors get it as the default.
-  probeServer().then(async (ok) => {
-    if (!ok) return;
-    await refreshCache();
-    let saved = null;
-    try { saved = localStorage.getItem('dpp-lm-model'); } catch {}
-    if (!saved || !usable(saved)) { $('#model').value = SERVER[0].key; advSum(); modelNote(); }
-  });
-  const advSum = () => ($('#adv-sum').textContent = `${anyModel($('#model').value).short} · ${$('#live-N').value} samples`);
-  $('#model').addEventListener('change', () => { try { localStorage.setItem('dpp-lm-model', $('#model').value); } catch {} advSum(); modelNote(); });
-  fillModels();
-  refreshCache();
-  navigator.gpu?.requestAdapter().then((a) => { hasGPU = !!a?.features.has('shader-f16'); refreshCache(); }).catch(() => {});
-  ['#live-N', '#live-Tp', '#live-max'].forEach((id) => $(id).addEventListener('input', advSum));
-  advSum();
+  const advSum = () => ($('#adv-sum').textContent = `${backend().short} · ${readConfig().N} samples`);
+  const onSettings = () => { fillEmbedders(); advSum(); modelNote(); configChanged(); };
+  $('#model').addEventListener('change', onSettings);
+  $('#embedder').addEventListener('change', onSettings);
+  ['#live-N', '#live-Tp', '#live-max'].forEach((id) => $(id).addEventListener('change', onSettings));
+  let pt = 0;
+  $('#prompt').addEventListener('input', () => { clearTimeout(pt); pt = setTimeout(configChanged, 250); });
+  fillEmbedders(); advSum(); modelNote();
   $('#resample').disabled = S.mode === 'map';
   $('#T-slider').value = tToSlider(S.T[S.mode]);
   let raf = 0;
@@ -818,16 +651,6 @@ function wire() {
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => recompute({ newDraw: true }));
   });
-  $('#embed').onchange = () => {
-    S.kernelKind = $('#embed').value;
-    const act = S.kernels.filter((k) => k.kind === 'h');
-    useKernel(S.kernelKind === 'h' ? act.at(-1).id : S.kernels.find((k) => k.kind === 'emb').id);
-  };
-  $('#layer').oninput = () => {
-    const k = S.kernels.filter((x) => x.kind === 'h')[+$('#layer').value];
-    S.layerFrac = k.layer / k.numLayers;
-    useKernel(k.id);
-  };
   document.querySelectorAll('input[name=mode]').forEach((r) => (r.onchange = () => setMode(r.value)));
   $('#K').onchange = () => setK($('#K').value);
   $('#K-minus').onclick = () => setK(S.K - 1);
@@ -852,29 +675,23 @@ function wire() {
   document.addEventListener('click', (e) => { for (const m of [$('#adv'), $('#exmenu')]) if (m.open && !m.contains(e.target)) m.open = false; });
   // Only one composer menu open at a time.
   for (const [a, b] of [['#adv', '#exmenu'], ['#exmenu', '#adv']]) $(a).addEventListener('toggle', () => { if ($(a).open) $(b).open = false; });
-  // Stop right away: shut the worker down (this also cancels a download). Files already
-  // downloaded stay in the browser's cache; the next run starts a fresh worker.
-  $('#live-stop').onclick = () => {
-    cloudAbort?.abort();
-    worker?.terminate();
-    worker = null;
-    $('#live-go').hidden = false;
-    $('#live-stop').hidden = true;
-    $('#progress').hidden = true;
-    $('#live-status').textContent = 'Stopped. Press ↑ to start again.';
-    window.__refreshCache?.();
-  };
+  $('#live-stop').onclick = () => cloudAbort?.abort();
   let rt = 0;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { plot.reset(); render(); }, 200); });
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { plot.reset(); render(); });
 }
 wire();
-// Coming back from "Sign in with Hugging Face": restore the prompt and run it.
+// Coming back from "Sign in with Hugging Face": restore the configuration and run it.
 finishSignIn().then((r) => {
-  if (!r) return;
-  if (r.stash.prompt) { $('#prompt').value = r.stash.prompt; $('#prompt').dispatchEvent(new Event('input')); }
-  if (r.stash.model && cloudByKey(r.stash.model)) { $('#model').value = r.stash.model; $('#model').dispatchEvent(new Event('change')); }
+  const c = r?.stash?.cfg;
+  if (!c) return;
+  $('#prompt').value = c.prompt;
+  $('#model').value = c.backend;
+  $('#model').dispatchEvent(new Event('change'));
+  $('#embedder').value = c.embedderId;
+  Object.assign($('#live-N'), { value: c.N }); $('#live-Tp').value = c.Tprime; $('#live-max').value = c.maxNewTokens;
+  $('#embedder').dispatchEvent(new Event('change'));
   $('#live-status').textContent = `Signed in to Hugging Face as ${r.auth.user}.`;
-  if (r.stash.prompt) runLive();
+  runLive();
 }).catch((e) => { $('#live-status').textContent = 'Sign-in failed: ' + (e.message || e); });
-loadGallery().catch((e) => { $('#readout').textContent = 'Could not load gallery: ' + e.message; });
+loadData().then(configChanged).catch((e) => { $('#live-status').textContent = 'Could not load the examples: ' + e.message; });
