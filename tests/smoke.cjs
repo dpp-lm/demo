@@ -30,8 +30,10 @@ const { chromium } = require('playwright');
       await page.waitForTimeout(800);
       await page.screenshot({ path: `${out}/desktop-1d.png` });
       await page.click('#specmenu summary');
+      if (await page.$$eval('#all-cards .card', (r) => r.length)) errors.push('[desktop] All completions should start collapsed');
+      await page.click('#all-list > summary');
       await page.waitForTimeout(500);
-      if (!(await page.$$eval('#all-cards .card', (r) => r.length))) errors.push('[desktop] All completions is empty');
+      if (!(await page.$$eval('#all-cards .card', (r) => r.length))) errors.push('[desktop] All completions is empty when opened');
       await page.screenshot({ path: `${out}/desktop-details.png` });
     }
     await page.close();
