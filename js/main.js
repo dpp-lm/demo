@@ -276,8 +276,6 @@ class Plot2D {
     this.gOrigin.append('path').attr('stroke', css('--muted')).attr('stroke-width', 1);
     this.gOrigin.append('text').attr('class', 'direct-label').attr('font-size', 11).attr('fill', css('--muted')).text('origin');
     this.gPara = svg.append('g');
-    this.gTrail = svg.append('g');
-    this.gGhost = svg.append('g');
     this.gArrow = svg.append('g');
     this.gDot = svg.append('g');
     this.svg = svg;
@@ -323,13 +321,11 @@ class Plot2D {
     const col = colorFor();
     const sel = new Set(S.sel);
     const idx = d3.range(N);
-    const ghostD = idx.map((i) => this.dataXY(i, 1));
-    const posD = idx.map((i) => (dims === 1 ? [this.dataXY(i, scaled ? S.c[i] : 1)[0], ghostD[i][1]] : this.dataXY(i, scaled ? S.c[i] : 1)));
+    const posD = idx.map((i) => (dims === 1 ? [this.dataXY(i, scaled ? S.c[i] : 1)[0], this.dataXY(i, 1)[1]] : this.dataXY(i, scaled ? S.c[i] : 1)));
     const vol = dims === 2 && S.sel.length >= 2 && S.sel.length <= 3;
     const volD = vol ? parallelotope([0, 0], S.sel.map((i) => posD[i])) : { faces: [], corners: [] };
-    this.fit([...posD, ...(scaled ? ghostD : []), ...volD.corners.map((c) => c.p)]);
+    this.fit([...posD, ...volD.corners.map((c) => c.p)]);
     const px = (q) => [this.x(q[0]), this.y(q[1])];
-    const ghostPos = ghostD.map(px);
     this.pos = posD.map(px);
     const ox = this.x(0), oy = this.y(0);
     const t = this.svg.transition().duration(450).ease(d3.easeCubicOut);
@@ -337,13 +333,6 @@ class Plot2D {
     this.gOrigin.select('path').attr('stroke-dasharray', dims === 1 ? '3 3' : null).transition(t)
       .attr('d', dims === 1 ? `M${ox},16V${H - 16}` : `M${ox - 6},${oy}H${ox + 6}M${ox},${oy - 6}V${oy + 6}`);
     this.gOrigin.select('text').transition(t).attr('x', ox + 6).attr('y', dims === 1 ? 26 : oy - 6);
-    this.gGhost.selectAll('circle').data(idx).join('circle').attr('r', 3)
-      .attr('fill', css('--ghost')).attr('opacity', scaled ? 0.45 : 0)
-      .transition(t).attr('cx', (i) => ghostPos[i][0]).attr('cy', (i) => ghostPos[i][1]);
-    this.gTrail.selectAll('line').data(idx).join('line')
-      .attr('stroke', css('--ghost')).attr('stroke-width', 1).attr('opacity', scaled ? 0.35 : 0)
-      .transition(t).attr('x1', (i) => ghostPos[i][0]).attr('y1', (i) => ghostPos[i][1])
-      .attr('x2', (i) => this.pos[i][0]).attr('y2', (i) => this.pos[i][1]);
     const few = S.sel.length <= 3;
     const y0 = (i) => (dims === 1 ? this.pos[i][1] : oy);
     this.gArrow.selectAll('line').data(S.sel, (i) => i).join(
@@ -398,7 +387,7 @@ const plot = {
       }
       this.p3.update({
         coords: S.proj.coords, c: S.c, sel: S.sel, scaled: $('#scale-toggle').checked,
-        color: colorFor(), selColor, accent: css('--accent'), ghost: css('--ghost'), text: css('--text-2'), bg: css('--surface'),
+        color: colorFor(), selColor, accent: css('--accent'), text: css('--text-2'), bg: css('--surface'),
       });
     } else this.p2.update();
   },

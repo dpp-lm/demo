@@ -106,13 +106,6 @@ export class Plot3D {
     grid.material.opacity = 0.12;
     grid.material.depthWrite = false;
     this.group.add(grid);
-    // Ghosts: unit embeddings.
-    const s = this.scale;
-    const gpos = new Float32Array(N * 3);
-    o.coords.forEach((c, i) => gpos.set([c[0] * s, c[1] * s, c[2] * s], i * 3));
-    const gg = new THREE.BufferGeometry();
-    gg.setAttribute('position', new THREE.BufferAttribute(gpos, 3));
-    this.group.add(new THREE.Points(gg, new THREE.PointsMaterial({ color: o.ghost, size: 0.02, transparent: true, opacity: o.scaled ? 0.5 : 0 })));
     // Points.
     const sphere = new THREE.SphereGeometry(0.018, 12, 8);
     this.mesh = new THREE.InstancedMesh(sphere, new THREE.MeshLambertMaterial(), N);
