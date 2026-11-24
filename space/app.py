@@ -24,7 +24,7 @@ from sentence_transformers import SentenceTransformer
 
 def _duration(prompt, model_key, n, t_prime, max_new_tokens, seed=0):
     # GPU seconds to reserve: a little for setup plus the decoding steps.
-    return int(min(120, 15 + 0.25 * int(max_new_tokens) * (1 + int(n) // 100)))
+    return int(min(240, 20 + 0.25 * int(max_new_tokens) * (1 + int(n) // 100)))
 
 
 if spaces is not None:
@@ -52,7 +52,9 @@ LARGE = {
 }
 MODELS = LARGE if ON_ZEROGPU else SMALL
 DEFAULT = os.environ.get("MODEL_KEY", next(iter(MODELS)))
-EMBEDDER = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDER = "Qwen/Qwen3-Embedding-0.6B"   # the same embedder as the demo's GPU server
+EMBEDDER_ID = "qwen3-emb"
+MAX_N, MAX_TOKENS = 200, 256   # docs/BACKEND.md
 
 _cache = {}
 
@@ -134,7 +136,21 @@ if ON_ZEROGPU:
     load(DEFAULT)
 
 
-_embedder = SentenceTransformer(EMBEDDER, device="cpu")
+# float32 throughout, so the similarity matrix is as accurate as the embedder allows; on the GPU with the model.
+_embedder = SentenceTransformer(EMBEDDER, device="cpu", model_kwargs={"dtype": torch.float32},
+                                tokenizer_kwargs={"padding_side": "left"})
+if ON_ZEROGPU or DEVICE == "cuda":
+    _embedder.to("cuda")
+
+
+def gram(texts):
+    """Similarity matrix of unit embeddings: float64 product of float32 vectors, sent as float32."""
+    emb = _embedder.encode([t or "(empty)" for t in texts], normalize_embeddings=True, batch_size=16)
+    E = np.asarray(emb, dtype=np.float64)
+    E /= np.linalg.norm(E, axis=1, keepdims=True)
+    G = E @ E.T
+    np.fill_diagonal(G, 1.0)
+    return base64.b64encode(G.astype("<f4").tobytes()).decode("ascii"), int(E.shape[1])
 
 
 def eos_ids(tok, model):
@@ -203,35 +219,74 @@ def sample(tok, model, chat, prompt, n, t_prime, max_new_tokens, batch_size, see
 def run(prompt, model_key, n, t_prime, max_new_tokens, seed=0):
     tok, model, chat = load(model_key)
     batch = 100 if ON_ZEROGPU or DEVICE == "cuda" else 5
-    return sample(tok, model, chat, prompt, int(n), float(t_prime), int(max_new_tokens), batch, seed)
+    import time
+    t0 = time.time()
+    samples = sample(tok, model, chat, prompt, int(n), float(t_prime), int(max_new_tokens), batch, seed)
+    t1 = time.time()
+    G, D = gram([s["text"] for s in samples])
+    return samples, G, D, {"generate_s": round(t1 - t0, 2), "embed_s": round(time.time() - t1, 2)}
+
+
+def _embed_duration(texts, embedder=EMBEDDER_ID):
+    return 30
+
+
+if spaces is not None:
+    gpu_embed = spaces.GPU(duration=_embed_duration)
+else:
+    def gpu_embed(f):
+        return f
+
+
+@gpu_embed
+def embed_on_gpu(texts, embedder=EMBEDDER_ID):
+    return gram(texts)
 
 
 def sample_pool(prompt: str, model: str = "", n: int = 20, t_prime: float = 1.0,
                 max_new_tokens: int = 64, seed: int = 0):
-    """Draw a pool of completions with exact log p / log q and MiniLM embeddings."""
+    """Draw a pool with exact log p / log q and the similarity matrix G (docs/BACKEND.md).
+    Errors start with a code ("bad_request: …", "server: …") so the page can explain them."""
     model = model or DEFAULT
     if model not in MODELS:
-        raise gr.Error(f"Unknown model {model!r}. Available: {', '.join(MODELS)}")
-    if not prompt.strip():
-        raise gr.Error("The prompt is empty.")
-    n = max(2, min(int(n), 200 if ON_ZEROGPU else 40))
-    max_new_tokens = max(8, min(int(max_new_tokens), 256))
-    t_prime = min(max(float(t_prime), 0.2), 2.0)
+        raise gr.Error(f"bad_request: Unknown model {model!r}. Available: {', '.join(MODELS)}")
+    prompt = (prompt or "").strip()
+    if not prompt or len(prompt) > 2000:
+        raise gr.Error("bad_request: The prompt must have 1 to 2000 characters.")
+    n, max_new_tokens, t_prime = int(n), int(max_new_tokens), float(t_prime)
+    if not (2 <= n <= MAX_N and 8 <= max_new_tokens <= MAX_TOKENS and 0.2 <= t_prime <= 2.0):
+        raise gr.Error(f"bad_request: Allowed: 2 ≤ n ≤ {MAX_N}, 8 ≤ max tokens ≤ {MAX_TOKENS}, 0.2 ≤ T′ ≤ 2.")
     try:
-        samples = run(prompt, model, n, t_prime, max_new_tokens, seed)
+        samples, G, D, timing = run(prompt, model, n, t_prime, max_new_tokens, seed)
     except gr.Error:
         raise
     except Exception as e:  # pass the reason on to API callers instead of a bare "error"
         print(f"sample_pool failed: {type(e).__name__}: {e}", flush=True)
-        raise gr.Error(f"{type(e).__name__}: {e}")
-    emb = _embedder.encode([s["text"] or "(empty)" for s in samples], normalize_embeddings=True)
-    emb = np.asarray(emb, dtype=np.float32)
+        raise gr.Error(f"server: {type(e).__name__}: {e}")
     repo = MODELS[model][0]
     return {
-        "prompt": prompt, "model": repo, "modelName": repo.split("/")[-1], "embedder": EMBEDDER,
-        "Tprime": t_prime, "maxNewTokens": max_new_tokens, "N": len(samples), "D": int(emb.shape[1]),
-        "samples": samples, "emb": base64.b64encode(emb.tobytes()).decode("ascii"),
+        "prompt": prompt, "model": repo, "modelName": repo.split("/")[-1], "embedder": EMBEDDER, "embedderId": EMBEDDER_ID,
+        "Tprime": t_prime, "maxNewTokens": max_new_tokens, "N": len(samples), "D": D, "seed": int(seed),
+        "samples": samples, "G": G, "timing": timing,
     }
+
+
+def embed(texts, embedder: str = EMBEDDER_ID):
+    """The similarity matrix G of given completions (docs/BACKEND.md, /embed)."""
+    if isinstance(texts, str):
+        import json as _json
+        texts = _json.loads(texts)
+    if not isinstance(texts, list) or not 1 <= len(texts) <= MAX_N or not all(isinstance(t, str) for t in texts):
+        raise gr.Error(f"bad_request: texts must be a list of 1 to {MAX_N} strings.")
+    if (embedder or EMBEDDER_ID) != EMBEDDER_ID:
+        raise gr.Error(f"bad_request: This backend offers the embedder {EMBEDDER_ID!r} only.")
+    try:
+        G, D = embed_on_gpu(texts)
+    except gr.Error:
+        raise
+    except Exception as e:
+        raise gr.Error(f"server: {type(e).__name__}: {e}")
+    return {"embedder": EMBEDDER, "embedderId": EMBEDDER_ID, "N": len(texts), "D": D, "G": G}
 
 
 def models():
@@ -253,6 +308,9 @@ with gr.Blocks(title="Diverse sampling backend") as demo:
     out = gr.JSON(label="Pool")
     gr.Button("Sample").click(sample_pool, [prompt, model, n, t_prime, max_new, seed], out, api_name="sample")
     gr.Button("List models", visible=False).click(models, None, out, api_name="models")
+    texts_in = gr.JSON(visible=False)
+    emb_in = gr.Textbox(value=EMBEDDER_ID, visible=False)
+    gr.Button("Embed", visible=False).click(embed, [texts_in, emb_in], out, api_name="embed")
 
 if __name__ == "__main__":
     demo.queue(default_concurrency_limit=2).launch(show_error=True)

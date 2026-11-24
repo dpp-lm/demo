@@ -22,14 +22,16 @@ import modal
 MODEL_KEY = "qwen3-14b"
 MODEL_REPO = "Qwen/Qwen3-14B-AWQ"   # 4-bit; the same weights as the demo's GPU server
 CHAT_KW = {"enable_thinking": False}
-EMBEDDER = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDER = "Qwen/Qwen3-Embedding-0.6B"   # the same embedder as the demo's GPU server
+EMBEDDER_ID = "qwen3-emb"
+CONTRACT_VERSION = 1
 GPU = "L40S"                    # 48 GB: Qwen3-14B (4-bit weights unpacked to fp16, 30 GB) plus the KV cache
 GPU_DOLLARS_PER_SEC = 0.000542  # modal.com/pricing, L40S
 # $30/month free credit. Budget ~$21 of GPU time and leave the rest for CPU, memory and slack.
 GPU_SECONDS_PER_MONTH = int(os.environ.get("GPU_SECONDS_PER_MONTH", 21 / GPU_DOLLARS_PER_SEC))
 RUNS_PER_USER_PER_DAY = 20
 SCALEDOWN = 120                 # seconds an idle GPU container stays up
-MAX_N, MAX_TOKENS = 100, 256
+MAX_N, MAX_TOKENS = 200, 256   # docs/BACKEND.md: the limits every backend enforces
 ORIGINS = ["https://timvieira.github.io", "http://localhost:8765"]
 
 app = modal.App("dpp-lm-sampler")
@@ -78,7 +80,9 @@ class Sampler:
         _charge(self.charged)
         self.tok = AutoTokenizer.from_pretrained(MODEL_REPO)
         self.model = load_awq_unpacked(MODEL_REPO, "cuda")
-        self.embedder = SentenceTransformer(EMBEDDER, device="cuda")
+        # float32 throughout, so the similarity matrix is as accurate as the embedder allows.
+        self.embedder = SentenceTransformer(EMBEDDER, device="cuda", model_kwargs={"dtype": torch.float32},
+                                            tokenizer_kwargs={"padding_side": "left"})
 
     @modal.exit()
     def settle(self):
@@ -102,24 +106,45 @@ class Sampler:
                 out.append(lp.gather(1, ids[0, len(h):, None]).sum().item())
         return out
 
-    @modal.method()
-    def sample_pool(self, prompt, n, t_prime, max_new_tokens, seed):
+    def _gram(self, texts):
+        """Similarity matrix of unit embeddings: float64 product of float32 vectors, sent as float32."""
         import base64
         import numpy as np
+        emb = self.embedder.encode([t or "(empty)" for t in texts], normalize_embeddings=True, batch_size=16)
+        E = np.asarray(emb, dtype=np.float64)
+        E /= np.linalg.norm(E, axis=1, keepdims=True)
+        G = E @ E.T
+        np.fill_diagonal(G, 1.0)
+        return base64.b64encode(G.astype("<f4").tobytes()).decode("ascii"), int(E.shape[1])
+
+    @modal.method()
+    def sample_pool(self, prompt, n, t_prime, max_new_tokens, seed):
         t0 = time.time()
         try:
             samples = sample(self.tok, self.model, CHAT_KW, prompt, n, t_prime, max_new_tokens, 100, seed)
-            emb = self.embedder.encode([s["text"] or "(empty)" for s in samples], normalize_embeddings=True)
-            emb = np.asarray(emb, dtype=np.float32)
+            t1 = time.time()
+            G, D = self._gram([s["text"] for s in samples])
         finally:
             dt = time.time() - t0
             self.charged += dt
             _charge(dt)
         return {
-            "prompt": prompt, "model": MODEL_REPO, "modelName": MODEL_REPO.split("/")[-1], "embedder": EMBEDDER,
-            "Tprime": t_prime, "maxNewTokens": max_new_tokens, "N": len(samples), "D": int(emb.shape[1]),
-            "samples": samples, "emb": base64.b64encode(emb.tobytes()).decode("ascii"),
+            "prompt": prompt, "model": MODEL_REPO, "modelName": MODEL_REPO.split("/")[-1],
+            "embedder": EMBEDDER, "embedderId": EMBEDDER_ID, "Tprime": t_prime, "maxNewTokens": max_new_tokens,
+            "N": len(samples), "D": D, "seed": seed, "samples": samples, "G": G,
+            "timing": {"generate_s": round(t1 - t0, 2), "embed_s": round(time.time() - t1, 2)},
         }
+
+    @modal.method()
+    def embed(self, texts):
+        t0 = time.time()
+        try:
+            G, D = self._gram(texts)
+        finally:
+            dt = time.time() - t0
+            self.charged += dt
+            _charge(dt)
+        return {"embedder": EMBEDDER, "embedderId": EMBEDDER_ID, "N": len(texts), "D": D, "G": G}
 
 
 def unpack_awq(qweight, qzeros, scales, group_size, bits=4):
@@ -260,38 +285,85 @@ def web():
     api.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_methods=["GET", "POST"],
                        allow_headers=["authorization", "content-type"])
 
+    from fastapi.responses import JSONResponse
+
+    class Fail(Exception):
+        def __init__(self, status, code, detail):
+            self.status, self.code, self.detail = status, code, detail
+
+    @api.exception_handler(Fail)
+    async def on_fail(_req, e):
+        return JSONResponse({"code": e.code, "detail": e.detail}, status_code=e.status)
+
     async def budget_left():
         return GPU_SECONDS_PER_MONTH - await usage.get.aio(f"gpu-seconds:{_month()}", 0)
 
-    @api.get("/status")
-    async def status():
-        return {"model": MODEL_KEY, "gpu_minutes_left_this_month": round(max(0, await budget_left()) / 60)}
-
-    @api.post("/sample")
-    async def sample_endpoint(req: Request):
+    async def visitor(req):
         auth = req.headers.get("authorization", "")
         token = auth[7:] if auth.lower().startswith("bearer ") else ""
         user = await asyncio.to_thread(hf_user, token) if token else None
         if not user:
-            raise HTTPException(401, "Sign in with Hugging Face to use this model.")
+            raise Fail(401, "auth", "Sign in with Hugging Face to use this model.")
         if await budget_left() <= 0:
-            raise HTTPException(429, "This month's GPU budget for the demo is used up. Please use an on-device model.")
+            raise Fail(429, "budget", "This month's GPU budget for the demo is used up.")
+        return user
+
+    async def body_of(req):
+        try:
+            return await req.json()
+        except Exception:
+            raise Fail(400, "bad_request", "The request body is not JSON.")
+
+    @api.get("/status")
+    async def status():
+        return {
+            "version": CONTRACT_VERSION, "model": MODEL_REPO, "modelKey": MODEL_KEY,
+            "embedders": {EMBEDDER_ID: EMBEDDER}, "defaultEmbedder": EMBEDDER_ID,
+            "limits": {"maxN": MAX_N, "maxNewTokens": MAX_TOKENS},
+            "auth": "hf", "gpu_minutes_left_this_month": round(max(0, await budget_left()) / 60),
+        }
+
+    @api.post("/sample")
+    async def sample_endpoint(req: Request):
+        user = await visitor(req)
+        body = await body_of(req)
+        prompt = str(body.get("prompt", "")).strip()
+        if not prompt or len(prompt) > 2000:
+            raise Fail(400, "bad_request", "The prompt must have 1 to 2000 characters.")
+        try:
+            n, t_prime, max_new = int(body.get("n", 30)), float(body.get("t_prime", 1.0)), int(body.get("max_new_tokens", 128))
+        except (TypeError, ValueError):
+            raise Fail(400, "bad_request", "n, t_prime and max_new_tokens must be numbers.")
+        if not (2 <= n <= MAX_N and 8 <= max_new <= MAX_TOKENS and 0.2 <= t_prime <= 2.0):
+            raise Fail(400, "bad_request", f"Allowed: 2 ≤ n ≤ {MAX_N}, 8 ≤ max_new_tokens ≤ {MAX_TOKENS}, 0.2 ≤ t_prime ≤ 2.")
+        if body.get("embedder", EMBEDDER_ID) != EMBEDDER_ID:
+            raise Fail(400, "bad_request", f"This backend offers the embedder {EMBEDDER_ID!r} only.")
         day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         key = f"runs:{day}:{user}"
         runs = await usage.get.aio(key, 0)
         if runs >= RUNS_PER_USER_PER_DAY:
-            raise HTTPException(429, f"You have used today's {RUNS_PER_USER_PER_DAY} runs. Please come back tomorrow.")
+            raise Fail(429, "rate_limit", f"You have used today's {RUNS_PER_USER_PER_DAY} runs. Please come back tomorrow.")
         await usage.put.aio(key, runs + 1)
-        body = await req.json()
-        prompt = str(body.get("prompt", "")).strip()[:2000]
-        if not prompt:
-            raise HTTPException(400, "The prompt is empty.")
-        n = max(2, min(int(body.get("n", 30)), MAX_N))
-        t_prime = min(max(float(body.get("t_prime", 1.0)), 0.2), 2.0)
-        max_new = max(8, min(int(body.get("max_new_tokens", 128)), MAX_TOKENS))
         seed = int(body.get("seed", random.randrange(2**31)))
         print(f"run by {user}: n={n} T'={t_prime} max={max_new}")
-        return await Sampler().sample_pool.remote.aio(prompt, n, t_prime, max_new, seed)
+        try:
+            return await Sampler().sample_pool.remote.aio(prompt, n, t_prime, max_new, seed)
+        except Exception as e:
+            raise Fail(500, "server", f"{type(e).__name__}: {e}")
+
+    @api.post("/embed")
+    async def embed_endpoint(req: Request):
+        await visitor(req)
+        body = await body_of(req)
+        texts = body.get("texts")
+        if not isinstance(texts, list) or not 1 <= len(texts) <= MAX_N or not all(isinstance(t, str) and len(t) <= 20000 for t in texts):
+            raise Fail(400, "bad_request", f"texts must be a list of 1 to {MAX_N} strings.")
+        if body.get("embedder", EMBEDDER_ID) != EMBEDDER_ID:
+            raise Fail(400, "bad_request", f"This backend offers the embedder {EMBEDDER_ID!r} only.")
+        try:
+            return await Sampler().embed.remote.aio(texts)
+        except Exception as e:
+            raise Fail(500, "server", f"{type(e).__name__}: {e}")
 
     return api
 
@@ -301,7 +373,10 @@ def smoke():
     """One small GPU run, for checking a deploy: modal run modal/app.py::smoke"""
     t = time.time()
     pool = Sampler().sample_pool.remote("Name a color in one word.", 6, 1.0, 16, 0)
-    print(f"{pool['N']} samples, D={pool['D']}, {time.time() - t:.0f}s including start-up")
+    import base64, numpy as np
+    G = np.frombuffer(base64.b64decode(pool["G"]), dtype="<f4").reshape(pool["N"], pool["N"])
+    print(f"{pool['N']} samples, D={pool['D']}, G {G.shape}, diag {G.diagonal().min():.4f}..{G.diagonal().max():.4f}, "
+          f"min eigenvalue {np.linalg.eigvalsh(G.astype(np.float64)).min():.2e}, {time.time() - t:.0f}s including start-up")
     for s in pool["samples"]:
         print(f"  logp={s['logp']:8.3f} logq={s['logq']:8.3f} n={s['nTokens']} ended={s['ended']} {s['text']!r}")
 
