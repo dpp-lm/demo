@@ -54,8 +54,10 @@ function endlessFloor(scale, bg, ink) {
 }
 
 export class Plot3D {
-  constructor(el, { onHover, onTap }) {
+  constructor(el, { onHover, onTap, safeRect }) {
     this.el = el;
+    // The open part of the plot, in canvas pixels, not covered by panels floating over it.
+    this.safeRect = safeRect ?? (() => ({ L: 8, T: 8, R: (el.clientWidth || 600) - 8, B: (el.clientHeight || 450) - 8 }));
     this.onHover = onHover;
     this.onTap = onTap;
     const W = el.clientWidth || 600, H = el.clientHeight || 450;
@@ -78,9 +80,10 @@ export class Plot3D {
     this.controls.enablePan = false;
     this.turnLeft = 0;
     this.view = { cx: 0, cy: 0, h: 1 };
-    // Where the origin sits on screen, as the view centre's offset from it in units of the half-height h.
-    // Fixed (until the visitor moves the picture), so the view visibly turns about the origin.
-    this.anchor = { fx: 0, fy: 0 };
+    // Where the origin sits on screen, as a fraction of the open area (0..1 across, 0..1 down). Fixed
+    // until the visitor moves the picture, so the view visibly turns about the origin.
+    this.anchor = { ax: 0.5, ay: 0.5 };
+    this.home = { ax: 0.5, ay: 0.5 };   // the default place, which sets the zoom; panning only moves the picture
     this.installPan();
     this.group = new THREE.Group();
     this.scene.add(this.group);
@@ -145,10 +148,12 @@ export class Plot3D {
       this.camSet = true;
       this.startView();
       this.turnLeft = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : (30 * Math.PI) / 180;
-      const frame = this.frameFor(o, s, 0);
-      this.frameH = frame.h;   // sizes of dots and rods are set for this frame and scaled with the view
-      this.anchor = { fx: frame.cx / frame.h, fy: frame.cy / frame.h };
-      this.setView(frame);
+      // Place the origin for the angle where the opening turn ends, then start the turn from before it.
+      const Y = new THREE.Vector3(0, 1, 0), upd = () => { this.camera.lookAt(0, 0, 0); this.camera.updateMatrixWorld(); };
+      this.camera.position.applyAxisAngle(Y, this.turnLeft); upd();
+      this.placeOrigin(o, s);
+      this.followFit(true);   // also sets the size dots and rods are drawn at for this frame
+      this.camera.position.applyAxisAngle(Y, -this.turnLeft); upd();
     }
     this.targets = o.coords.map((c, i) => {
       const f = (o.scaled ? o.c[i] : 1) * s;
@@ -322,9 +327,9 @@ export class Plot3D {
     let drag = null;
     const perPx = () => (2 * this.view.h) / (this.camera.zoom * (this.el.clientHeight || 450));
     const shift = (dx, dy) => {
-      const k = perPx() / this.view.h, W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, M = 0.85 / 1.08;
-      this.anchor.fx = Math.max(-M * W / H, Math.min(M * W / H, this.anchor.fx - dx * k));
-      this.anchor.fy = Math.max(-M, Math.min(M, this.anchor.fy + dy * k));
+      const r = this.safeRect();
+      this.anchor.ax += dx / (r.R - r.L);
+      this.anchor.ay += dy / (r.B - r.T);
     };
     const stopTurn = () => (this.turnLeft = 0);
     cv.addEventListener('pointerdown', (e) => {
@@ -348,27 +353,43 @@ export class Plot3D {
     cv.addEventListener('contextmenu', (e) => e.preventDefault());
     cv.addEventListener('dblclick', () => {
       if (!this.o) return;
-      stopTurn(); this.startView();
-      const f = this.frameFor(this.o, this.scale, 0);
-      this.anchor = { fx: f.cx / f.h, fy: f.cy / f.h };
+      stopTurn(); this.startView(); this.placeOrigin(this.o, this.scale);
     });
   }
 
-  followFit() {
+  // Put the origin where the drawing, seen from the current view, is centred in the open area.
+  placeOrigin(o, s) {
+    let x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+    for (const [x, y] of this.projected(o, s)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    const r = this.safeRect(), k = Math.min((r.R - r.L) / Math.max(x1 - x0, 1e-6), (r.B - r.T) / Math.max(y1 - y0, 1e-6));
+    const ox = (r.L + r.R) / 2 - k * (x0 + x1) / 2, oy = (r.T + r.B) / 2 + k * (y0 + y1) / 2;
+    this.home = { ax: (ox - r.L) / (r.R - r.L), ay: (oy - r.T) / (r.B - r.T) };
+    this.anchor = { ...this.home };
+  }
+  // Keep everything drawn inside the open area at every angle, with the origin fixed on screen: the
+  // scale is the largest for which every point and every corner of the volume lies inside the open
+  // area (with an 8% margin). The canvas covers the whole window, so nothing is ever cut off; the
+  // fit only keeps the drawing clear of the floating panels. Followed smoothly; dots, vectors and
+  // arrowheads keep their size on screen.
+  followFit(now = false) {
     if (!this.o || !this.camSet) return;
-    // Keep everything drawn inside the plot at every angle, with the origin fixed on screen: the view
-    // centre is at (fx·h, fy·h) from the origin, and h is the smallest half-height for which every
-    // point and every corner of the volume lies inside (with an 8% margin). Followed smoothly; dots,
-    // vectors and arrowheads keep their size on screen.
-    const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, a = W / H, m = 1.08;
-    const { fx, fy } = this.anchor, ax = a / m, ay = 1 / m;
-    let h = 0.05;
+    const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, r = this.safeRect(), m = 1.08;
+    // The zoom: the largest that keeps everything inside the open area with the origin at its default
+    // place (so the visitor's panning never changes it); then the origin goes where the visitor put it.
+    const hx = r.L + this.home.ax * (r.R - r.L), hy = r.T + this.home.ay * (r.B - r.T);
+    let k = Infinity;   // pixels per unit
     for (const [x, y] of this.projected(this.o, this.scale)) {
-      h = Math.max(h, x > 0 ? x / (fx + ax) : -x / (ax - fx), y > 0 ? y / (fy + ay) : -y / (ay - fy));
+      if (x > 1e-9) k = Math.min(k, (r.R - hx) / x); else if (x < -1e-9) k = Math.min(k, (hx - r.L) / -x);
+      if (y > 1e-9) k = Math.min(k, (hy - r.T) / y); else if (y < -1e-9) k = Math.min(k, (r.B - hy) / -y);
     }
-    const v = this.view, k = 0.35, g = { cx: fx * h, cy: fy * h, h };
-    if (Math.abs(g.cx - v.cx) + Math.abs(g.cy - v.cy) + Math.abs(g.h - v.h) > 1e-5 * v.h) {
-      this.setView({ cx: v.cx + (g.cx - v.cx) * k, cy: v.cy + (g.cy - v.cy) * k, h: v.h + (g.h - v.h) * k });
+    const ox = r.L + this.anchor.ax * (r.R - r.L), oy = r.T + this.anchor.ay * (r.B - r.T);
+    if (!isFinite(k) || k <= 0) k = H / 2;
+    k /= m;
+    const h = H / (2 * k), g = { cx: (W / 2 - ox) / k, cy: (oy - H / 2) / k, h };
+    const v = this.view, t = now ? 1 : 0.35;
+    if (now || Math.abs(g.cx - v.cx) + Math.abs(g.cy - v.cy) + Math.abs(g.h - v.h) > 1e-5 * v.h) {
+      this.setView({ cx: v.cx + (g.cx - v.cx) * t, cy: v.cy + (g.cy - v.cy) * t, h: v.h + (g.h - v.h) * t });
+      if (now) this.frameH = this.view.h;
       if (Math.abs(this.view.h - (this.laidH ?? 0)) > 0.01 * this.view.h) this.layout();
     }
   }
@@ -386,12 +407,15 @@ export class Plot3D {
   }
 
   tick() {
+    const tickStart = performance.now();
     if (this.turnLeft > 0) {
-      // The opening turn: about 2 s, slowing at the end.
-      const step = Math.min(this.turnLeft, Math.max(0.0015, this.turnLeft * 0.035));
+      const now = performance.now(), dt = Math.min(0.1, (now - (this.lastTick ?? now)) / 1000);
+      // ease out over about 2 s, at any frame rate
+      const step = Math.min(this.turnLeft, Math.max(0.02 * dt, this.turnLeft * (1 - Math.exp(-2.5 * dt))));
       this.camera.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), step);
       this.turnLeft -= step;
     }
+    this.lastTick = tickStart;
     if (!this.targets || !this.current) return;
     let moving = false;
     this.current.forEach((p, i) => {

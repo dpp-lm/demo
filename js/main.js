@@ -524,18 +524,19 @@ class Plot2D {
     return S.dims === 1 ? [c[0] * scale, this.jit[i] * 1.6] : [c[0] * scale, c[1] * scale];
   }
   fit(points) {
-    const { W, H } = this, m = 16, dims = S.dims;
+    // The drawing goes in the open area between the floating panels; the plot itself fills the window.
+    const dims = S.dims, r = openArea(), w = r.R - r.L, h = r.B - r.T;
     const pad = (a) => { const lo = d3.min(a), hi = d3.max(a), p = 0.06 * (hi - lo || 1); return [lo - p, hi + p]; };
     let [x0, x1] = pad(points.map((q) => q[0]).concat([0]));
     let [y0, y1] = dims === 1 ? [-1, 1] : pad(points.map((q) => q[1]).concat([0]));
     if (dims === 2) {
-      const s = Math.min((W - 2 * m) / (x1 - x0), (H - 2 * m) / (y1 - y0));
+      const s = Math.min(w / (x1 - x0), h / (y1 - y0));
       const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-      x0 = cx - (W - 2 * m) / s / 2; x1 = cx + (W - 2 * m) / s / 2;
-      y0 = cy - (H - 2 * m) / s / 2; y1 = cy + (H - 2 * m) / s / 2;
+      x0 = cx - w / s / 2; x1 = cx + w / s / 2;
+      y0 = cy - h / s / 2; y1 = cy + h / s / 2;
     }
-    this.x = d3.scaleLinear().domain([x0, x1]).range([m, W - m]);
-    this.y = d3.scaleLinear().domain([y0, y1]).range([H - m, m]);
+    this.x = d3.scaleLinear().domain([x0, x1]).range([r.L, r.R]);
+    this.y = d3.scaleLinear().domain([y0, y1]).range([r.B, r.T]);
   }
   update() {
     if (!this.svg) this.build();
@@ -591,6 +592,7 @@ const plot = {
         this.p3 = new Plot3D($('#plot'), {
           onHover: (i, x, y) => { showTip(i, x, y); S.hover = i < 0 ? S.pinned : i; this.highlightCards(S.hover); },
           onTap: (i) => inspect(i),
+          safeRect: openArea,
         });
       }
       this.p3.update({
@@ -654,6 +656,13 @@ function placeLabels() {
   }
 }
 const wide = matchMedia('(min-width: 901px)');
+// The part of the plot not covered by the floating panels (wide screens), in the plot's own pixels.
+function openArea() {
+  const p = $('#plot').getBoundingClientRect();
+  if (!wide.matches) return { L: 8, T: 8, R: p.width - 8, B: p.height - 8 };
+  const left = Math.max($('.dock').getBoundingClientRect().right, $('.top').getBoundingClientRect().right);
+  return { L: left + 20 - p.left, T: 20 - p.top, R: $('.rail').getBoundingClientRect().left - 20 - p.left, B: $('#details').getBoundingClientRect().top - 20 - p.top };
+}
 (function follow3D() {
   if (S.dims === 3 && $('#labels').childElementCount) placeLabels();
   requestAnimationFrame(follow3D);
