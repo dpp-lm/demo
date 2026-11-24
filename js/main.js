@@ -130,7 +130,10 @@ async function sliceOf(b, start, end, embedder) {
 // ---------------------------------------------------------------- configuration
 // What determines the pool on screen: prompt, model weights, embedder, N, T′, max tokens, and which
 // draw. The plot always shows a pool made with exactly these, or keeps the previous one with a note.
-const DEMO_SERVER = 'https://zueri-monstro.rufous-hamlet.ts.net/dpp_api';
+// ?server=local: reach the GPU server through the local mirror (scripts/dev-server.py), for testing
+// from localhost, which the GPU server's CORS rule does not allow.
+const DEMO_SERVER = new URLSearchParams(location.search).get('server') === 'local'
+  ? `${location.origin}/dpp_api` : 'https://zueri-monstro.rufous-hamlet.ts.net/dpp_api';
 const MODAL_URL = 'https://timvieira--dpp-lm-sampler-web.modal.run';
 const SPACE_URL = 'https://xtimv-dpp-lm-sampler.hf.space';
 const QEMB = { id: 'qwen3-emb', repo: 'Qwen/Qwen3-Embedding-0.6B', label: 'Qwen3-Embedding-0.6B' };

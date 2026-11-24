@@ -37,4 +37,6 @@ npm test                          # DPP routines vs brute-force enumeration
 python3 -m http.server 8000       # then open http://localhost:8000
 node tests/smoke.cjs http://localhost:8000/    # headless checks (Playwright)
 node tests/overflow.cjs http://localhost:8000/ # nothing spills out of its box, at 11 widths
+python3 scripts/dev-server.py   # serves the page with a mirror of the GPU server:
+                                # open http://localhost:8770/?server=local to run on it from localhost
 ```
