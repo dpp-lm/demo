@@ -48,6 +48,26 @@ export const EXPLAIN = {
       $$w(y) = \\frac{p(y)^{1/T}}{p^{\\circ}_{T'}(y)}.$$
       The effective sample size $(\\sum w)^2 / \\sum w^2$ says how many completions effectively count. When $T = T'$ every weight is equal; far from $T'$ a few completions dominate.</p>`,
   },
+  model: {
+    title: 'Model',
+    body: `<p>The language model that writes the completions, and the machine it runs on. All three choices are the same model, <b>Qwen3 14B</b> with its weights stored in 4 bits (AWQ), so they give the same probabilities; they differ only in where they run.</p>
+      <p>The <b>GPU server</b> is shared by everyone using this demo. <b>Modal</b> and the <b>Hugging Face Space</b> start a GPU on demand and need a Hugging Face sign-in.</p>`,
+  },
+  embedder: {
+    title: 'Embedding',
+    body: `<p>Turns each completion $y$ into a unit-length vector $\\phi(y)$, its direction in the plot. Completions whose vectors point the same way count as similar, and the subset is chosen to span a large volume.</p>
+      <p><b>Qwen3-Embedding</b> is a model trained for this: texts with similar meaning get nearby vectors. <b>Qwen3 14B’s own states</b> uses the language model itself: its last hidden state, averaged over the completion’s tokens, shifted by a fixed mean and scaled to unit length.</p>`,
+  },
+  N: {
+    title: 'Samples N',
+    body: `<p>How many completions are drawn from the model. The subset of $K$ is then chosen from these $N$.</p>
+      <p>More samples give the choice more to work with and make <b>Sample</b> follow the intended distribution more closely, but take longer to generate.</p>`,
+  },
+  maxtok: {
+    title: 'Max tokens',
+    body: `<p>The longest a completion may be, in tokens (pieces of words). A completion that reaches the limit is cut off; it is marked with “…”.</p>
+      <p>For a cut-off completion only the probability of its beginning is known, so its quality score is less accurate. Raise the limit if many completions are cut off.</p>`,
+  },
   Tprime: {
     title: 'Sampling temperature T′',
     body: `<p>Controls how the completions are generated: every next-token distribution is raised to the power $1/T'$ and renormalized. $T' = 1$ samples the model as it is. Higher $T'$ gives more varied but less coherent text, which is why diversity comes from choosing the subset afterwards instead.</p>`,

@@ -164,7 +164,7 @@ function renderEigbars() {
   const el = $('#eigbars');
   const f = S.proj.frac;
   const max = f[0];
-  el.innerHTML = `<div class="cap">PCA <button type="button" class="xbtn" data-x="pca" aria-label="About the projection">?</button></div>` + f.map((v, k) => {
+  el.innerHTML = `<div class="cap">PCA<button type="button" class="xbtn" data-x="pca" aria-label="About the projection">?</button></div>` + f.map((v, k) => {
     const click = k < 3;
     return `<div class="bar ${k < S.dims ? 'on' : ''}" data-k="${k + 1}" ${click ? `role="button" tabindex="0" aria-label="Show ${k + 1}D"` : ''}
       title="Axis ${k + 1}: ${(100 * v).toFixed(1)}% of variance${click ? ` · click for ${k + 1}D` : ''}">
@@ -184,7 +184,7 @@ function renderReadout() {
   const ok = S.sel.length === S.K;
   const e = ess(logWeights(S.logp, S.logq, S.T.sample));
   // Always the same four slots, so the strip keeps its size (ESS is blank unless sampling).
-  const stat = (k, v, x, hide = false) => `<span class="stat${hide ? ' off' : ''}">${k} <button type="button" class="xbtn" data-x="${x}" aria-label="What is ${k}?" ${hide ? 'tabindex="-1"' : ''}>?</button> <span class="v">${v}</span></span>`;
+  const stat = (k, v, x, hide = false) => `<span class="stat${hide ? ' off' : ''}"><span class="fn">${k}<button type="button" class="xbtn" data-x="${x}" aria-label="What is ${k}?" ${hide ? 'tabindex="-1"' : ''}>?</button></span> <span class="v">${v}</span></span>`;
   $('#readout').innerHTML =
     stat('log P(S)', ok ? fmt(S.logP) : '—', 'logp') +
     stat('quality', ok ? fmt(quality(S.logp, S.sel)) : '—', 'quality') +
@@ -197,7 +197,7 @@ function renderVolHint() {
   const el = $('#vol-hint');
   if (S.dims === 1) { el.innerHTML = ''; return; }
   el.innerHTML = S.sel.length <= 3 && S.sel.length >= 2
-    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg>spanned volume <button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button>`
+    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg><span class="fn">spanned volume<button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button></span>`
     : `<button id="vol-btn" class="link">Show volume (K = 3)</button>`;
   const b = $('#vol-btn');
   if (b) b.onclick = () => setK(3);

@@ -168,8 +168,10 @@ summary.chip { max-width: none; overflow: hidden; text-overflow: ellipsis; displ
 .tfield input[type=range] { margin: 0; }
 
 /* "?" explainer buttons and their popover */
-.xbtn { display: inline-grid; place-items: center; width: 16px; height: 16px; padding: 0; margin: 0 1px; vertical-align: 1px; border: 1px solid #c9c2b6; border-radius: 50%; background: #fff; color: var(--muted); font: 600 10px/1 var(--sans); cursor: pointer; position: relative; flex: none; }
-.xbtn:hover, .xbtn[aria-expanded=true] { color: var(--text); border-color: var(--text-2); }
+/* Footnote-style: a small raised "?" right after the thing it explains. */
+.fn { white-space: nowrap; }
+.xbtn { display: inline-block; padding: 0 1px; margin: 0 0 0 1px; vertical-align: super; border: 0; background: none; color: var(--text-2); font: 600 9.5px/1 var(--sans); cursor: pointer; position: relative; flex: none; }
+.xbtn:hover, .xbtn[aria-expanded=true] { color: var(--text); text-decoration: underline; }
 .xbtn::after { content: ""; position: absolute; inset: -10px; }
 .xpop { position: absolute; z-index: 100; background: #fff; color: var(--text); border: 1px solid var(--border); border-left: 3px solid var(--text-2); border-radius: var(--r); box-shadow: 0 6px 22px rgb(0 0 0 / .14); padding: 10px 34px 10px 14px; font: 15.5px/1.45 var(--serif); }
 .xpop p { margin: .4em 0; }
@@ -328,7 +330,7 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .stepper input { width: 48px; }
   .seg span { padding: 7px 10px; font-size: 13.5px; }
   .seg.small span { padding: 5px 11px; font-size: 12.5px; }
-    .xbtn { width: 18px; height: 18px; font-size: 11px; }
+    .xbtn { font-size: 10.5px; }
   .chip { font-size: 14px; }
   .chipmenu .menu { grid-template-columns: repeat(3, minmax(0, 1fr)); width: min(320px, calc(100vw - 48px)); }
   .viewmenu summary { padding: 5px 10px; font-size: 13px; }
@@ -393,5 +395,22 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
 @media (max-width: 760px) {
   .stage-foot { display: grid; grid-template-columns: 1fr; gap: 6px; }
   .readout { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; }
-  .readout .stat { display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; }
+  .readout .stat { display: grid; grid-template-columns: auto 1fr; align-items: baseline; }
 }
+
+/* Subset controls: T on top; K on the left and Most likely / Sample on the right below it. */
+.step-2 .mode-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.step-2 .pick { display: inline-flex; vertical-align: middle; }
+
+/* Menus that open from the prompt box sit above the plot. */
+.step-1 { position: relative; z-index: 40; }
+/* The legend under the plot fits narrow phones: grid items may shrink, and the self-explanatory
+   "selected" key is dropped when space is short. */
+.stage-foot > * { min-width: 0; }
+@media (max-width: 420px) {
+  .legend { gap: 6px 10px; }
+  .legend .lg:nth-child(2) { display: none; }
+}
+/* The View menu opens above the subset controls docked at the bottom of phone screens. */
+.viewmenu { z-index: 35; }
+.xbtn:focus-visible { outline: 1.5px solid var(--focus); outline-offset: 1px; border-radius: 2px; }
