@@ -3,6 +3,7 @@ import { eigSym, kdpp, greedyMAPLog, quality, diversity, mulberry32 } from './dp
 import { Plot3D } from './plot3d.js';
 import { initExplainers } from './explain.js';
 import { authEnabled, getAuth, signIn, signOut, finishSignIn } from './hfauth.js';
+import { initExpert, noteStatus, queueWatch, poolChanged, selectionChanged } from './expert.js';   // expert:
 
 const $ = (s) => document.querySelector(s);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -147,6 +148,7 @@ const BACKENDS = [
     url: SPACE_URL, auth: true, embedders: [QEMB], up: null },
 ];
 const cap = (t) => t[0].toUpperCase() + t.slice(1);
+const isServer = (B) => B.id === 'server' || B.id.startsWith('server:');   // expert: the GPU server's extra models have ids server:<key>
 const backend = () => BACKENDS.find((b) => b.id === $('#model').value) ?? BACKENDS[0];
 const embedderOf = (B) => B.embedders.find((e) => e.id === $('#embedder').value) ?? B.embedders[0];
 const TARGETS = { global: { label: 'Global (paper)', short: 'global' }, gl: { label: 'Global and local', short: 'global × local' } };
@@ -239,6 +241,7 @@ function setPool(pool, G, view) {
   $('#K').value = S.K;
   S.rng = mulberry32(12345);
   plot.reset();
+  poolChanged();   // expert:
   recompute({ newDraw: true });
 }
 
@@ -356,6 +359,7 @@ function render() {
   renderVolHint();
   renderInspect();
   renderLabels();
+  selectionChanged();   // expert:
 }
 
 // The spectrum panel (opened from the strip under the plot): the share of the pool's variation along
@@ -787,8 +791,10 @@ async function sampleDraws(B, cfg, n, opts) {
   if (B.id === 'space') out = await callSpace(B, 'sample', [cfg.prompt, 'qwen3-14b', n, cfg.Tprime, cfg.maxNewTokens, seed], opts);
   else {
     const body = { prompt: cfg.prompt, n, t_prime: cfg.Tprime, max_new_tokens: cfg.maxNewTokens, seed };
-    if (B.id === 'server') Object.assign(body, { model: 'qwen3-14b', embedder: cfg.embedderId });
-    out = await callBackend(B, '/sample', body, opts);
+    if (isServer(B)) Object.assign(body, { model: B.modelKey ?? 'qwen3-14b', embedder: cfg.embedderId });   // expert: B.modelKey
+    const watch = B.queue ? queueWatch(B, opts.signal) : null;   // expert: request id and queue position
+    if (watch) body.request_id = watch.id;
+    try { out = await callBackend(B, '/sample', body, opts); } finally { watch?.stop(); }
   }
   if (out.N !== n || out.maxNewTokens !== cfg.maxNewTokens || (out.Tprime != null && Math.abs(out.Tprime - cfg.Tprime) > 1e-9) || !Array.isArray(out.samples) || out.samples.length !== n) throw new RunError('mismatch', 'The server did not run the requested settings.');
   return { samples: out.samples, G: gramOf(out, n), timing: out.timing };
@@ -798,7 +804,7 @@ async function embedTexts(B, cfg, samples, opts) {
   const texts = samples.map((s) => s.text);
   let out;
   if (B.id === 'space') out = await callSpace(B, 'embed', [texts, cfg.embedderId], opts);
-  else out = await callBackend(B, '/embed', { texts, embedder: cfg.embedderId, model: 'qwen3-14b', prompt: cfg.prompt, ended: samples.map((s) => s.ended) }, opts);
+  else out = await callBackend(B, '/embed', { texts, embedder: cfg.embedderId, model: B.modelKey ?? 'qwen3-14b', prompt: cfg.prompt, ended: samples.map((s) => s.ended) }, opts);   // expert:
   return gramOf(out, texts.length);
 }
 
@@ -829,10 +835,10 @@ async function runLive({ k = drawK } = {}) {
   const timer = setTimeout(() => { timedOut = true; cloudAbort?.abort(); }, LIMITS.timeoutMs);
   $('#live-go').hidden = true; $('#live-stop').hidden = false;
   const t0 = performance.now(), secs = () => Math.round((performance.now() - t0) / 1000);
-  const slowAfter = B.id === 'server' ? 20 : 90;
+  const slowAfter = isServer(B) ? 20 : 90;   // expert:
   const show = () => stageMsg('running', {
     title: need ? `Sampling ${need} completions… ${secs()} s` : `Embedding the completions… ${secs()} s`,
-    detail: `${escapeHtml(B.label)}.${B.id === 'server' ? '' : ' The first run starts a GPU, which can take a minute or two.'}` +
+    detail: `${escapeHtml(B.label)}.${isServer(B) ? '' : ' The first run starts a GPU, which can take a minute or two.'}` +
       (secs() >= slowAfter ? ' <b>This is taking longer than usual:</b> the server may be busy with other requests, or a GPU is starting.' : ''),
     actions: '<button type="button" class="btn" data-act="stop">Stop</button>',
   });
@@ -896,7 +902,7 @@ function fail(B, e) {
   const retry = '<button type="button" class="btn" data-act="retry">Try again</button>';
   const dismiss = S.pool ? ' <button type="button" class="btn" data-act="dismiss">Dismiss</button>' : '';
   const M = {
-    unreachable: [`${cap(B.the)} isn’t responding.`, B.id === 'server' ? 'It may be offline, or not yet open to this page.' : 'It may be offline.', retry + ' ' + otherModelBtn()],
+    unreachable: [`${cap(B.the)} isn’t responding.`, isServer(B) ? 'It may be offline, or not yet open to this page.' : 'It may be offline.', retry + ' ' + otherModelBtn()],   // expert:
     busy: ['Many people are sampling right now.', msg || 'Try again in a minute.', retry + ' ' + otherModelBtn()],
     rate_limit: ['You have reached this server’s limit for now.', msg, otherModelBtn()],
     budget: ['This month’s GPU budget for the demo is used up.', msg, otherModelBtn()],
@@ -958,7 +964,8 @@ async function checkServer() {
   try {
     const r = await fetch(`${B.url}/status`, { signal: AbortSignal.timeout(6000) });
     B.up = r.ok;
-  } catch { B.up = false; }
+    noteStatus(B, r.ok ? await r.json().catch(() => null) : null);   // expert: queue support, extra models and embedders
+  } catch { B.up = false; noteStatus(B, null); }
   return B.up;
 }
 
@@ -975,7 +982,7 @@ function wire() {
   };
   const modelNote = () => {
     const B = backend(), a = getAuth();
-    const where = B.id === 'server'
+    const where = isServer(B)   // expert:
       ? (B.up === false ? 'The GPU server can’t be reached from this page right now. Precomputed examples still show.' : 'Runs on a GPU server shared by everyone using this demo.')
       : B.id === 'modal' ? 'Runs on a cloud GPU (Modal); needs a free Hugging Face sign-in.'
         : 'Runs on a Hugging Face ZeroGPU Space and uses your account’s daily GPU quota; needs a free Hugging Face sign-in.';
@@ -1076,6 +1083,13 @@ function wire() {
         actions: '<button type="button" class="btn" data-act="signin">Try again</button>' + useServerBtn(), sticky: cfgKey(now),
       }));
     }
+  });
+  // expert: the switch, the menu and the tools behind it
+  initExpert({
+    backends: BACKENDS, setStatus, openSettings: () => { $('#adv').open = true; },
+    refresh: () => { const keep = $('#model').value; fillModels(); $('#model').value = BACKENDS.some((b) => b.id === keep) ? keep : 'server'; onSettings(); },
+    pool: () => S.pool, G: () => S.G, selection: () => S.sel,
+    weights: () => ({ logp: S.logp, logq: S.logq, logKappa: S.pool ? logKappa() : null, T: S.T, mode: S.mode, target: S.target, K: S.K }),
   });
   let rt = 0;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (!S.pool) return; plot.reset(); render(); }, 200); });

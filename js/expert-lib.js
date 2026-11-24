@@ -148,3 +148,32 @@ export function decodeDescribe(body, nGroups) {
   if (!body || !Array.isArray(body.names) || body.names.length !== nGroups) throw new Error('The server returned the wrong number of group names.');
   return { names: body.names.map((x) => (typeof x === 'string' ? x.trim() : '')), model: body.model ?? null, ms: body.ms ?? null };
 }
+
+// ---------- what the GPU server offers beyond the default page ----------
+
+/** "Qwen/Qwen3-Embedding-4B" -> "Qwen3-Embedding-4B": the repository's short name, used as the plain label. */
+export const repoLabel = (repo) => String(repo).split('/').pop();
+
+/**
+ * Embedders and models that a GET /status body lists and the default page does not offer.
+ * `known`: embedder ids the page already has. `defKey`: the model key the page already has.
+ * Returns { embedders: [{ id, repo, label }], models: [{ key, name, repo, state, embedders: [id] }] }.
+ * `embedders` (the extra ones) lists only entries with a repository (the server's `own: null` is not one).
+ * A model is listed when the server reports more than one and its state is not 'unavailable'; its `embedders`
+ * are the ids it can be used with: every embedder of the server, and `own` only if `ownModels` has the model.
+ */
+export function serverExtras(status, { known = ['qwen3-emb', 'own'], defKey = 'qwen3-14b' } = {}) {
+  const emb = status?.embedders && typeof status.embedders === 'object' && !Array.isArray(status.embedders) ? status.embedders : {};
+  const embedders = Object.entries(emb)
+    .filter(([id, repo]) => typeof repo === 'string' && repo && !known.includes(id))
+    .map(([id, repo]) => ({ id, repo, label: repoLabel(repo) }));
+  const list = Array.isArray(status?.models) ? status.models : [];
+  const own = Array.isArray(status?.ownModels) ? status.ownModels : [];
+  const models = list.length < 2 ? [] : list
+    .filter((m) => m && typeof m.key === 'string' && m.key !== defKey && m.state !== 'unavailable')
+    .map((m) => ({
+      key: m.key, name: m.name ?? m.key, repo: m.repo ?? m.key, state: m.state ?? 'ready',
+      embedders: [...known.filter((id) => id !== 'own' && id in emb), ...embedders.map((e) => e.id), ...(known.includes('own') && own.includes(m.key) ? ['own'] : [])],
+    }));
+  return { embedders, models };
+}

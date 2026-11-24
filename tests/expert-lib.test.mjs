@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { gram, columnLogScale, mulberry32 } from '../js/dpp.js';
-import { displayScale, matchPreset, PRESETS, presetDiff, weightLogScale, resolveWeight, paperWeight, weightEss, readoutNotes, effectiveK, normText, distinctCount, gramToVectors, newRequestId, queueText, decodeDescribe } from '../js/expert-lib.js';
+import { displayScale, matchPreset, PRESETS, presetDiff, weightLogScale, resolveWeight, paperWeight, weightEss, readoutNotes, effectiveK, normText, distinctCount, gramToVectors, newRequestId, queueText, decodeDescribe, serverExtras, repoLabel } from '../js/expert-lib.js';
 
 test('displayScale: quality is the same in both modes, importance divides by q, paper follows the mode, unit is 1', () => {
   const logp = [-3, -5, -1, -9, -4], logq = [-3.2, -4.1, -1.5, -8, -4.4];
@@ -157,4 +157,34 @@ test('decodeDescribe checks the group count and trims names', () => {
   assert.deepEqual(decodeDescribe({ names: [' a ', 3], model: 'm', ms: 5 }, 2), { names: ['a', ''], model: 'm', ms: 5 });
   assert.throws(() => decodeDescribe({ names: ['a'] }, 2));
   assert.throws(() => decodeDescribe(null, 1));
+});
+
+const STATUS = {
+  models: [{ key: 'qwen3-14b', name: 'Qwen3 14B', repo: 'Qwen/Qwen3-14B-AWQ', state: 'ready' }],
+  embedders: { minilm: 'sentence-transformers/all-MiniLM-L6-v2', 'qwen3-emb': 'Qwen/Qwen3-Embedding-0.6B', 'qwen3-emb-4b': 'Qwen/Qwen3-Embedding-4B', mpnet: 'sentence-transformers/all-mpnet-base-v2', own: null },
+  ownModels: ['qwen3-14b'],
+};
+
+test('serverExtras: the live /status shape adds three embedders and no model', () => {
+  const x = serverExtras(STATUS);
+  assert.deepEqual(x.embedders.map((e) => [e.id, e.label]), [['minilm', 'all-MiniLM-L6-v2'], ['qwen3-emb-4b', 'Qwen3-Embedding-4B'], ['mpnet', 'all-mpnet-base-v2']]);
+  assert.deepEqual(x.models, []);
+});
+
+test('serverExtras: models appear by themselves when the server reports more than one', () => {
+  const st = { ...STATUS, models: [...STATUS.models,
+    { key: 'qwen3-8b', name: 'Qwen3 8B', repo: 'Qwen/Qwen3-8B', state: 'cold' },
+    { key: 'big', name: 'Big', repo: 'org/Big', state: 'unavailable' },
+    { key: 'gemma', name: 'Gemma', repo: 'google/gemma', state: 'ready' }] };
+  const x = serverExtras(st);
+  assert.deepEqual(x.models.map((m) => [m.key, m.name, m.repo, m.state]), [['qwen3-8b', 'Qwen3 8B', 'Qwen/Qwen3-8B', 'cold'], ['gemma', 'Gemma', 'google/gemma', 'ready']]);
+  // `own` only for models the server lists in ownModels; the default's `qwen3-emb` is included, the id itself is not duplicated
+  assert.deepEqual(x.models[0].embedders, ['qwen3-emb', 'minilm', 'qwen3-emb-4b', 'mpnet']);
+  assert.deepEqual(serverExtras({ ...st, ownModels: ['qwen3-14b', 'gemma'] }).models[1].embedders.at(-1), 'own');
+});
+
+test('serverExtras: missing, malformed or minimal status gives nothing', () => {
+  for (const st of [null, undefined, {}, { embedders: ['minilm'] }, { models: 'x', embedders: null }, { model: 'm' }]) assert.deepEqual(serverExtras(st), { embedders: [], models: [] });
+  assert.deepEqual(serverExtras({ models: [{ key: 'a' }, { key: 'qwen3-14b' }] }).models.map((m) => m.key), ['a']);
+  assert.equal(repoLabel('a/b/c'), 'c');
 });

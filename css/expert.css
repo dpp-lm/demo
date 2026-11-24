@@ -1,0 +1,35 @@
+/* Expert tools: the switch and the Expert menu in the bottom bar. Uses the page's own variables and menu style. */
+
+.expert-bar { display: contents; }
+.expert-switch { white-space: nowrap; }
+label.expert-switch input[type=checkbox] { width: 28px; height: 16px; appearance: none; -webkit-appearance: none; border-radius: 999px; background: var(--btn-line); position: relative; cursor: pointer; transition: background .15s; }
+label.expert-switch input[type=checkbox]::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: transform .15s; }
+label.expert-switch input[type=checkbox]:checked { background: var(--ink); }
+label.expert-switch input[type=checkbox]:checked::after { transform: translateX(12px); }
+label.expert-switch input[type=checkbox]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.expertmenu[hidden] { display: none; }
+
+/* The panel scrolls when long and keeps clear of the screen edges. The ids keep these rules ahead of the View menu's. */
+#expertmenu .menu { white-space: normal; width: min(360px, calc(100vw - 40px)); max-height: min(70vh, calc(100vh - var(--bar-h, 40px) - 24px)); overflow-y: auto; overscroll-behavior: contain; gap: 0; padding: 4px 6px; }
+#expertmenu .xsec { border-bottom: 1px solid var(--border); }
+#expertmenu .xsec:last-child { border-bottom: 0; }
+#expertmenu .xsec > summary { display: block; list-style: none; cursor: pointer; padding: 8px 4px; border: 0; border-radius: 4px; background: none; font: 500 13px var(--sans); color: var(--text); }
+#expertmenu .xsec > summary::-webkit-details-marker { display: none; }
+#expertmenu .xsec > summary:hover { background: var(--surface-2); }
+#expertmenu .xsec > summary::after { content: none; }
+#expertmenu .xsec > summary::before { content: "▸"; display: inline-block; width: 1.1em; color: var(--muted); font-size: 10px; }
+#expertmenu .xsec[open] > summary::before { content: "▾"; }
+#expertmenu .xsec-body { padding: 0 4px 8px 1.1em; display: flex; flex-direction: column; gap: 6px; }
+#expertmenu .x-note { margin: 0; font: 12.5px/1.4 var(--sans); color: var(--text-2); }
+#expertmenu .x-act { margin: 0; }
+#expertmenu .x-act .btn { font-size: 12.5px; padding: 4px 12px; }
+
+@media (min-width: 901px) {
+  .drawer .expertmenu { order: 5; margin-left: 0; }
+  .drawer .expert-switch { order: 6; }
+}
+@media (max-width: 900px) {
+  .expert-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0 8px; border-top: 1px solid var(--border); }
+  #expertmenu { margin-left: 0; }
+  #expertmenu .menu { left: 0; right: auto; }
+}
