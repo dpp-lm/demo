@@ -498,6 +498,14 @@ class Plot2D {
     this.W = el.clientWidth || 600;
     this.H = el.clientHeight || 450;
     const svg = d3.select(el).append('svg').attr('viewBox', `0 0 ${this.W} ${this.H}`);
+    // The background grid (2-D): the 3-D view's floor seen flat. Cells of 1/8, fading out with distance
+    // from the origin (gone by 6 units) through a radial mask.
+    const defs = svg.append('defs');
+    this.fade = defs.append('radialGradient').attr('id', 'grid-fade').attr('gradientUnits', 'userSpaceOnUse');
+    this.fade.append('stop').attr('offset', 0).attr('stop-color', '#fff').attr('stop-opacity', 1);
+    this.fade.append('stop').attr('offset', 1).attr('stop-color', '#fff').attr('stop-opacity', 0);
+    defs.append('mask').attr('id', 'grid-mask').append('rect').attr('width', this.W).attr('height', this.H).attr('fill', 'url(#grid-fade)');
+    this.gGrid = svg.append('g').attr('mask', 'url(#grid-mask)');
     this.gOrigin = svg.append('g');
     this.gOrigin.append('path').attr('stroke', css('--muted')).attr('stroke-width', 1);
     this.gPara = svg.append('g');
@@ -566,6 +574,7 @@ class Plot2D {
     const px = (q) => [this.x(q[0]), this.y(q[1])];
     this.pos = posD.map(px);
     const ox = this.x(0), oy = this.y(0);
+    this.drawGrid(dims === 2, ox, oy);
     const t = animate ? this.svg.transition().duration(450).ease(d3.easeCubicOut) : null;
     const go = (selection) => (t ? selection.transition(t) : selection);
     go(this.gOrigin.select('path').attr('stroke-dasharray', dims === 1 ? '3 3' : null))
@@ -588,6 +597,20 @@ class Plot2D {
       .sort((a, b) => sel.has(a) - sel.has(b)))
       .attr('cx', (i) => this.pos[i][0]).attr('cy', (i) => this.pos[i][1]);
     if (!animate) renderLabels();
+  }
+  drawGrid(on, ox, oy) {
+    if (!on) { this.gGrid.selectAll('line').remove(); return; }
+    const R = 6, unit = Math.abs(this.x(1) - this.x(0));   // pixels per unit length
+    this.fade.attr('cx', ox).attr('cy', oy).attr('r', R * unit);
+    let step = 1 / 8;
+    while (step * unit < 6) step *= 2;   // never denser than one line per 6 px
+    const lines = [], xa = Math.max(-R, this.x.invert(0)), xb = Math.min(R, this.x.invert(this.W));
+    const ya = Math.max(-R, this.y.invert(this.H)), yb = Math.min(R, this.y.invert(0));
+    for (let v = Math.ceil(xa / step) * step; v <= xb; v += step) lines.push([this.x(v), this.y(-R), this.x(v), this.y(R)]);
+    for (let v = Math.ceil(ya / step) * step; v <= yb; v += step) lines.push([this.x(-R), this.y(v), this.x(R), this.y(v)]);
+    this.gGrid.selectAll('line').data(lines).join('line')
+      .attr('x1', (d) => d[0]).attr('y1', (d) => d[1]).attr('x2', (d) => d[2]).attr('y2', (d) => d[3])
+      .attr('stroke', css('--text-2')).attr('stroke-opacity', 0.3).attr('stroke-width', 1).attr('shape-rendering', 'crispEdges');
   }
   highlight(i) {
     if (!this.svg) return;
