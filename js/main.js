@@ -268,9 +268,11 @@ function recompute({ newDraw = true } = {}) {
   const piW = S.mode === 'sample' ? dist.pi : kdpp(G, N, lw, K).pi;
   let s2 = 0; for (const p of piW) s2 += (p / K) ** 2;
   S.fit = (K * K * N * s2) / (N - K + 1);
-  // Drawn length of each point: √(weight) relative to the largest, as the kernel uses it.
-  const m = Math.max(...scale);
-  S.c = scale.map((s) => Math.exp(0.5 * (s - m)));
+  // Drawn length of each point: √κ (its quality under the target) relative to the largest, in both
+  // modes. The importance weights Sample uses only correct for how the pool was drawn; they are not a
+  // property of the completion, so the points do not move when the mode changes.
+  const m = Math.max(...lk);
+  S.c = lk.map((s) => Math.exp(0.5 * (s - m)));
   S.proj = project();
   render();
 }
