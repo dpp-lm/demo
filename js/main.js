@@ -526,9 +526,9 @@ const BACKENDS = [
       { id: 'qwen3-emb', repo: 'Qwen/Qwen3-Embedding-0.6B', label: 'Qwen3-Embedding-0.6B' },
       { id: 'own', repo: 'own:Qwen/Qwen3-14B-AWQ', label: 'Qwen3 14B’s own states' },
     ] },
-  { id: 'modal', label: 'Qwen3 14B, 16-bit (bf16) · Modal, sign-in', short: 'Qwen3 14B 16-bit', repo: 'Qwen/Qwen3-14B',
+  { id: 'modal', label: 'Qwen3 14B, 4-bit (AWQ) · Modal, sign-in', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
     url: MODAL_URL, auth: true, maxN: 100, maxTokens: 256, embedders: [MINILM] },
-  { id: 'space', label: 'Qwen3 14B, 16-bit (bf16) · Hugging Face Space, sign-in', short: 'Qwen3 14B 16-bit', repo: 'Qwen/Qwen3-14B',
+  { id: 'space', label: 'Qwen3 14B, 4-bit (AWQ) · Hugging Face Space, sign-in', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
     url: SPACE_URL, auth: true, maxN: 200, maxTokens: 256, embedders: [MINILM] },
 ];
 const backend = () => BACKENDS.find((b) => b.id === $('#model').value) ?? BACKENDS[0];

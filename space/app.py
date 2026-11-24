@@ -48,7 +48,7 @@ SMALL = {
     "qwen3-1.7b": ("Qwen/Qwen3-1.7B", {"enable_thinking": False}),
 }
 LARGE = {
-    "qwen3-14b": ("Qwen/Qwen3-14B", {"enable_thinking": False}),
+    "qwen3-14b": ("Qwen/Qwen3-14B-AWQ", {"enable_thinking": False}),   # 4-bit: the demo server's weights
 }
 MODELS = LARGE if ON_ZEROGPU else SMALL
 DEFAULT = os.environ.get("MODEL_KEY", next(iter(MODELS)))
@@ -57,12 +57,72 @@ EMBEDDER = "sentence-transformers/all-MiniLM-L6-v2"
 _cache = {}
 
 
+def unpack_awq(qweight, qzeros, scales, group_size, bits=4):
+    """AWQ "gemm" packing (AutoAWQ): 8 4-bit values per int32, in the order 0 2 4 6 1 3 5 7.
+    Returns the linear layer's weight [out, in] = ((q - zero) * scale)^T, in the scales' dtype."""
+    import torch
+    shifts = torch.arange(0, 32, bits, device=qweight.device)
+    def unpack(x):
+        v = torch.bitwise_right_shift(x[:, :, None], shifts[None, None, :]).view(x.shape[0], -1)
+        order = torch.arange(v.shape[1], device=x.device).view(-1, 32 // bits)[:, [0, 4, 1, 5, 2, 6, 3, 7]].reshape(-1)
+        return torch.bitwise_and(v[:, order], 2**bits - 1)
+    q, z = unpack(qweight), unpack(qzeros)
+    w = (q - z.repeat_interleave(group_size, 0)).to(scales.dtype) * scales.repeat_interleave(group_size, 0)
+    return w.t().contiguous()
+
+
+def load_awq_unpacked(repo, device, path=None):
+    """The AWQ checkpoint as a plain fp16 model: every 4-bit weight unpacked to (q - zero) * scale.
+    These are exactly the 4-bit model's weights; only the matrix kernels differ from an int4 engine.
+    The model is built on `device` without random initialisation, then filled tensor by tensor."""
+    import glob, json, os
+    import torch
+    from safetensors import safe_open
+    from transformers import AutoConfig, AutoModelForCausalLM
+    from transformers.initialization import no_init_weights
+    if path is None:
+        from huggingface_hub import snapshot_download
+        path = snapshot_download(repo)
+    qc = json.load(open(os.path.join(path, "config.json")))["quantization_config"]
+    assert qc["quant_method"] == "awq" and qc["version"] == "gemm" and qc["bits"] == 4 and qc["zero_point"]
+    cfg = AutoConfig.from_pretrained(path)
+    cfg.__dict__.pop("quantization_config", None)
+    with no_init_weights(), torch.device(device):
+        model = AutoModelForCausalLM.from_config(cfg, dtype=torch.float16)
+    params = dict(model.named_parameters())
+    done, packed = set(), {}
+    for f in sorted(glob.glob(os.path.join(path, "*.safetensors"))):
+        with safe_open(f, framework="pt", device=str(device)) as st:
+            for k in st.keys():
+                if k.endswith((".qweight", ".qzeros", ".scales")):
+                    base, part = k.rsplit(".", 1)
+                    packed.setdefault(base, {})[part] = st.get_tensor(k)
+                    t = packed[base]
+                    if len(t) == 3:
+                        w = unpack_awq(t["qweight"], t["qzeros"], t["scales"].to(torch.float16), qc["group_size"])
+                        params[base + ".weight"].data.copy_(w)
+                        done.add(base + ".weight")
+                        del packed[base], w
+                else:
+                    params[k].data.copy_(st.get_tensor(k))
+                    done.add(k)
+    if getattr(cfg, "tie_word_embeddings", False):
+        model.tie_weights()
+        done |= {k for k in params if k.startswith("lm_head")}
+    missing = set(params) - done
+    assert not missing and not packed, (sorted(missing)[:5], list(packed)[:5])
+    return model.eval()
+
+
 def load(key):
     if key not in _cache:
         repo, chat = MODELS[key]
         tok = AutoTokenizer.from_pretrained(repo)
         on_gpu = ON_ZEROGPU or DEVICE == "cuda"
-        model = AutoModelForCausalLM.from_pretrained(repo, dtype=torch.bfloat16 if on_gpu else torch.float32)
+        if repo.endswith("-AWQ"):   # unpacked on the CPU; ZeroGPU moves it to the GPU below
+            model = load_awq_unpacked(repo, "cpu")
+        else:
+            model = AutoModelForCausalLM.from_pretrained(repo, dtype=torch.bfloat16 if on_gpu else torch.float32)
         model.eval()
         if on_gpu:
             model.to("cuda")

@@ -16,10 +16,7 @@
 - Qwen3-Embedding-4B on the server; then add it to the page and re-embed the precomputed pools.
 - The own-state files for Qwen3 14B (P, mean, meta), so other backends compute the same vectors.
 
-## On hold until we decide
-- Modal and the Hugging Face Space: switch to the same 4-bit (AWQ) weights as the server.
-
 ## Later
-- Precomputed Qwen3 14B pools for the "Tell a joke" and "Sorting algorithm" presets.
+- Modal and the Space use MiniLM-L6; give them the same embedders as the server.
 - Check the LM's own states against Qwen3-Embedding (the picks on the joke and sorting presets)
   before relying on them.
