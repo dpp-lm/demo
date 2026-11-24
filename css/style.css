@@ -517,6 +517,9 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .drawer .viewmenu:not([open]) { z-index: auto; }   /* closed menus stay under the docked T/K bar */
   .plot { height: 55vh; }
   .wip { font-size: 14px; padding: 6px 12px; }
+  /* The docked T/K bar is the page's last item: no padding below it, so at the end of the page it stays flush
+     with the bottom edge instead of lifting off it. */
+  .shell { padding-bottom: 0; }
   /* T and K dock to the bottom of the screen while scrolling. */
   .step-2 {
     order: 4; position: sticky; bottom: 0; z-index: 30;
