@@ -503,17 +503,18 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .step-1 { order: 0; }
   .stage { order: 1; }
   .rail { order: 2; }
-  .drawer { order: 3; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 4px 12px; }
-  .drawer-close { display: none; }
-  .drawer-title { width: 100%; text-align: left; padding: 10px 0; font: 14px var(--sans); letter-spacing: 0; text-transform: none; color: var(--text-2); }
-  .drawer-title::before { content: "▸ "; color: var(--muted); }
-  .drawer.open .drawer-title::before { content: "▾ "; }
-  .drawer-title .flag { position: static; margin-left: 6px; vertical-align: middle; }
-  .drawer-title.warnflag .flag { display: inline-block; }
-  .drawer:not(.open) .drawer-body { display: none; }
-  .drawer .stage-foot { border-top: 1px solid var(--border); padding-inline: 0; }
-  .drawer .stage-bar { padding-inline: 0; }
-  .drawer .fit-note { padding-inline: 0; }
+  /* The readouts: a bar attached to the bottom of the plot, always visible (no Details box). */
+  .stage { border-radius: var(--r) var(--r) 0 0; }
+  .drawer { order: 1; margin-top: -13px; background: var(--surface); border: 1px solid var(--border); border-top: 1px solid var(--border); border-radius: 0 0 var(--r) var(--r); padding: 6px 12px 4px; }
+  .drawer-head { display: none; }
+  .drawer .drawer-body { display: block !important; }
+  .drawer .legend { display: none; }   /* the red of the selection explains itself */
+  .drawer .stage-foot { border-top: 0; padding: 0; }
+  .drawer .stage-bar { padding: 2px 0 0; border-top: 0; }
+  .drawer .stat.warn.can-open .v { text-decoration: underline dotted; text-underline-offset: 3px; cursor: pointer; }
+  .drawer .fit-note { padding: 6px 0 4px; }
+  .drawer .fit-note:not(.show) { display: none; }   /* tap the red pool-fit value to read it */
+  .drawer .viewmenu:not([open]) { z-index: auto; }   /* closed menus stay under the docked T/K bar */
   .plot { height: 55vh; }
   .wip { font-size: 14px; padding: 6px 12px; }
   /* T and K dock to the bottom of the screen while scrolling. */

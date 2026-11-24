@@ -380,28 +380,20 @@ function renderReadout() {
   const N = S.logp.length, K = S.K;
   const ok = S.sel.length === K;
   const stat = (k, v, x, cls = '') => `<span class="stat ${cls}"><span class="fn">${k}<button type="button" class="xbtn" data-x="${x}" aria-label="What is ${k}?">?</button></span> <span class="v">${v}</span></span>`;
-  const poor = S.fit > 1;
   $('#readout').innerHTML =
     stat('log P(S)', ok ? fmt(S.logP) : '—', 'logp') +
     stat('quality', ok ? fmt(quality(S.logp, S.sel)) : '—', 'quality') +
     stat('diversity', ok ? fmt(diversity(S.G, N, S.sel)) : '—', 'diversity') +
-    stat('pool fit', ok ? `${fmt(S.fit)} nats` : '— why?', 'fit', ok && poor ? 'warn' : '');
+    stat('pool fit', ok ? `${fmt(S.fit)} nats` : '— why?', 'fit');   // a plain number: no cut-off for 'poor'
   $('#readout').title = ok ? '' : `No subset of size ${K}: the pool spans fewer than ${K} independent directions.`;
   const note = $('#fit-note');
   if (!ok) {
     note.hidden = false;
     note.textContent = `No subset of ${K} completions has positive volume in this pool: lower K, or sample more varied completions (raise T′).`;
-  } else if (poor) {
-    note.hidden = false;
-    const tp = S.view ? readConfig().Tprime : 1;
-    note.innerHTML = S.mode === 'sample'
-      ? `<b>The pool is a poor match for the target at this T</b> (pool fit ${fmt(S.fit, 1)} nats): Sample may be far from the distribution it aims at. Move T toward T′ = ${tp}, or sample the pool at a T′ closer to T.`
-      : `<b>The pool is a poor match for the target at this T</b> (pool fit ${fmt(S.fit, 1)} nats): the target favours completions the pool rarely contains, so the best set over all strings may not be in it. Move T toward T′ = ${tp}, or sample at a T′ closer to T.`;
   } else note.hidden = true;
   // The Details button carries a dot when the note inside has something to say.
   for (const b of [$('#details-btn'), $('#details-toggle')]) b.classList.toggle('warnflag', !note.hidden);
-  // In the bar (wide screens) the note is a popover, opened by "why?" after the readouts.
-  // In the bar (wide screens) the note is a popover: the pool-fit value opens it.
+  // The note (only when no K-subset exists, an exact condition) opens from the pool-fit "— why?".
   const fitStat = $('#readout').querySelector('.stat:last-child');
   if (!note.hidden) { fitStat.classList.add('warn', 'can-open'); fitStat.querySelector('.v').id = 'fit-why'; fitStat.querySelector('.v').title = 'Why?'; }
   else note.classList.remove('show');
@@ -1078,7 +1070,8 @@ function wire() {
   $('#all-list').addEventListener('toggle', () => renderAllCards());
   $('#readout').addEventListener('click', (e) => {
     const v = e.target.closest('#fit-why');
-    if (!v || !wide.matches) return;
+    if (!v) return;
+    if (!wide.matches) { $('#fit-note').classList.toggle('show'); return; }   // phones: shown in the bar, under the readouts
     // Open just above the value that was clicked, kept on screen.
     const note = $('#fit-note'), bar = $('#details').getBoundingClientRect(), r = v.getBoundingClientRect();
     note.classList.toggle('show');
