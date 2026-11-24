@@ -11,11 +11,9 @@ function rod(a, b, r, color) {
   return m;
 }
 
-// "origin", written just left of the origin (a sprite, so it always faces the viewer). The selected
-// vectors are drawn from the origin, so their meeting point marks it; the word names it.
 // The x, y, z axes through the origin, from −1 to 1 (the length of every embedding). Coloured per
 // vertex so the near end is darker than the far end (see shadeDepth).
-function globe(scale) {
+function axesLines(scale) {
   // Drawn first and without depth writes, so points, vectors and the volume always sit on top.
   const g = new THREE.Group(), mat = new THREE.LineBasicMaterial({ vertexColors: true, depthWrite: false });
   const line = (pts, ink) => {
@@ -31,25 +29,6 @@ function globe(scale) {
   }
   g.scale.setScalar(scale);
   return g;
-}
-
-function originMarker(color, h) {
-  const W = 256, H = 64, cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
-  const g = cv.getContext('2d');
-  g.fillStyle = color;
-  g.font = '500 30px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif';
-  g.textAlign = 'right'; g.textBaseline = 'middle';
-  g.fillText('origin', W - 14, H / 2);
-  g.beginPath(); g.arc(W - 4, H / 2, 4, 0, 2 * Math.PI); g.fill();
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-  sp.center.set((W - 4) / W, 0.5);        // the dot sits exactly on the origin, the word to its left
-  const s = 0.085 * h;                    // about 13 px tall on a 450-px plot, at any zoom
-  sp.scale.set(s * W / H, s, 1);
-  sp.renderOrder = 2;
-  return sp;
 }
 
 export class Plot3D {
@@ -146,14 +125,13 @@ export class Plot3D {
     const N = o.coords.length;
     for (const ch of [...this.group.children]) { this.group.remove(ch); ch.geometry?.dispose(); ch.material?.dispose(); }
     // No axes or floor grid: the only meaningful frame is the origin, from which the scored volume is measured.
-    this.group.add(originMarker(o.text ?? '#555555', this.frameH ?? this.camera.top));
     // The x, y, z axes through the origin, which the view turns about.
-    this.globe = globe(this.scale);
+    this.globe = axesLines(this.scale);
     this.globeInk = new THREE.Color(o.text ?? '#555555');
     this.group.add(this.globe);
     // Points.
-    // Radius tied to the zoom: about 2.5 px on a 450-px-tall plot, the same as the 2-D dots.
-    const sphere = new THREE.SphereGeometry(0.011 * (this.frameH ?? this.camera.top), 10, 8);
+    // Radius tied to the zoom: about 1.5 px on a 600-px-tall plot, the same as the 2-D dots.
+    const sphere = new THREE.SphereGeometry(0.0055 * (this.frameH ?? this.camera.top), 10, 8);
     this.mesh = new THREE.InstancedMesh(sphere, new THREE.MeshLambertMaterial(), N);
     const sel = new Set(o.sel);
     // Base colours; shadeDepth() fades each toward the background by its distance from the viewer.
@@ -282,9 +260,8 @@ export class Plot3D {
     if (!this.mesh) return;
     const r = this.renderer.domElement.getBoundingClientRect();
     this.mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-    this.ray.setFromCamera(this.mouse, this.camera);
-    const hit = this.ray.intersectObject(this.mesh)[0];
-    const i = hit ? hit.instanceId : -1;
+    // The nearest point on screen within 10 px (the dots are too small to hit exactly).
+    const i = this.nearest(e.clientX, e.clientY, 10);
     if (i !== this.hovered) { this.hovered = i; this.layout(); }
     this.onHover(i, e.clientX, e.clientY);
   }

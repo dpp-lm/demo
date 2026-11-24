@@ -429,3 +429,7 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .stage-foot .legend { grid-column: 1 / -1; }
   .stage-foot .specmenu { align-self: end; }
 }
+
+/* Nothing in the plot is text to select: dragging rotates the view or pans, and labels open the inspector. */
+.plot-box, .plot-box * , .stage-msg .t, .labels, .lbl { -webkit-user-select: none; user-select: none; }
+.stage-msg .d { -webkit-user-select: text; user-select: text; }   /* error details can still be copied */

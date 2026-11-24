@@ -461,7 +461,6 @@ class Plot2D {
     const svg = d3.select(el).append('svg').attr('viewBox', `0 0 ${this.W} ${this.H}`);
     this.gOrigin = svg.append('g');
     this.gOrigin.append('path').attr('stroke', css('--muted')).attr('stroke-width', 1);
-    this.gOrigin.append('text').attr('class', 'direct-label').attr('font-size', 11).attr('fill', css('--muted')).text('origin');
     this.gPara = svg.append('g');
     this.gArrow = svg.append('g');
     this.gDot = svg.append('g');
@@ -515,7 +514,6 @@ class Plot2D {
     const t = this.svg.transition().duration(450).ease(d3.easeCubicOut);
     this.gOrigin.select('path').attr('stroke-dasharray', dims === 1 ? '3 3' : null).transition(t)
       .attr('d', dims === 1 ? `M${ox},16V${H - 16}` : `M${ox - 6},${oy}H${ox + 6}M${ox},${oy - 6}V${oy + 6}`);
-    this.gOrigin.select('text').transition(t).attr('x', ox + 6).attr('y', dims === 1 ? 26 : oy - 6);
     const y0 = (i) => (dims === 1 ? this.pos[i][1] : oy);
     this.gArrow.selectAll('line').data(S.sel.length <= 3 ? S.sel : [], (i) => i).join(
       (enter) => enter.append('line').attr('x1', ox).attr('y1', y0).attr('x2', ox).attr('y2', y0),
@@ -530,7 +528,7 @@ class Plot2D {
     this.gDot.selectAll('circle').data(idx).join('circle')
       .attr('fill', (i) => (sel.has(i) ? css('--accent') : css('--ink')))
       .attr('stroke', css('--surface')).attr('stroke-width', 0.75)
-      .attr('r', 3)
+      .attr('r', 1.6)
       .sort((a, b) => sel.has(a) - sel.has(b))
       .transition(t).attr('cx', (i) => this.pos[i][0]).attr('cy', (i) => this.pos[i][1]);
   }
