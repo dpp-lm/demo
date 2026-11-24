@@ -144,14 +144,19 @@ summary.chip { max-width: none; overflow: hidden; text-overflow: ellipsis; displ
 
 /* step 2: T slider with its two ends inline */
 .mode-row { display: flex; align-items: center; gap: 8px; }
-.mode-row .seg { flex: none; }
+.mode-row .grow { flex: 1; }
+/* Two ways to choose the subset; the one in use looks pressed. "Sample" draws a new subset each time. */
+.pick { display: flex; gap: 2px; padding: 2px; background: rgba(0,0,0,.04); border-radius: 4px; }
+.pick-btn { font: 12.5px var(--sans); color: var(--text-2); background: transparent; border: 0; border-radius: 3px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
+.pick-btn:hover { color: var(--text); background: rgba(255,255,255,.6); }
+.pick-btn[aria-pressed="true"] { background: #fff; color: var(--text); box-shadow: 0 0 0 1px var(--btn-line); }
+.pick-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 /* Subset controls: compact everywhere. */
 .step-2 { gap: 8px; }
 .step-2 .seg { padding: 2px; gap: 2px; grid-auto-columns: auto; }
 .step-2 .seg span { padding: 2px 10px; font-size: 12.5px; white-space: nowrap; }
 .step-2 .btn.icon { width: 28px; min-height: 28px; padding: 0; font-size: 15px; }
 .step-2 .stepper input { width: 38px; min-height: 28px; padding-block: 2px; }
-.step-2 #resample { padding: 4px 12px; font-size: 13px; }
 .kfield { flex-direction: row; align-items: center; gap: 8px; }
 .kfield .lab { font: 500 13px var(--sans); color: var(--text-2); }
 .step-2 .row-between { align-items: center; }
@@ -342,25 +347,16 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
      so T and K can be changed while watching the selection move. */
   .step-2 {
     position: sticky; bottom: 0; z-index: 30;
-    display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "seg k" "t t" "r r";
-    gap: 8px 10px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    display: flex; flex-direction: column;
+    gap: 6px; padding: 8px 16px calc(8px + env(safe-area-inset-bottom, 0px));
     margin: 0 -16px; border-radius: var(--r) var(--r) 0 0; border-bottom: 0;
     box-shadow: 0 -6px 20px rgb(0 0 0 / .08);
   }
-  .step-2 > h2 { display: none; }
-  .step-2 .seg span { padding: 3px 10px; font-size: 12.5px; }
   .step-2 .btn.icon { width: 28px; min-height: 28px; padding: 0; font-size: 15px; }
   .step-2 .stepper input { width: 36px; min-height: 28px; padding-block: 2px; }
-  .step-2 { gap: 6px 8px; padding-block: 8px calc(8px + env(safe-area-inset-bottom, 0px)); }
+  .step-2 .pick-btn { padding: 5px 10px; }
   .step-2 input[type=range] { height: 24px; }
   .step-2 .tlab { font-size: 12.5px; }
-  .step-2 > .mode-row { grid-area: seg; align-self: center; }
-  .step-2 > .tfield { grid-area: t; }
-  .step-2 > .row-between { display: contents; }
-  .step-2 > .row-between > .field { grid-area: k; align-self: end; }
-  .step-2 > .row-between > .field > .lab { display: none; }
-  .step-2 #resample { grid-area: r; }
-  .step-2 #resample:disabled { display: none; }
 
 }
 

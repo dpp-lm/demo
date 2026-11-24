@@ -19,7 +19,7 @@ export const EXPLAIN = {
       $$\\det \\mathbf L_S = \\Big(\\prod_{y\\in S}\\kappa(y)\\Big)\\,\\det\\!\\big(\\Phi_S^\\top \\Phi_S\\big).$$
       The volume is large when the arrows are long (likely completions) and point different ways (different meanings), and zero when two are the same. This is a determinantal point process (DPP).</p>
       <p><b>Most likely</b> picks the set with the largest volume, adding one completion at a time. Exact search is NP-hard; the greedy answer is within a factor $(K!)^2$ of the best.</p>
-      <p><b>Sample</b> draws a random set with probability proportional to its volume, so you see different good sets. Press Resample to draw again.</p>`,
+      <p><b>Sample</b> draws a random set with probability proportional to its volume, so you see different good sets. Press Sample again for another draw.</p>`,
   },
   volume: {
     title: 'Spanned volume',

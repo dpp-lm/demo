@@ -63,21 +63,14 @@
       <p id="live-status" class="status" aria-live="polite"></p>
     </section>
 
-    <section class="step step-2">
-      <h2>Pick a subset</h2>
+    <section class="step step-2" aria-label="Subset">
       <div class="mode-row">
-        <div class="seg" role="radiogroup" aria-label="Selection rule">
-          <label><input type="radio" name="mode" value="map" checked><span>Most likely</span></label>
-          <label><input type="radio" name="mode" value="sample"><span>Sample</span></label>
+        <div class="pick" role="group" aria-label="How to choose the subset">
+          <button type="button" class="pick-btn" data-mode="map" aria-pressed="true">Most likely</button>
+          <button type="button" class="pick-btn" data-mode="sample" aria-pressed="false">Sample</button>
         </div>
         <button type="button" class="xbtn" data-x="subset" aria-label="How is the subset chosen?">?</button>
-      </div>
-      <div class="tfield">
-        <span class="tlab"><label for="T-slider" title="Temperature">T</label> <button type="button" class="xbtn" data-x="T" aria-label="What does T do?">?</button> <output id="T-out" class="val">1.00</output></span>
-        <input id="T-slider" type="range" min="0" max="1000" step="1" value="500" aria-label="Temperature T">
-        <span class="ends" aria-hidden="true"><span>quality</span><span>diversity</span></span>
-      </div>
-      <div class="row-between">
+        <span class="grow"></span>
         <div class="field kfield">
           <span class="lab" id="K-lab" title="Subset size">K</span>
           <div class="stepper" role="group" aria-labelledby="K-lab">
@@ -86,7 +79,11 @@
             <button class="btn icon" id="K-plus" aria-label="Increase K">+</button>
           </div>
         </div>
-        <button id="resample" class="btn">Resample</button>
+      </div>
+      <div class="tfield">
+        <span class="tlab"><label for="T-slider" title="Temperature">T</label> <button type="button" class="xbtn" data-x="T" aria-label="What does T do?">?</button> <output id="T-out" class="val">1.00</output></span>
+        <input id="T-slider" type="range" min="0" max="1000" step="1" value="500" aria-label="Temperature T">
+        <span class="ends" aria-hidden="true"><span>quality</span><span>diversity</span></span>
       </div>
     </section>
   </aside>

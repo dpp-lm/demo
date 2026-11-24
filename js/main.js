@@ -635,7 +635,7 @@ function escapeHtml(s) {
 }
 function setMode(m) {
   S.mode = m;
-  $('#resample').disabled = m === 'map';
+  document.querySelectorAll('.pick-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
   $('#T-slider').value = tToSlider(S.T[m]);
   recompute({ newDraw: true });
 }
@@ -673,7 +673,6 @@ function wire() {
   let pt = 0;
   $('#prompt').addEventListener('input', () => { clearTimeout(pt); pt = setTimeout(configChanged, 250); });
   fillEmbedders(); advSum(); modelNote();
-  $('#resample').disabled = S.mode === 'map';
   $('#T-slider').value = tToSlider(S.T[S.mode]);
   let raf = 0;
   $('#T-slider').addEventListener('input', (e) => {
@@ -682,12 +681,12 @@ function wire() {
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => recompute({ newDraw: true }));
   });
-  document.querySelectorAll('input[name=mode]').forEach((r) => (r.onchange = () => setMode(r.value)));
+  // "Most likely" shows the greedy MAP subset; "Sample" draws a new subset every time it is pressed.
+  document.querySelectorAll('.pick-btn').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
   $('#K').onchange = () => setK($('#K').value);
   $('#K-minus').onclick = () => setK(S.K - 1);
   $('#K-plus').onclick = () => setK(S.K + 1);
   document.querySelectorAll('input[name=dims]').forEach((r) => (r.onchange = () => setDims(+r.value)));
-  $('#resample').onclick = () => recompute({ newDraw: true });
   $('#scale-toggle').onchange = () => { plot.update(); renderLabels(); };
   $('#label-toggle').onchange = () => renderLabels();
   // Close the View menu on an outside click or Escape.
