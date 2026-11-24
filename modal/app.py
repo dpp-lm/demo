@@ -20,10 +20,10 @@ import time
 import modal
 
 MODEL_KEY = "qwen3-14b"
-MODEL_REPO = "Qwen/Qwen3-14B"
+MODEL_REPO = "Qwen/Qwen3-14B-AWQ"   # 4-bit; the same weights as the demo's GPU server
 CHAT_KW = {"enable_thinking": False}
 EMBEDDER = "sentence-transformers/all-MiniLM-L6-v2"
-GPU = "L40S"                    # 48 GB: Qwen3-14B in bf16 plus the KV cache for a batch of 100
+GPU = "L40S"                    # 48 GB: Qwen3-14B (4-bit weights unpacked to fp16, 30 GB) plus the KV cache
 GPU_DOLLARS_PER_SEC = 0.000542  # modal.com/pricing, L40S
 # $30/month free credit. Budget ~$21 of GPU time and leave the rest for CPU, memory and slack.
 GPU_SECONDS_PER_MONTH = int(os.environ.get("GPU_SECONDS_PER_MONTH", 21 / GPU_DOLLARS_PER_SEC))
@@ -77,12 +77,30 @@ class Sampler:
         self.charged = 60 + SCALEDOWN
         _charge(self.charged)
         self.tok = AutoTokenizer.from_pretrained(MODEL_REPO)
-        self.model = AutoModelForCausalLM.from_pretrained(MODEL_REPO, dtype=torch.bfloat16).to("cuda").eval()
+        self.model = load_awq_unpacked(MODEL_REPO, "cuda")
         self.embedder = SentenceTransformer(EMBEDDER, device="cuda")
 
     @modal.exit()
     def settle(self):
         _charge(max(0.0, time.time() - self.started - self.charged))
+
+    @modal.method()
+    def score(self, prompt, texts):
+        """log p(y | prompt) of finished completions, end-of-turn token included (for checks)."""
+        import torch
+        head = self.tok.apply_chat_template([{"role": "user", "content": prompt}], tokenize=False,
+                                            add_generation_prompt=True, **CHAT_KW)
+        h = self.tok(head, add_special_tokens=False).input_ids
+        eos = self.model.generation_config.eos_token_id
+        eos = eos[0] if isinstance(eos, (list, tuple)) else eos
+        out = []
+        with torch.no_grad():
+            for t in texts:
+                y = self.tok(t, add_special_tokens=False).input_ids + [eos]
+                ids = torch.tensor([h + y], device="cuda")
+                lp = torch.log_softmax(self.model(input_ids=ids).logits[0, len(h) - 1:-1].float(), -1)
+                out.append(lp.gather(1, ids[0, len(h):, None]).sum().item())
+        return out
 
     @modal.method()
     def sample_pool(self, prompt, n, t_prime, max_new_tokens, seed):
@@ -102,6 +120,55 @@ class Sampler:
             "Tprime": t_prime, "maxNewTokens": max_new_tokens, "N": len(samples), "D": int(emb.shape[1]),
             "samples": samples, "emb": base64.b64encode(emb.tobytes()).decode("ascii"),
         }
+
+
+def unpack_awq(qweight, qzeros, scales, group_size, bits=4):
+    """AWQ "gemm" packing (AutoAWQ): 8 4-bit values per int32, in the order 0 2 4 6 1 3 5 7.
+    Returns the linear layer's weight [out, in] = ((q - zero) * scale)^T, in the scales' dtype."""
+    import torch
+    shifts = torch.arange(0, 32, bits, device=qweight.device)
+    def unpack(x):
+        v = torch.bitwise_right_shift(x[:, :, None], shifts[None, None, :]).view(x.shape[0], -1)
+        order = torch.arange(v.shape[1], device=x.device).view(-1, 32 // bits)[:, [0, 4, 1, 5, 2, 6, 3, 7]].reshape(-1)
+        return torch.bitwise_and(v[:, order], 2**bits - 1)
+    q, z = unpack(qweight), unpack(qzeros)
+    w = (q - z.repeat_interleave(group_size, 0)).to(scales.dtype) * scales.repeat_interleave(group_size, 0)
+    return w.t().contiguous()
+
+
+def load_awq_unpacked(repo, device):
+    """The AWQ checkpoint as a plain fp16 model: every 4-bit weight unpacked to (q - zero) * scale.
+    These are exactly the 4-bit model's weights; only the matrix kernels differ from an int4 engine."""
+    import glob, json, os
+    import torch
+    from huggingface_hub import snapshot_download
+    from safetensors import safe_open
+    from transformers import AutoConfig, AutoModelForCausalLM
+    path = snapshot_download(repo)
+    qc = json.load(open(os.path.join(path, "config.json")))["quantization_config"]
+    assert qc["quant_method"] == "awq" and qc["version"] == "gemm" and qc["bits"] == 4 and qc["zero_point"]
+    cfg = AutoConfig.from_pretrained(repo)
+    cfg.quantization_config = None
+    if hasattr(cfg, "__dict__"):
+        cfg.__dict__.pop("quantization_config", None)
+    with torch.device("meta"):
+        model = AutoModelForCausalLM.from_config(cfg, dtype=torch.float16)
+    state, packed = {}, {}
+    for f in sorted(glob.glob(os.path.join(path, "*.safetensors"))):
+        with safe_open(f, framework="pt", device=device) as st:
+            for k in st.keys():
+                if k.endswith((".qweight", ".qzeros", ".scales")):
+                    base, part = k.rsplit(".", 1)
+                    packed.setdefault(base, {})[part] = st.get_tensor(k)
+                else:
+                    state[k] = st.get_tensor(k).to(torch.float16)
+    for base, t in packed.items():
+        state[base + ".weight"] = unpack_awq(t["qweight"], t["qzeros"], t["scales"].to(torch.float16), qc["group_size"])
+    missing, unexpected = model.load_state_dict(state, strict=False, assign=True)
+    missing = [k for k in missing if not k.endswith("rotary_emb.inv_freq")]
+    assert not missing and not unexpected, (missing[:5], unexpected[:5])
+    model.tie_weights()
+    return model.to(device).eval()
 
 
 def sample(tok, model, chat, prompt, n, t_prime, max_new_tokens, batch_size, seed):
@@ -229,3 +296,45 @@ def smoke():
     print(f"{pool['N']} samples, D={pool['D']}, {time.time() - t:.0f}s including start-up")
     for s in pool["samples"]:
         print(f"  logp={s['logp']:8.3f} logq={s['logq']:8.3f} n={s['nTokens']} ended={s['ended']} {s['text']!r}")
+
+
+@app.function(image=gpu_image, volumes={"/cache": cache}, timeout=1800, memory=65536)
+def check_unpacking():
+    """CPU check: unpacked 4-bit weights against the original bf16 weights (relative error)."""
+    import torch
+    from huggingface_hub import snapshot_download
+    from safetensors import safe_open
+    import glob, json, os
+    def tensors(repo, names):
+        p, out = snapshot_download(repo, allow_patterns=["*.json"]), {}
+        idx = json.load(open(os.path.join(p, "model.safetensors.index.json")))["weight_map"]
+        for n in names:
+            f = snapshot_download(repo, allow_patterns=[idx[n]])
+            with safe_open(os.path.join(f, idx[n]), framework="pt") as st:
+                out[n] = st.get_tensor(n)
+        return out
+    for layer in (0, 20, 39):
+        for mod in ("self_attn.q_proj", "mlp.down_proj"):
+            b = f"model.layers.{layer}.{mod}"
+            a = tensors(MODEL_REPO, [b + ".qweight", b + ".qzeros", b + ".scales"])
+            w = unpack_awq(a[b + ".qweight"], a[b + ".qzeros"], a[b + ".scales"].float(), 128)
+            ref = tensors("Qwen/Qwen3-14B", [b + ".weight"])[b + ".weight"].float()
+            rel = ((w - ref).norm() / ref.norm()).item()
+            cos = torch.nn.functional.cosine_similarity(w.flatten(), ref.flatten(), dim=0).item()
+            print(f"{b}: shape {tuple(w.shape)} vs {tuple(ref.shape)}, relative error {rel:.4f}, cosine {cos:.5f}")
+
+
+@app.local_entrypoint()
+def verify(pool_file: str = "data/cache/story_T1.0.json", k: int = 30):
+    """Recompute log p of the demo server's precomputed completions (sampled with the same 4-bit
+    weights in vLLM) and compare with the values it recorded."""
+    import json
+    check_unpacking.remote()
+    rec = json.load(open(pool_file))
+    S = [s for s in rec["samples"] if s["ended"]][:k]
+    got = Sampler().score.remote(rec["prompt"], [s["text"] for s in S])
+    d = [g - s["logp"] for g, s in zip(got, S)]
+    for g, s in list(zip(got, S))[:8]:
+        print(f"  server {s['logp']:9.4f}  here {g:9.4f}  {s['text'][:60]!r}")
+    import statistics
+    print(f"{len(d)} completions: mean diff {statistics.mean(d):+.4f}, max |diff| {max(map(abs, d)):.4f} nats")
