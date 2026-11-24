@@ -409,7 +409,6 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
 .stage-foot > * { min-width: 0; }
 @media (max-width: 420px) {
   .legend { gap: 6px 10px; }
-  .legend .lg:nth-child(2) { display: none; }
 }
 /* The View menu opens above the subset controls docked at the bottom of phone screens. */
 .viewmenu { z-index: 35; }

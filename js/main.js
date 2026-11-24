@@ -254,12 +254,8 @@ function parallelotope(O, V) {
   for (let mask = 1; mask <= full; mask++) if (mask & (mask - 1)) extra.push({ p: corner(mask), far: mask === full });
   return { faces, corners: extra };
 }
-const colorFor = () => {
-  const lp = S.logp.slice().sort((a, b) => a - b);
-  const lo = lp[Math.floor(0.05 * (lp.length - 1))], hi = lp[lp.length - 1];
-  const sc = d3.scaleLinear().domain([lo, hi]).range([css('--ramp-lo'), css('--ramp-hi')]).interpolate(d3.interpolateLab).clamp(true);
-  return (i) => sc(S.logp[i]);
-};
+// Every completion is drawn in one neutral colour; only the selected ones stand out.
+const colorFor = () => { const c = css('--ink'); return () => c; };
 
 class Plot2D {
   constructor(el) { this.el = el; this.svg = null; }
@@ -348,14 +344,11 @@ class Plot2D {
       .attr('fill', css('--text')).attr('fill-opacity', 0.04)
       .attr('stroke', css('--text-2')).attr('stroke-opacity', 0.7).attr('stroke-width', 1).attr('stroke-linejoin', 'round')
       .transition(t).attr('d', face);
-    this.gPara.selectAll('circle').data(volD.corners).join('circle')
-      .attr('fill', css('--text-2')).attr('r', (c) => (c.far ? 4.5 : 2.5))
-      .transition(t).attr('cx', (c) => this.x(c.p[0])).attr('cy', (c) => this.y(c.p[1]));
     this.gDot.selectAll('circle').data(idx).join('circle')
       .attr('fill', (i) => col(i))
       .attr('stroke', (i) => (sel.has(i) ? selColor(i) : css('--surface')))
       .attr('stroke-width', (i) => (sel.has(i) ? 2.5 : 1))
-      .attr('r', (i) => (sel.has(i) ? 6 : 4.5))
+      .attr('r', 4.5)
       .sort((a, b) => sel.has(a) - sel.has(b))
       .transition(t).attr('cx', (i) => this.pos[i][0]).attr('cy', (i) => this.pos[i][1]);
   }

@@ -22,7 +22,10 @@ export class Plot3D {
     this.renderer.setSize(W, H, false);
     el.appendChild(this.renderer.domElement);
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(40, W / H, 0.01, 100);
+    // Orthographic: no perspective, so every point is drawn the same size at any depth and
+    // lengths (quality) are drawn to one scale. The view holds the unit ball on any aspect.
+    const a = W / H, h = Math.max(0.78, 0.9 / a);
+    this.camera = new THREE.OrthographicCamera(-h * a, h * a, h, -h, -50, 50);
     this.camera.position.set(1.6, 1.2, 2.2);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -77,9 +80,7 @@ export class Plot3D {
       this.camSet = true;
       const cx = o.coords.reduce((a, c) => a + c[0], 0) / N * this.scale;
       this.controls.target.set(cx / 2, 0, 0);
-      // Pull back on tall, narrow screens so the whole volume stays in frame.
-      const k = Math.max(1, Math.sqrt(1.7 / this.camera.aspect));
-      this.camera.position.set(cx / 2 + 1.1 * k, 0.8 * k, 1.55 * k);
+      this.camera.position.set(cx / 2 + 1.1, 0.8, 1.55);
     }
     const s = this.scale;
     this.targets = o.coords.map((c, i) => {
@@ -124,8 +125,7 @@ export class Plot3D {
     const m = new THREE.Matrix4();
     const sel = new Set(o.sel);
     this.current.forEach((p, i) => {
-      const r = sel.has(i) ? 1.6 : i === this.hovered ? 1.8 : 1;
-      m.makeScale(r, r, r).setPosition(p);
+      m.makeScale(1, 1, 1).setPosition(p);   // all points the same size; colour marks the selected ones
       this.mesh.setMatrixAt(i, m);
     });
     this.mesh.instanceMatrix.needsUpdate = true;
@@ -165,14 +165,6 @@ export class Plot3D {
         if (b !== a && a !== 0) seg.push(corner(a), corner(b));
       }
       this.dyn.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(seg), new THREE.LineBasicMaterial({ color: grey, transparent: true, opacity: 0.75 })));
-      // Corner dots; the far corner is larger.
-      const full = (1 << n) - 1;
-      for (let mask = 1; mask <= full; mask++) {
-        if (!(mask & (mask - 1))) continue;
-        const dot = new THREE.Mesh(new THREE.SphereGeometry(mask === full ? 0.016 : 0.009, 10, 8), new THREE.MeshBasicMaterial({ color: grey }));
-        dot.position.copy(corner(mask));
-        this.dyn.add(dot);
-      }
     }
   }
 
