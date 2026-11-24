@@ -47,6 +47,15 @@ routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T�
 - Default T = T′ for the Global target (the only point where pool and target match: θ̂ at its floor for
   T′ = 1); T = ∞ is the matched point for Global and local. Today's T = 20 sits on the poor-fit plateau.
 
+## Later: the bouquet (all completions point one way from the origin)
+- Completions of one prompt share a large common direction (cosines 0.5–0.9; on the story prompt the
+  first direction carries 52% of the spectrum), so the cloud is a narrow bouquet away from the origin.
+  Under the paper's cosine kernel this is honest: diversity is volume measured from the origin.
+- Options: (A) keep it and add a "?" explaining it; (B) centre the kernel on the pool's mean: pool-
+  dependent, leaves the paper's fixed kernel and Theorem 5.2, so avoid; (C) the RBF kernel
+  S_β = exp∘(β(G − 1)): origin-free (small β: det ≈ β^(K−1)·det(EᵀE), E = φ_j − φ_1), still a fixed kernel
+  over strings, centred picture. Decide together with whether option C ships (see the DPP/GP handoff).
+
 ## Later (from the review of Manuel's demo)
 - Clustering: colour completions by cluster, and/or order completions by cluster (Manuel's demo has
   four methods, a group count and LLM-written group names). Decide whether any of it is faithful and
