@@ -49,9 +49,14 @@ export class Plot3D {
     this.camera.position.set(1.6, 1.2, 2.2);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
-    this.controls.autoRotate = !matchMedia('(prefers-reduced-motion: reduce)').matches;
-    this.controls.autoRotateSpeed = 0.6;
-    this.renderer.domElement.addEventListener('pointerdown', () => (this.controls.autoRotate = false));
+    // No continuous rotation: one 30° turn when the view first appears (none if the visitor asks for
+    // reduced motion), stopped by any touch. Panning slides the picture on screen, so the view still
+    // turns about the origin: Shift-drag or right-drag with a mouse, two fingers on a touch screen.
+    // Double-click returns to the starting view.
+    this.controls.enablePan = false;
+    this.turnLeft = 0;
+    this.view = { cx: 0, cy: 0, h: 1 };
+    this.installPan();
     this.group = new THREE.Group();
     this.scene.add(this.group);
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.8));
@@ -75,6 +80,15 @@ export class Plot3D {
       this.onTap?.(this.nearest(e.clientX, e.clientY, e.pointerType === 'mouse' ? 16 : 32));
     });
     this.alive = true;
+    // When the plot area changes size (window resize, the docked controls measuring themselves),
+    // resize the canvas and re-frame, so the drawing is never stretched or cut off.
+    this.ro = new ResizeObserver(() => {
+      const W = el.clientWidth, H = el.clientHeight;
+      if (!W || !H) return;
+      this.renderer.setSize(W, H, false);
+      if (this.o && this.camSet) { const f = this.frameFor(this.o, this.scale, this.turnLeft); this.frameH = f.h; this.goal = null; this.setView(f); }
+    });
+    this.ro.observe(el);
     const loop = () => {
       if (!this.alive) return;
       requestAnimationFrame(loop);
@@ -98,19 +112,21 @@ export class Plot3D {
     }
     this.scale = 1 / (m || 1);
     const s = this.scale;
-    // Framed when the view first appears, and again, smoothly, when it switches between fitted axes
-    // (K ≤ 3) and principal axes.
-    const frame = this.frameFor(o, s);
-    this.frameH = frame.h;   // marker and dot sizes follow the frame the view settles on
+    // Placed once, looking at the origin, and framed so that the drawing (points, vectors, volume) is
+    // centred and fills the plot over the opening turn; the origin sits wherever that puts it. Framed
+    // again, smoothly, when the view switches between fitted axes (K ≤ 3) and principal axes.
     if (!this.camSet) {
-      // Look down from 35°: a vector lying near the floor is foreshortened at most to sin 35° ≈ 0.57
-      // of its length as the view turns, so no selected vector can collapse onto the origin.
       this.camSet = true;
-      const el = (35 * Math.PI) / 180, az = (40 * Math.PI) / 180;
-      this.controls.target.copy(frame.ctr);
-      this.camera.position.set(frame.ctr.x + 3 * Math.cos(el) * Math.sin(az), frame.ctr.y + 3 * Math.sin(el), frame.ctr.z + 3 * Math.cos(el) * Math.cos(az));
-      this.setHalfHeight(frame.h);
-    } else if (this.lastFitted !== o.fitted) this.goal = frame;
+      this.startView();
+      this.turnLeft = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : (30 * Math.PI) / 180;
+      const frame = this.frameFor(o, s, this.turnLeft);
+      this.frameH = frame.h;
+      this.setView(frame);
+    } else if (this.lastFitted !== o.fitted) {
+      const frame = this.frameFor(o, s, 0);
+      this.frameH = frame.h;
+      this.goal = frame;
+    }
     this.lastFitted = o.fitted;
     this.targets = o.coords.map((c, i) => {
       const f = (o.scaled ? o.c[i] : 1) * s;
@@ -124,11 +140,24 @@ export class Plot3D {
     const o = this.o;
     const N = o.coords.length;
     for (const ch of [...this.group.children]) { this.group.remove(ch); ch.geometry?.dispose(); ch.material?.dispose(); }
-    // No axes or floor grid: the only meaningful frame is the origin, from which the scored volume is measured.
-    // The x, y, z axes through the origin, which the view turns about.
+    // The x, y, z axes through the origin, which the view turns about, with arrowheads at their positive
+    // ends; and a faint floor grid in the x–z plane through the origin (as in the paper's Fig. 1).
     this.globe = axesLines(this.scale);
     this.globeInk = new THREE.Color(o.text ?? '#555555');
     this.group.add(this.globe);
+    const z = this.frameH ?? this.camera.top;
+    const headMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(o.bg ?? '#fbfaf8').lerp(this.globeInk, 0.55) });
+    for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
+      const dir = new THREE.Vector3(...d), head = new THREE.Mesh(new THREE.ConeGeometry(0.014 * z, 0.045 * z, 14), headMat);
+      head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      head.position.copy(dir).multiplyScalar(this.scale);   // the tip sits just past the end of the axis
+      head.position.addScaledVector(dir, 0.0225 * z);
+      this.group.add(head);
+    }
+    const grid = new THREE.GridHelper(2 * this.scale, 16, o.text, o.text);
+    grid.material.transparent = true; grid.material.opacity = 0.12; grid.material.depthWrite = false;
+    grid.renderOrder = -2;
+    this.group.add(grid);
     // Points.
     // Radius tied to the zoom: about 1.5 px on a 600-px-tall plot, the same as the 2-D dots.
     const sphere = new THREE.SphereGeometry(0.0055 * (this.frameH ?? this.camera.top), 10, 8);
@@ -166,8 +195,9 @@ export class Plot3D {
       const len = p.length();
       if (len < 1e-4) continue;
       const color = new THREE.Color(o.selColor(i));
-      if (few) this.dyn.add(rod(O, p, 0.006, color));
-      else this.dyn.add(new THREE.ArrowHelper(p.clone().normalize(), O, len, color, Math.min(0.06, len * 0.3), Math.min(0.03, len * 0.15)));
+      const z = this.frameH ?? 1;   // widths follow the zoom, so they look the same at any frame
+      if (few) this.dyn.add(rod(O, p, 0.0055 * z, color));
+      else this.dyn.add(new THREE.ArrowHelper(p.clone().normalize(), O, len, color, Math.min(0.06 * z, len * 0.3), Math.min(0.03 * z, len * 0.15)));
     }
     if (o.sel.length >= 2 && few) {
       const v = o.sel.map((i) => this.current[i]);
@@ -195,8 +225,6 @@ export class Plot3D {
     }
   }
 
-  // The view turns about the origin (the point the scored volume is measured from), so the origin is
-  // the centre of the frame, and the frame holds everything drawn: the points and the spanned volume.
   // Depth shading: a point's colour moves toward the background the farther it is from the viewer
   // (up to 60% for grey points, 35% for the selected ones), so the cloud's depth reads as it turns.
   shadeDepth() {
@@ -225,27 +253,92 @@ export class Plot3D {
     }
   }
 
-  frameFor(o, s) {
-    const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
-    if (o.sel.length >= 2 && o.sel.length <= 3) pts.push([0, 1, 2].map((d) => o.sel.reduce((a, i) => a + pts[i][d], 0)));
-    const r = Math.max(0.3, ...pts.map((p) => Math.hypot(...p)));
-    const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450;
-    return { ctr: new THREE.Vector3(0, 0, 0), h: 1.06 * r * Math.max(1, H / W) };
+  // Look down from 35°: a vector lying near the floor is foreshortened at most to sin 35° ≈ 0.57 of its
+  // length as the view turns, so no selected vector can collapse onto the origin.
+  startView() {
+    const el = (35 * Math.PI) / 180, az = (40 * Math.PI) / 180;
+    this.controls.target.set(0, 0, 0);
+    this.camera.position.set(3 * Math.cos(el) * Math.sin(az), 3 * Math.sin(el), 3 * Math.cos(el) * Math.cos(az));
+    this.camera.zoom = 1;
+    this.camera.lookAt(0, 0, 0);
+    this.camera.updateMatrixWorld();
   }
-  setHalfHeight(h) {
+  // The rectangle on screen that holds everything drawn (the points and, for K ≤ 3, every corner of the
+  // spanned volume) as the view turns by up to `turn` about the vertical axis from where it is now.
+  frameFor(o, s, turn) {
+    const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
+    pts.push([0, 0, 0]);
+    const sel = o.sel.length >= 2 && o.sel.length <= 3 ? o.sel : [];
+    for (let mask = 3; mask < 1 << sel.length; mask++) {
+      if ((mask & (mask - 1)) === 0) continue;   // single vectors are points already
+      pts.push([0, 1, 2].map((d) => sel.reduce((a, i, k) => a + (mask & (1 << k) ? pts[i][d] : 0), 0)));
+    }
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    const Y = new THREE.Vector3(0, 1, 0), steps = turn > 0 ? 12 : 0;
+    for (let k = 0; k <= steps; k++) {
+      const q = new THREE.Quaternion().setFromAxisAngle(Y, steps ? (turn * k) / steps : 0).multiply(this.camera.quaternion);
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q), up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+      for (const p of pts) {
+        const v = new THREE.Vector3(...p), x = v.dot(right), y = v.dot(up);
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+    const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450;
+    return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, h: Math.max(0.05, 1.08 * Math.max((y1 - y0) / 2, ((x1 - x0) / 2) * H / W)) };
+  }
+  // The camera's view rectangle: centred at (cx, cy) in screen coordinates, half-height h.
+  setView(v) {
+    this.view = { cx: v.cx, cy: v.cy, h: v.h };
     const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, a = W / H;
-    Object.assign(this.camera, { left: -h * a, right: h * a, top: h, bottom: -h });
+    Object.assign(this.camera, { left: v.cx - v.h * a, right: v.cx + v.h * a, top: v.cy + v.h, bottom: v.cy - v.h });
     this.camera.updateProjectionMatrix();
+  }
+  installPan() {
+    const cv = this.renderer.domElement, touches = new Map();
+    let drag = null;
+    const perPx = () => (2 * this.view.h) / (this.camera.zoom * (this.el.clientHeight || 450));
+    const shift = (dx, dy) => { this.goal = null; this.setView({ cx: this.view.cx - dx * perPx(), cy: this.view.cy + dy * perPx(), h: this.view.h }); };
+    const stopTurn = () => (this.turnLeft = 0);
+    cv.addEventListener('pointerdown', (e) => {
+      stopTurn();
+      if (e.pointerType === 'touch') { touches.set(e.pointerId, [e.clientX, e.clientY]); return; }
+      if (e.button === 2 || (e.button === 0 && e.shiftKey)) drag = [e.clientX, e.clientY];
+    });
+    window.addEventListener('pointermove', (e) => {
+      if (drag && e.pointerType !== 'touch') { shift(e.clientX - drag[0], e.clientY - drag[1]); drag = [e.clientX, e.clientY]; return; }
+      if (!touches.has(e.pointerId)) return;
+      if (touches.size === 2) {
+        const [a, b] = [...touches.values()], mid0 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        touches.set(e.pointerId, [e.clientX, e.clientY]);
+        const [c, d] = [...touches.values()], mid1 = [(c[0] + d[0]) / 2, (c[1] + d[1]) / 2];
+        shift(mid1[0] - mid0[0], mid1[1] - mid0[1]);
+      } else touches.set(e.pointerId, [e.clientX, e.clientY]);
+    });
+    const up = (e) => { if (e.pointerType === 'touch') touches.delete(e.pointerId); else drag = null; };
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    cv.addEventListener('contextmenu', (e) => e.preventDefault());
+    cv.addEventListener('dblclick', () => {
+      if (!this.o) return;
+      stopTurn(); this.goal = null; this.startView();
+      const f = this.frameFor(this.o, this.scale, 0);
+      this.frameH = f.h; this.setView(f);
+    });
   }
 
   tick() {
+    if (this.turnLeft > 0) {
+      // The opening turn: about 2 s, slowing at the end.
+      const step = Math.min(this.turnLeft, Math.max(0.0015, this.turnLeft * 0.035));
+      this.camera.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), step);
+      this.turnLeft -= step;
+    }
     if (this.goal) {
-      // Glide the view to the new frame: move the target (and the camera with it) and the zoom.
-      const g = this.goal, d = new THREE.Vector3().subVectors(g.ctr, this.controls.target).multiplyScalar(0.15);
-      this.controls.target.add(d); this.camera.position.add(d);
-      const h = this.camera.top + (g.h - this.camera.top) * 0.15;
-      this.setHalfHeight(h);
-      if (d.length() < 1e-4 && Math.abs(g.h - h) < 1e-4) this.goal = null;
+      // Glide to a new frame.
+      const g = this.goal, v = this.view, k = 0.15;
+      const nv = { cx: v.cx + (g.cx - v.cx) * k, cy: v.cy + (g.cy - v.cy) * k, h: v.h + (g.h - v.h) * k };
+      this.setView(nv);
+      if (Math.abs(g.cx - nv.cx) + Math.abs(g.cy - nv.cy) + Math.abs(g.h - nv.h) < 1e-4) { this.setView(g); this.goal = null; }
     }
     if (!this.targets || !this.current) return;
     let moving = false;
@@ -293,6 +386,7 @@ export class Plot3D {
 
   dispose() {
     this.alive = false;
+    this.ro?.disconnect();
     this.controls.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();

@@ -356,7 +356,6 @@ function render() {
   renderVolHint();
   renderInspect();
   renderLabels();
-  if ($('.pool-table').open) renderTable();
 }
 
 // The spectrum panel (opened from the strip under the plot): the share of the pool's variation along
@@ -381,7 +380,7 @@ function renderReadout() {
     stat('log P(S)', ok ? fmt(S.logP) : '—', 'logp') +
     stat('quality', ok ? fmt(quality(S.logp, S.sel)) : '—', 'quality') +
     stat('diversity', ok ? fmt(diversity(S.G, N, S.sel)) : '—', 'diversity') +
-    stat('pool fit', ok ? `${fmt(S.fit)} nats` : '—', 'fit', ok && poor ? 'warn' : '');
+    stat('pool fit', ok ? `${fmt(S.fit)} nats` : '— why?', 'fit', ok && poor ? 'warn' : '');
   $('#readout').title = ok ? '' : `No subset of size ${K}: the pool spans fewer than ${K} independent directions.`;
   const note = $('#fit-note');
   if (!ok) {
@@ -394,6 +393,13 @@ function renderReadout() {
       ? `<b>The pool is a poor match for the target at this T</b> (pool fit ${fmt(S.fit, 1)} nats): Sample may be far from the distribution it aims at. Move T toward T′ = ${tp}, or sample the pool at a T′ closer to T.`
       : `<b>The pool is a poor match for the target at this T</b> (pool fit ${fmt(S.fit, 1)} nats): the target favours completions the pool rarely contains, so the best set over all strings may not be in it. Move T toward T′ = ${tp}, or sample at a T′ closer to T.`;
   } else note.hidden = true;
+  // The Details button carries a dot when the note inside has something to say.
+  for (const b of [$('#details-btn'), $('#details-toggle')]) b.classList.toggle('warnflag', !note.hidden);
+  // In the bar (wide screens) the note is a popover, opened by "why?" after the readouts.
+  // In the bar (wide screens) the note is a popover: the pool-fit value opens it.
+  const fitStat = $('#readout').querySelector('.stat:last-child');
+  if (!note.hidden) { fitStat.classList.add('warn', 'can-open'); fitStat.querySelector('.v').id = 'fit-why'; fitStat.querySelector('.v').title = 'Why?'; }
+  else note.classList.remove('show');
 }
 
 function renderVolHint() {
@@ -413,11 +419,38 @@ function renderCards() {
       <div class="txt">${escapeHtml(s.text)}${s.ended ? '' : ' …'}</div>
       <div class="meta"><span class="dot" style="background:${css('--accent')}"></span>log p ${fmt(s.logp, 1)}<span>·</span><span class="fn">inclusion ${pct(incl(i))}<button type="button" class="xbtn" data-x="inclusion" aria-label="What is the inclusion probability?">?</button></span></div></li>`;
   }).join('');
+  renderAllCards();
   $('#selected').querySelectorAll('.card').forEach((el) => {
     el.onmouseenter = () => plot.highlight(+el.dataset.i);
     el.onmouseleave = () => plot.highlight(-1);
     el.onclick = (e) => { if (!e.target.closest('.xbtn')) inspect(+el.dataset.i); };
   });
+}
+// All completions, in the rail under the selected ones and in the same card style: one card per distinct
+// string (copies counted), most likely to be included first. Re-rendered at most every 150 ms, so
+// dragging T stays smooth.
+let allTimer = 0;
+function renderAllCards() {
+  clearTimeout(allTimer);
+  allTimer = setTimeout(() => {
+    if (!S.pool) return;
+    const incl = inclusionOfText(), sel = new Set(S.sel.map((i) => S.pool.samples[i].text));
+    const groups = new Map();
+    S.pool.samples.forEach((s, i) => { const g = groups.get(s.text); if (g) g.n++; else groups.set(s.text, { i, n: 1 }); });
+    const rows = [...groups.values()].sort((a, b) => (incl(b.i) - incl(a.i)) || (S.logp[b.i] - S.logp[a.i]));
+    $('#all-meta').textContent = `${S.pool.samples.length} completions, ${rows.length} distinct · ${S.pi ? 'by inclusion' : 'by log p'}`;
+    $('#all-cards').innerHTML = rows.map(({ i, n }) => {
+      const s = S.pool.samples[i], on = sel.has(s.text);
+      return `<li class="card${s.ended ? '' : ' cut'}" data-i="${i}">
+      <div class="txt">${escapeHtml(s.text)}${s.ended ? '' : ' …'}</div>
+      <div class="meta"><span class="dot" style="background:${on ? css('--accent') : css('--ramp-lo')}"></span>${n > 1 ? `×${n}<span>·</span>` : ''}log p ${fmt(s.logp, 1)}<span>·</span>inclusion ${pct(incl(i))}</div></li>`;
+    }).join('');
+    $('#all-cards').querySelectorAll('.card').forEach((el) => {
+      el.onmouseenter = () => plot.highlight(+el.dataset.i);
+      el.onmouseleave = () => plot.highlight(-1);
+      el.onclick = () => inspect(+el.dataset.i);
+    });
+  }, 150);
 }
 // Inclusion probability of a completion's text: copies of the same string can never be selected
 // together, so the probability that the string appears is the sum over its copies.
@@ -553,7 +586,7 @@ const plot = {
       if (!this.p3) {
         $('#plot').innerHTML = '';
         this.p3 = new Plot3D($('#plot'), {
-          onHover: (i, x, y) => { showTip(i, x, y); this.highlightCards(i < 0 ? S.pinned : i); },
+          onHover: (i, x, y) => { showTip(i, x, y); S.hover = i < 0 ? S.pinned : i; this.highlightCards(S.hover); },
           onTap: (i) => inspect(i),
         });
       }
@@ -565,6 +598,7 @@ const plot = {
   },
   highlight(i) {
     if (i < 0) i = S.pinned;
+    S.hover = i;
     if (S.dims === 3) { this.p3?.highlight(i); this.highlightCards(i); } else this.p2.highlight(i);
   },
   highlightCards(i) { document.querySelectorAll('.card').forEach((c) => c.classList.toggle('hl', +c.dataset.i === i)); },
@@ -616,6 +650,7 @@ function placeLabels() {
     it.el.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
   }
 }
+const wide = matchMedia('(min-width: 901px)');
 (function follow3D() {
   if (S.dims === 3 && $('#labels').childElementCount) placeLabels();
   requestAnimationFrame(follow3D);
@@ -640,22 +675,6 @@ function renderInspect() {
       <span>log p ${fmt(s.logp, 2)}</span><span>log p°<sub>T′</sub> ${fmt(s.logq, 2)}</span><span>inclusion ${pct(inclusionOfText()(i))}</span></div>
     <button class="ins-close" aria-label="Close">×</button>`;
   el.querySelector('.ins-close').onclick = () => inspect(-1);
-}
-
-// ---------------------------------------------------------------- pool table
-let sortKey = 'logp', sortDir = -1;
-function renderTable() {
-  const sel = new Set(S.sel);
-  const incl = inclusionOfText();
-  const rows = S.pool.samples.map((s, i) => ({ i, text: s.text + (s.ended ? '' : '…'), logp: s.logp, logq: s.logq, incl: incl(i) }));
-  rows.sort((a, b) => sortDir * (typeof a[sortKey] === 'string' ? a[sortKey].localeCompare(b[sortKey]) : a[sortKey] - b[sortKey]));
-  const cols = [['i', '#'], ['text', 'completion'], ['logp', 'log p'], ['logq', 'log p°<sub>T′</sub>'], ['incl', 'inclusion']];
-  $('#pool-table').innerHTML = `<div class="wrap"><table><thead><tr>${cols.map(([k, n]) => `<th data-k="${k}">${n}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr class="${sel.has(r.i) ? 'sel' : ''}"><td class="num" data-k="#">${r.i + 1}</td><td class="str">${escapeHtml(r.text)}</td><td class="num" data-k="log p">${fmt(r.logp, 2)}</td><td class="num" data-k="log p°">${fmt(r.logq, 2)}</td><td class="num" data-k="inclusion">${pct(r.incl)}</td></tr>`).join('')}</tbody></table></div>`;
-  $('#pool-table').querySelectorAll('th').forEach((th) => (th.onclick = () => {
-    const k = th.dataset.k;
-    if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = k === 'text' || k === 'i' ? 1 : -1; }
-    renderTable();
-  }));
 }
 
 // ---------------------------------------------------------------- messages
@@ -991,9 +1010,30 @@ function wire() {
   // Pop-up panels close on an outside click or Escape.
   const pops = ['#viewmenu', '#specmenu', '#adv', '#exmenu'];
   document.addEventListener('click', (e) => { for (const id of pops) { const m = $(id); if (m?.open && !e.composedPath().includes(m) && !e.target.closest('.xpop')) m.open = false; } });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') for (const id of pops) if ($(id)) $(id).open = false; });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { const was = pops.some((id) => $(id)?.open); for (const id of pops) if ($(id)) $(id).open = false; if (!was && wide.matches) setDrawer(false); } });
+  // Details: a drawer on wide screens, a collapsible section on phones.
+  const setDrawer = (open) => {
+    $('#details').classList.toggle('open', open);
+    for (const b of [$('#details-btn'), $('#details-toggle')]) b.setAttribute('aria-expanded', String(open));
+  };
+  $('#details-btn').onclick = () => setDrawer(!$('#details').classList.contains('open'));
+  $('#details-toggle').onclick = () => { if (!wide.matches) setDrawer(!$('#details').classList.contains('open')); };
+  $('#details-close').onclick = () => setDrawer(false);
+  $('#readout').addEventListener('click', (e) => { if (e.target.closest('#fit-why') && wide.matches) $('#fit-note').classList.toggle('show'); });
+  document.addEventListener('click', (e) => { if (!e.target.closest('#fit-note, #fit-why')) $('#fit-note').classList.remove('show'); });
+  // The controls column starts under the title block, whatever its height: keep --top-h equal to it.
+  const top = document.querySelector('.top');
+  new ResizeObserver(() => {
+    const h = Math.ceil(top.getBoundingClientRect().bottom);
+    if (h) document.documentElement.style.setProperty('--top-h', `${h}px`);
+  }).observe(top);
+  // The plot ends where the Details bar begins (wide screens): keep --bar-h equal to the bar's height.
+  const bar = $('#details');
+  new ResizeObserver(() => {
+    const h = wide.matches ? Math.ceil(bar.getBoundingClientRect().height) : 0;
+    if (h) document.documentElement.style.setProperty('--bar-h', `${h}px`);
+  }).observe(bar);
   for (const [a, b] of [['#adv', '#exmenu'], ['#exmenu', '#adv']]) $(a).addEventListener('toggle', () => { if ($(a).open) $(b).open = false; });
-  $('.pool-table').addEventListener('toggle', () => { if ($('.pool-table').open && S.pool) renderTable(); });
   $('#live-go').onclick = () => runLive({ k: 1 });
   const syncGo = () => ($('#live-go').disabled = !$('#prompt').value.trim());
   $('#prompt').addEventListener('input', syncGo);

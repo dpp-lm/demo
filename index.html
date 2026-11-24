@@ -24,18 +24,44 @@
 <div class="shell">
 <header class="top">
   <div class="brand">
-    <div>
-      <h1>Diverse Sampling from Language Models</h1>
-    </div>
+    <h1>Diverse Sampling from Language Models</h1>
+    <nav class="links"><a href="https://arxiv.org/abs/2611.25003" target="_blank" rel="noopener">Paper ↗</a></nav>
   </div>
-  <nav class="links">
-    <a href="https://arxiv.org/abs/2611.25003" target="_blank" rel="noopener">Paper ↗</a>
-  </nav>
+  <div class="top-row">
+    <p class="wip" role="note"><b>Work in progress.</b> This demo is still being built.</p>
+    <button type="button" id="details-btn" class="btn details-btn" aria-controls="details" aria-expanded="false">Details<span class="flag" aria-hidden="true"></span></button>
+  </div>
 </header>
-<p class="wip" role="note"><b>Work in progress.</b> This demo is still being built.</p>
 
 <main class="app">
-  <aside class="controls" aria-label="Controls">
+  <!-- The plot: on wide screens, the page's backdrop (everything left of the rail and above the dock). -->
+  <section class="stage" aria-label="Embeddings">
+    <div id="stage-msg" class="stage-msg" role="status" aria-live="polite" hidden></div>
+    <div class="plot-wrap">
+      <div class="plot-box">
+        <div id="plot" class="plot" aria-label="Projection of the completions' embeddings"></div>
+        <div id="labels" class="labels" aria-hidden="true"></div>
+      </div>
+      <div id="inspect" class="inspect" aria-live="polite" hidden></div>
+    </div>
+  </section>
+
+  <!-- The selected completions: a rail on the right on wide screens, under the plot on phones. -->
+  <aside class="rail subset" aria-label="Selected subset">
+    <div class="subset-head">
+      <h2>Selected subset</h2>
+      <span id="subset-meta" class="note"></span>
+    </div>
+    <ol id="selected" class="cards" aria-label="Selected subset"></ol>
+    <div class="subset-head all-head">
+      <h2>All completions</h2>
+      <span id="all-meta" class="note"></span>
+    </div>
+    <ol id="all-cards" class="cards" aria-label="All completions"></ol>
+  </aside>
+
+  <!-- Prompt and subset controls: docked at the bottom on wide screens. -->
+  <div class="dock">
     <section class="step step-1">
       <div class="composer">
         <textarea id="prompt" rows="2" spellcheck="false" aria-label="Prompt" placeholder="Ask for something with many good answers"></textarea>
@@ -87,55 +113,40 @@
         </span><button type="button" class="xbtn" data-x="subset" aria-label="How is the subset chosen?">?</button></span>
       </div>
     </section>
-  </aside>
+  </div>
 
-  <section class="stage" aria-label="Embeddings">
-    <div id="stage-msg" class="stage-msg" role="status" aria-live="polite" hidden></div>
-    <div class="plot-wrap">
-      <div class="plot-box">
-        <div id="plot" class="plot" aria-label="Projection of the completions' embeddings"></div>
-        <div id="labels" class="labels" aria-hidden="true"></div>
-      </div>
-      <div id="inspect" class="inspect" aria-live="polite" hidden></div>
+  <!-- Details: a drawer from the left on wide screens, a collapsible section on phones. -->
+  <section id="details" class="drawer" aria-label="Details">
+    <div class="drawer-head">
+      <button type="button" class="drawer-title" id="details-toggle" aria-controls="details" aria-expanded="false">Details<span class="flag" aria-hidden="true"></span></button>
+      <button type="button" class="drawer-close" id="details-close" aria-label="Close details">×</button>
     </div>
-    <div class="stage-foot">
-      <div class="legend">
-        <span class="lg"><span class="sw sel"></span>selected</span>
-        <span id="vol-hint" class="lg"></span>
-      </div>
-      <div id="readout" class="readout"></div>
-      <details class="viewmenu specmenu" id="specmenu">
-        <summary>Spectrum</summary>
-        <div class="menu" id="spectrum"></div>
-      </details>
-    </div>
-    <p id="fit-note" class="fit-note" hidden></p>
-    <div class="stage-bar">
-      <span id="stage-note" class="note"></span>
-      <details class="viewmenu" id="viewmenu">
-        <summary>View</summary>
-        <div class="menu">
-          <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Label selected points</span></label>
-          <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale points by quality<button type="button" class="xbtn" data-x="scale" aria-label="What does scaling do?">?</button></span></label>
+    <div class="drawer-body">
+      <div class="stage-foot">
+        <div class="legend">
+          <span class="lg"><span class="sw sel"></span>selected</span>
+          <span id="vol-hint" class="lg"></span>
         </div>
-      </details>
+        <div id="readout" class="readout"></div>
+        <details class="viewmenu specmenu" id="specmenu">
+          <summary>Spectrum</summary>
+          <div class="menu" id="spectrum"></div>
+        </details>
+      </div>
+      <p id="fit-note" class="fit-note" hidden></p>
+      <div class="stage-bar">
+        <span id="stage-note" class="note"></span>
+        <details class="viewmenu" id="viewmenu">
+          <summary>View</summary>
+          <div class="menu">
+            <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Label selected points</span></label>
+            <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale points by quality<button type="button" class="xbtn" data-x="scale" aria-label="What does scaling do?">?</button></span></label>
+          </div>
+        </details>
+      </div>
     </div>
   </section>
 </main>
-
-<section class="subset">
-  <div class="subset-head">
-    <h2>Selected subset</h2>
-    <span id="subset-meta" class="note"></span>
-  </div>
-  <ol id="selected" class="cards" aria-label="Selected subset"></ol>
-</section>
-
-<details class="pool-table">
-  <summary>All completions</summary>
-  <div id="pool-table"></div>
-</details>
-
 </div>
 <div id="tooltip" class="tooltip" hidden></div>
 <div id="xpop" class="xpop" role="dialog" aria-modal="false" hidden></div>

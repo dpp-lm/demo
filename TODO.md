@@ -1,5 +1,11 @@
 # To do
 
+## Done: the full-page layout
+The plot fills the page between the controls (left) and the selected subset and all completions as
+cards (right rail); readouts, Spectrum and View in a bar at the bottom. The 3-D view turns about the
+origin, opens with one 30° turn (no auto-rotation), starts with the drawing centred, pans with
+Shift/right-drag or two fingers, and resets on double-click. Floor grid and x, y, z axes with arrows.
+
 ## Done (the batch agreed in the review of Manuel's demo)
 
 Log-space DPP routines with brute-force reference tests; Householder + QL eigensolver; exact G from
@@ -46,10 +52,6 @@ routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T�
   TV ≤ min(√(θ/2), √(1 − e^(−θ))).
 - Default T = T′ for the Global target (the only point where pool and target match: θ̂ at its floor for
   T′ = 1); T = ∞ is the matched point for Global and local. Today's T = 20 sits on the poor-fit plateau.
-
-## Open: auto-rotation of the 3-D view
-- Decide after the full-page layout prototype: compare clips of continuous rotation and a single ~30°
-  turn on first view (then still; none under reduced motion) in the new layout with leader lines.
 
 ## Later: the bouquet (all completions point one way from the origin)
 - Completions of one prompt share a large common direction (cosines 0.5–0.9; on the story prompt the

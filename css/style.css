@@ -270,15 +270,6 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
 .card.cut .txt::after { content: " …"; color: var(--muted); }
 
 /* ---------- table ---------- */
-.pool-table { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 4px 14px; }
-.pool-table summary { cursor: pointer; padding: 8px 0; color: var(--text-2); }
-.pool-table table { width: 100%; min-width: 560px; border-collapse: collapse; font: 15px/1.35 var(--serif); }
-.pool-table th, .pool-table td { text-align: left; padding: 6px; border-top: 1px solid var(--border); vertical-align: top; }
-.pool-table th { color: #555; font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .5px; cursor: pointer; white-space: nowrap; position: sticky; top: 0; background: var(--surface); border-top: 0; }
-.pool-table td.num { font: 12px var(--mono); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-2); }
-.pool-table tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
-.pool-table .wrap { max-height: 480px; overflow: auto; margin-bottom: 10px; -webkit-overflow-scrolling: touch; }
-.pool-table td:nth-child(2) { min-width: 220px; }
 
 .foot { color: var(--muted); font: 15px/1.45 var(--serif); max-width: 75ch; }
 .foot p { margin: 0; }
@@ -303,16 +294,6 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
 }
 /* Phones: each pool row becomes a short block, text first, numbers on one line. */
 @media (max-width: 600px) {
-  .pool-table table { min-width: 0; }
-  .pool-table thead { display: none; }
-  .pool-table tr { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 8px 0; border-top: 1px solid var(--border); }
-  .pool-table td { border: 0; padding: 0; }
-  .pool-table td.str { flex-basis: 100%; order: -1; }
-  .pool-table td:nth-child(2) { min-width: 0; }
-  .pool-table td.num { font: 11.5px var(--sans); color: var(--muted); text-align: left; }
-  .pool-table td.num::before { content: attr(data-k) " "; }
-  .pool-table tr.sel td:first-child { box-shadow: none; }
-  .pool-table tr.sel { box-shadow: inset 3px 0 0 var(--accent); padding-left: 8px; }
 }
 /* ---------- touch screens: finger-sized targets, no zoom-on-focus ---------- */
 @media (pointer: coarse), (max-width: 600px) {
@@ -331,7 +312,6 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .viewmenu .menu .toggle { padding: 10px 6px; font-size: 14px; }
   .toggle input { width: 20px; height: 20px; }
   input[type=range] { height: 32px; margin: 0; }
-  .pool-table summary { padding: 12px 0; }
   .ins-close { width: 36px; height: 36px; top: 0; right: 0; }
 }
 
@@ -430,6 +410,122 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .stage-foot .specmenu { align-self: end; }
 }
 
+/* =====================================================================================
+   Full-page layout. Wide screens: the plot is the page's backdrop (everything left of the
+   rail and above the dock); the selected completions sit in a rail on the right, each joined
+   point labelled on the plot; the prompt and subset controls are in a column on the left;
+   the health readouts and the table are in a drawer. Phones: one column in normal flow.
+   ===================================================================================== */
+:root { --rail-w: 340px; --ctl-w: 352px; }
+.tooltip { z-index: 110; }
+.details-btn { position: relative; font-size: 12.5px; padding: 3px 12px; background: var(--surface); }
+.flag { display: none; position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); border: 1.5px solid var(--surface); }
+.warnflag .flag { display: block; }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.drawer-title { position: relative; border: 0; background: none; padding: 0; font: 600 11px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--text-2); cursor: pointer; }
+.drawer-title .flag { top: -2px; right: -12px; }
+.drawer-close { width: 32px; height: 32px; border: 0; background: none; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; border-radius: 4px; }
+.drawer-close:hover { background: rgba(0,0,0,.05); color: var(--text); }
+.top-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+@media (min-width: 901px) {
+  html, body { height: 100%; overflow: hidden; }
+  .shell { max-width: none; padding: 0; display: block; }
+  .app { display: block; }
+
+  /* title, note and Details: small, top left, over the plot */
+  .top { position: fixed; top: 12px; left: 18px; z-index: 30; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; width: calc(var(--ctl-w) - 32px); pointer-events: none; }
+  .top > * { pointer-events: auto; }
+  .brand { align-items: baseline; gap: 14px; }
+  h1 { font-size: 22px; }
+  .links { padding-top: 0; }
+  .wip { padding: 2px 10px; font-size: 13px; border-left-width: 3px; }
+
+  /* the plot: no box, the page itself */
+  .stage { position: fixed; left: var(--ctl-w); top: 0; right: var(--rail-w); bottom: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; z-index: 1; }
+  .plot-wrap { position: absolute; inset: 16px 0 0 0; padding: 0; }
+  .plot-box { height: 100%; }
+  .plot { height: 100%; min-height: 0; }
+  .stage-msg.over { background: rgb(246 241 234 / .86); }
+  .stage-msg.error { box-shadow: none; }
+
+  /* the rail of selected completions */
+  .rail { position: fixed; top: 0; right: 0; bottom: var(--bar-h, 40px); width: var(--rail-w); z-index: 20; overflow-y: auto; overscroll-behavior: contain;
+    background: var(--surface); border-left: 1px solid var(--border); padding: 16px 14px 20px; display: flex; flex-direction: column; gap: 10px; }
+  .rail .subset-head { flex-direction: column; gap: 2px; }
+  .rail h2 { font-size: 21px; }
+  .rail .cards { grid-template-columns: minmax(0, 1fr); }
+  .rail .card { background: #fff; }
+
+
+  /* the controls: prompt and subset controls in a column on the left, under the title, as before */
+  .dock { position: fixed; left: 16px; top: calc(var(--top-h, 96px) + 10px); width: calc(var(--ctl-w) - 32px); z-index: 30; display: flex; flex-direction: column; gap: 10px; }
+  .dock .step-1, .dock .step-2 { width: 100%; }
+  .dock .chipmenu .menu.list { max-height: calc(100vh - 220px); overflow-y: auto; }
+
+  /* Details: a bar along the bottom of the page, under the controls, the plot and the rail. It always shows the
+     readouts with the Spectrum and View menus. */
+  #details-btn { display: none; }
+  .stage { bottom: var(--bar-h, 84px); }
+  .drawer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; background: var(--surface); border-top: 1px solid var(--border); padding: 4px 14px 6px; }
+  .drawer-head { display: none; }
+  /* one row: readouts, the completions count, then Spectrum and View */
+  .drawer-body { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-width: 0; }
+  .drawer .stage-foot, .drawer .stage-bar { display: contents; }
+  .drawer .legend { display: none; }   /* the red of the selection explains itself; the bar is narrow */
+  .drawer .readout { order: 1; flex: none; display: flex; gap: 4px 12px; }
+  .drawer .stat .v { min-width: 0; }
+  .drawer #stage-note { order: 2; flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .drawer .specmenu { order: 3; }
+  .drawer #viewmenu { order: 4; margin-left: 0; }
+  .drawer .viewmenu summary { white-space: nowrap; }
+  /* the pool-fit note: a small popover above the bar, opened by clicking the red pool-fit value */
+  .drawer .fit-note { position: absolute; right: 14px; bottom: calc(100% + 6px); max-width: 520px; z-index: 5; padding: 8px 12px; background: #fff;
+    border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--r); box-shadow: 0 6px 20px rgb(0 0 0 / .1); }
+  .drawer .fit-note:not(.show) { display: none; }
+  .stat.warn.can-open .v { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+}
+
+/* Phones and narrow windows: one column in normal flow. */
+@media (max-width: 900px) {
+  .details-btn { display: none; }
+  .dock { display: contents; }
+  .app { display: flex; flex-direction: column; gap: 12px; align-items: stretch; }
+  .top { flex-direction: column; align-items: stretch; gap: 8px; }
+  .brand { justify-content: space-between; align-items: baseline; gap: 12px; }
+  .brand h1 { min-width: 0; }
+  .step-1 { order: 0; }
+  .stage { order: 1; }
+  .rail { order: 2; }
+  .drawer { order: 3; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 4px 12px; }
+  .drawer-close { display: none; }
+  .drawer-title { width: 100%; text-align: left; padding: 10px 0; font: 14px var(--sans); letter-spacing: 0; text-transform: none; color: var(--text-2); }
+  .drawer-title::before { content: "▸ "; color: var(--muted); }
+  .drawer.open .drawer-title::before { content: "▾ "; }
+  .drawer-title .flag { position: static; margin-left: 6px; vertical-align: middle; }
+  .drawer-title.warnflag .flag { display: inline-block; }
+  .drawer:not(.open) .drawer-body { display: none; }
+  .drawer .stage-foot { border-top: 1px solid var(--border); padding-inline: 0; }
+  .drawer .stage-bar { padding-inline: 0; }
+  .drawer .fit-note { padding-inline: 0; }
+  .plot { height: 55vh; }
+  .wip { font-size: 14px; padding: 6px 12px; }
+  /* T and K dock to the bottom of the screen while scrolling. */
+  .step-2 {
+    order: 4; position: sticky; bottom: 0; z-index: 30;
+    gap: 6px; padding: 8px 16px calc(8px + env(safe-area-inset-bottom, 0px));
+    margin: 0 -16px; border-radius: var(--r) var(--r) 0 0; border-bottom: 0;
+    box-shadow: 0 -6px 20px rgb(0 0 0 / .08);
+  }
+}
 /* Nothing in the plot is text to select: dragging rotates the view or pans, and labels open the inspector. */
 .plot-box, .plot-box * , .stage-msg .t, .labels, .lbl { -webkit-user-select: none; user-select: none; }
 .stage-msg .d { -webkit-user-select: text; user-select: text; }   /* error details can still be copied */
+
+/* An open menu draws above the buttons next to it. */
+.viewmenu[open] { z-index: 60; }
+
+/* All completions: in the rail under the selected subset, in the same card style. */
+.all-head { margin-top: 18px; }
+#all-cards .card { padding: 9px 12px 8px; }
+#all-cards .card .txt { font-size: 15.5px; }

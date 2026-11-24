@@ -29,9 +29,10 @@ const { chromium } = require('playwright');
       await page.click('#spectrum .pick-btn[data-dims="1"]');
       await page.waitForTimeout(800);
       await page.screenshot({ path: `${out}/desktop-1d.png` });
-      await page.evaluate(() => document.querySelector('.pool-table').open = true);
-      await page.waitForTimeout(1500);
-      await page.screenshot({ path: `${out}/desktop-full.png`, fullPage: true });
+      await page.click('#specmenu summary');
+      await page.waitForTimeout(500);
+      if (!(await page.$$eval('#all-cards .card', (r) => r.length))) errors.push('[desktop] All completions is empty');
+      await page.screenshot({ path: `${out}/desktop-details.png` });
     }
     await page.close();
   }
