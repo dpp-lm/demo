@@ -536,11 +536,33 @@ function renderTable() {
 // Modal endpoint (modal/app.py); when set it replaces the ZeroGPU Space.
 const MODAL_URL = 'https://timvieira--dpp-lm-sampler-web.modal.run';
 const showCloud = authEnabled() && (!!getAuth() || /[?&](cloud|code)=?/.test(location.search));
-const CLOUD = showCloud ? [
+const SIGNED_IN_CLOUD = showCloud ? [
   MODAL_URL
     ? { key: 'modal-qwen3-14b', name: 'Qwen3 14B', short: 'Qwen3 14B · cloud', modal: MODAL_URL, model: 'qwen3-14b' }
     : { key: 'hf-qwen3-14b', name: 'Qwen3 14B', short: 'Qwen3 14B · cloud', space: 'https://xtimv-dpp-lm-sampler.hf.space', model: 'qwen3-14b' },
 ] : [];
+
+// A GPU server run by a co-author (Manuel's machine). Used whenever it answers; otherwise the page
+// falls back to the models above. No sign-in: the server applies its own per-visitor limits.
+const DEMO_SERVER = 'https://zueri-monstro.rufous-hamlet.ts.net/dpp_api';
+const SERVER_MODELS = ['qwen3-14b', 'gemma-2-9b'];   // the big ones; small models also run in the browser
+const SERVER_EMBEDDER = 'qwen3-emb';
+let SERVER = [];   // filled by probeServer()
+let CLOUD = SIGNED_IN_CLOUD;
+async function probeServer() {
+  try {
+    const r = await fetch(`${DEMO_SERVER}/status`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return false;
+    const st = await r.json();
+    SERVER = (st.models ?? []).filter((m) => SERVER_MODELS.includes(m.key) && m.state !== 'unavailable').map((m) => ({
+      key: 'srv-' + m.key, name: m.name, short: m.name, server: DEMO_SERVER, model: m.key, cold: m.state === 'cold',
+      maxN: st.maxN ?? 200, maxNewTokens: st.maxNewTokens ?? 256,
+      embedder: st.embedders && SERVER_EMBEDDER in st.embedders ? SERVER_EMBEDDER : st.defaultEmbedder,
+    }));
+    CLOUD = [...SERVER, ...SIGNED_IN_CLOUD];
+    return SERVER.length > 0;
+  } catch { return false; }   // down, unreachable, or not allowing this site (CORS)
+}
 const cloudByKey = (k) => CLOUD.find((m) => m.key === k);
 const anyModel = (k) => cloudByKey(k) ?? modelByKey(k);
 let cloudAbort = null;
@@ -548,11 +570,29 @@ let cloudAbort = null;
 async function runCloud(M, { prompt, N, Tprime, maxNewTokens }, done) {
   cloudAbort = new AbortController();
   const signal = cloudAbort.signal;
-  const auth = getAuth();
-  if (!auth) { done(); return signIn({ prompt, model: M.key }); }
+  const auth = M.server ? null : getAuth();
+  if (!M.server && !auth) { done(); return signIn({ prompt, model: M.key }); }
   const t0 = performance.now();
   const tick = setInterval(() => ($('#live-status').textContent = `Waiting for ${M.name}… ${((performance.now() - t0) / 1000).toFixed(0)}s`), 1000);
   try {
+    if (M.server) {
+      $('#live-status').textContent = `Sending to ${M.name}…${M.cold ? ' (it loads on first use, about a minute)' : ''}`;
+      const r = await fetch(`${M.server}/sample`, {
+        method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt, model: M.model, embedder: M.embedder, n: Math.min(N, M.maxN), t_prime: Tprime,
+          max_new_tokens: Math.min(maxNewTokens, M.maxNewTokens), seed: Math.floor(Math.random() * 2 ** 31),
+        }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail || `the server answered ${r.status}`);
+      M.cold = false;
+      $('#live-status').textContent = `${body.N} completions from ${M.name}, in ${((performance.now() - t0) / 1000).toFixed(0)}s.`;
+      $('#progress').hidden = true;
+      markExample(null);
+      setPool(body, decodeEmb(body.emb, body.N, body.D));
+      return;
+    }
     if (M.modal) {
       $('#live-status').textContent = `Sending to ${M.name}… (the first run starts a GPU, about a minute)`;
       const r = await fetch(`${M.modal}/sample`, {
@@ -679,17 +719,24 @@ function wire() {
       const why = fits(m) ? '' : !m.cpu ? ' · needs a GPU' : ` · too large for this ${isPhone ? 'phone' : 'device'}`;
       const size = cached.has(m.repo) ? 'downloaded' : sizeMB(m) ? `${(sizeMB(m) / 1000).toFixed(1)} GB` : '';
       return `<option value="${m.key}" ${fits(m) ? '' : 'disabled'}>${m.name}${size ? ` · ${size}` : ''}${why}</option>`;
-    }).join('') + '</optgroup>' + (CLOUD.length ? (MODAL_URL ? '<optgroup label="In the cloud (sign in with Hugging Face)">' : '<optgroup label="On Hugging Face (free daily quota)">') +
-      CLOUD.map((m) => `<option value="${m.key}">${m.name} · cloud GPU</option>`).join('') + '</optgroup>' : '');
+    }).join('') + '</optgroup>' +
+      (SERVER.length ? '<optgroup label="On a GPU server">' + SERVER.map((m) => `<option value="${m.key}">${m.name}</option>`).join('') + '</optgroup>' : '') +
+      (SIGNED_IN_CLOUD.length ? (MODAL_URL ? '<optgroup label="In the cloud (sign in with Hugging Face)">' : '<optgroup label="On Hugging Face (free daily quota)">') +
+      SIGNED_IN_CLOUD.map((m) => `<option value="${m.key}">${m.name} · cloud GPU</option>`).join('') + '</optgroup>' : '');
     if (keep && usable(keep)) { $('#model').value = keep; advSum(); modelNote(); return; }
     let saved = null;
     try { saved = localStorage.getItem('dpp-lm-model'); } catch {}
-    $('#model').value = usable(saved) ? saved : hasGPU ? 'qwen3-1.7b' : isPhone ? 'qwen3-0.6b' : 'qwen3-1.7b';
+    $('#model').value = usable(saved) ? saved : SERVER.length ? SERVER[0].key : hasGPU ? 'qwen3-1.7b' : isPhone ? 'qwen3-0.6b' : 'qwen3-1.7b';
     advSum(); modelNote();
   };
   const usable = (k) => !!cloudByKey(k) || MODELS.some((m) => m.key === k && fits(m));
   const modelNote = () => {
-    if (cloudByKey($('#model').value)) {
+    const c = cloudByKey($('#model').value);
+    if (c?.server) {
+      $('#model-note').textContent = `Runs on a GPU server shared by everyone using this demo; your prompt is sent there.${c.cold ? ' It loads on first use (about a minute).' : ''}`;
+      return;
+    }
+    if (c) {
       const a = getAuth();
       const where = MODAL_URL ? 'Runs on a cloud GPU (a few free runs a day each)' : `Runs on a Hugging Face GPU and uses your account's daily GPU quota (${a?.isPro ? 'PRO: 40' : 'free: 5'} min)`;
       $('#model-note').innerHTML = a
@@ -730,6 +777,14 @@ function wire() {
     $('#cache-info').textContent = 'Downloaded models deleted.';
   };
   window.__refreshCache = refreshCache;
+  // Offer the GPU server's models if it answers; first-time visitors get it as the default.
+  probeServer().then(async (ok) => {
+    if (!ok) return;
+    await refreshCache();
+    let saved = null;
+    try { saved = localStorage.getItem('dpp-lm-model'); } catch {}
+    if (!saved || !usable(saved)) { $('#model').value = SERVER[0].key; advSum(); modelNote(); }
+  });
   const advSum = () => ($('#adv-sum').textContent = `${anyModel($('#model').value).short} · ${$('#live-N').value} samples`);
   $('#model').addEventListener('change', () => { try { localStorage.setItem('dpp-lm-model', $('#model').value); } catch {} advSum(); modelNote(); });
   fillModels();
