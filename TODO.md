@@ -27,6 +27,8 @@
   useful enough; colour must follow the house style.
 - Views of the similarity structure: show the embedding space's notion of similarity directly
   (the spectrum; the distribution of pairwise similarities as a whole, not thresholded; possibly
-  a monochrome kernel matrix ordered without clustering). Manuel's primal/dual heatmaps are cut as built.
+  a monochrome kernel matrix ordered without clustering).
+- Kernel matrix visualizations: we want a version of these (Manuel's primal L = BBᵀ and dual C = BᵀB
+  heatmaps are the starting point). Design it to fit the demo: house colours, compact, no hand-picking of the subset.
 - When K is too large for the pool, explain it from the spectrum (effective dimension), not a threshold.
 
