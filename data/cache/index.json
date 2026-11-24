@@ -334,5 +334,101 @@
   "emb": "dinner_T1.5.own.bin",
   "D": 256,
   "dtype": "float16"
+ },
+ {
+  "prompt": "Tell me a joke.",
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "embedder": "Qwen/Qwen3-Embedding-0.6B",
+  "N": 200,
+  "Tprime": 1.0,
+  "maxNewTokens": 128,
+  "pool": "joke_T1.0.json",
+  "emb": "joke_T1.0.qwen3-emb.bin",
+  "D": 1024,
+  "dtype": "float16"
+ },
+ {
+  "prompt": "Tell me a joke.",
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "embedder": "own:Qwen/Qwen3-14B-AWQ",
+  "N": 200,
+  "Tprime": 1.0,
+  "maxNewTokens": 128,
+  "pool": "joke_T1.0.json",
+  "emb": "joke_T1.0.own.bin",
+  "D": 256,
+  "dtype": "float16"
+ },
+ {
+  "prompt": "Tell me a joke.",
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "embedder": "Qwen/Qwen3-Embedding-0.6B",
+  "N": 200,
+  "Tprime": 1.5,
+  "maxNewTokens": 128,
+  "pool": "joke_T1.5.json",
+  "emb": "joke_T1.5.qwen3-emb.bin",
+  "D": 1024,
+  "dtype": "float16"
+ },
+ {
+  "prompt": "Tell me a joke.",
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "embedder": "own:Qwen/Qwen3-14B-AWQ",
+  "N": 200,
+  "Tprime": 1.5,
+  "maxNewTokens": 128,
+  "pool": "joke_T1.5.json",
+  "emb": "joke_T1.5.own.bin",
+  "D": 256,
+  "dtype": "float16"
+ },
+ {
+  "prompt": "Implement a sorting algorithm from scratch in Python.",
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "embedder": "Qwen/Qwen3-Embedding-0.6B",
+  "N": 200,
+  "Tprime": 1.0,
+  "maxNewTokens": 128,
+  "pool": "sort_T1.0.json",
+  "emb": "sort_T1.0.qwen3-emb.bin",
+  "D": 1024,
+  "dtype": "float16"
+ },
+ {
+  "prompt": "Implement a sorting algorithm from scratch in Python.",
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "embedder": "own:Qwen/Qwen3-14B-AWQ",
+  "N": 200,
+  "Tprime": 1.0,
+  "maxNewTokens": 128,
+  "pool": "sort_T1.0.json",
+  "emb": "sort_T1.0.own.bin",
+  "D": 256,
+  "dtype": "float16"
+ },
+ {
+  "prompt": "Implement a sorting algorithm from scratch in Python.",
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "embedder": "Qwen/Qwen3-Embedding-0.6B",
+  "N": 200,
+  "Tprime": 1.5,
+  "maxNewTokens": 128,
+  "pool": "sort_T1.5.json",
+  "emb": "sort_T1.5.qwen3-emb.bin",
+  "D": 1024,
+  "dtype": "float16"
+ },
+ {
+  "prompt": "Implement a sorting algorithm from scratch in Python.",
+  "model": "Qwen/Qwen3-14B-AWQ",
+  "embedder": "own:Qwen/Qwen3-14B-AWQ",
+  "N": 200,
+  "Tprime": 1.5,
+  "maxNewTokens": 128,
+  "pool": "sort_T1.5.json",
+  "emb": "sort_T1.5.own.bin",
+  "D": 256,
+  "dtype": "float16"
  }
 ]
