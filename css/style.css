@@ -453,8 +453,8 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .stage-msg.error { box-shadow: none; }
 
   /* the rail of selected completions */
-  .rail { position: fixed; top: 12px; right: 12px; bottom: calc(var(--bar-h, 40px) + 24px); width: calc(var(--rail-w) - 12px); z-index: 20; overflow-y: auto; overscroll-behavior: contain; border-radius: var(--r); box-shadow: 0 4px 20px rgb(0 0 0 / .08);
-    background: var(--surface); border: 1px solid var(--border); padding: 16px 14px 20px; display: flex; flex-direction: column; gap: 10px; }
+  .rail { position: fixed; top: 0; right: 0; bottom: var(--bar-h, 40px); width: var(--rail-w); z-index: 20; overflow-y: auto; overscroll-behavior: contain;   /* full height, not floating */
+    background: var(--surface); border-left: 1px solid var(--border); padding: 16px 14px 20px; display: flex; flex-direction: column; gap: 10px; }
   .rail .subset-head { flex-direction: column; gap: 2px; }
   .rail h2 { font-size: 21px; }
   .rail .cards { grid-template-columns: minmax(0, 1fr); }
@@ -467,13 +467,13 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .dock .composer, .dock .step-2 { box-shadow: 0 4px 20px rgb(0 0 0 / .08); }
   .dock .status { background: rgb(246 241 234 / .85); border-radius: 4px; padding: 2px 6px; }
   /* messages over the plot sit in the open area between the floating panels */
-  .stage-msg { left: var(--ctl-w); right: var(--rail-w); bottom: calc(var(--bar-h, 40px) + 24px); }
+  .stage-msg { left: var(--ctl-w); right: var(--rail-w); bottom: var(--bar-h, 40px); }
   .dock .chipmenu .menu.list { max-height: calc(100vh - 220px); overflow-y: auto; }
 
   /* Details: a bar along the bottom of the page, under the controls, the plot and the rail. It always shows the
      readouts with the Spectrum and View menus. */
   #details-btn { display: none; }
-  .drawer { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 25; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); box-shadow: 0 4px 20px rgb(0 0 0 / .08); padding: 4px 14px 6px; }
+  .drawer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; background: var(--surface); border-top: 1px solid var(--border); padding: 4px 16px 6px; }   /* edge to edge, not floating */
   .drawer-head { display: none; }
   /* one row: readouts, the completions count, then Spectrum and View */
   .drawer-body { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-width: 0; }
