@@ -13,6 +13,16 @@ function rod(a, b, r, color) {
 
 // "origin", written just left of the origin (a sprite, so it always faces the viewer). The selected
 // vectors are drawn from the origin, so their meeting point marks it; the word names it.
+// The unit sphere (every embedding has length 1), drawn as a faint globe.
+function globe(scale, color) {
+  const g = new THREE.Group(), mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.13, depthWrite: false });
+  const circle = (f) => { const pts = []; for (let t = 0; t <= 96; t++) pts.push(f((2 * Math.PI * t) / 96)); return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat); };
+  for (let lat = -60; lat <= 60; lat += 30) { const y = Math.sin(lat * Math.PI / 180), r = Math.cos(lat * Math.PI / 180); g.add(circle((a) => new THREE.Vector3(r * Math.cos(a), y, r * Math.sin(a)))); }
+  for (let lon = 0; lon < 180; lon += 30) { const c = Math.cos(lon * Math.PI / 180), sn = Math.sin(lon * Math.PI / 180); g.add(circle((a) => new THREE.Vector3(Math.cos(a) * c, Math.sin(a), Math.cos(a) * sn))); }
+  g.scale.setScalar(scale);
+  return g;
+}
+
 function originMarker(color, h) {
   const W = 256, H = 64, cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
@@ -98,25 +108,20 @@ export class Plot3D {
     }
     this.scale = 1 / (m || 1);
     const s = this.scale;
+    // Frame what is drawn (the points, the origin and the spanned volume). Framed when the view first
+    // appears, and again, smoothly, when it switches between fitted axes (K ≤ 3) and principal axes.
+    const frame = this.frameFor(o, s);
+    this.frameH = frame.h;   // marker and dot sizes follow the frame the view settles on
     if (!this.camSet) {
-      // Frame what is drawn (the points, the origin and the spanned volume), not the empty grid.
       // Look down from 35°: a vector lying near the floor is foreshortened at most to sin 35° ≈ 0.57
       // of its length as the view turns, so no selected vector can collapse onto the origin.
       this.camSet = true;
-      const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
-      pts.push([0, 0, 0]);
-      if (o.sel.length >= 2 && o.sel.length <= 3) pts.push([0, 1, 2].map((d) => o.sel.reduce((a, i) => a + pts[i][d], 0)));
-      const lo = [0, 1, 2].map((d) => Math.min(...pts.map((p) => p[d]))), hi = [0, 1, 2].map((d) => Math.max(...pts.map((p) => p[d])));
-      const ctr = lo.map((x, d) => (x + hi[d]) / 2);
-      const r = Math.max(0.3, ...pts.map((p) => Math.hypot(p[0] - ctr[0], p[1] - ctr[1], p[2] - ctr[2])));
       const el = (35 * Math.PI) / 180, az = (40 * Math.PI) / 180;
-      this.controls.target.set(...ctr);
-      this.camera.position.set(ctr[0] + 3 * Math.cos(el) * Math.sin(az), ctr[1] + 3 * Math.sin(el), ctr[2] + 3 * Math.cos(el) * Math.cos(az));
-      const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, a = W / H;
-      const h = 1.08 * r * Math.max(1, 1 / a);
-      Object.assign(this.camera, { left: -h * a, right: h * a, top: h, bottom: -h });
-      this.camera.updateProjectionMatrix();
-    }
+      this.controls.target.copy(frame.ctr);
+      this.camera.position.set(frame.ctr.x + 3 * Math.cos(el) * Math.sin(az), frame.ctr.y + 3 * Math.sin(el), frame.ctr.z + 3 * Math.cos(el) * Math.cos(az));
+      this.setHalfHeight(frame.h);
+    } else if (this.lastFitted !== o.fitted) this.goal = frame;
+    this.lastFitted = o.fitted;
     this.targets = o.coords.map((c, i) => {
       const f = (o.scaled ? o.c[i] : 1) * s;
       return new THREE.Vector3(c[0] * f, c[1] * f, c[2] * f);
@@ -130,10 +135,13 @@ export class Plot3D {
     const N = o.coords.length;
     for (const ch of [...this.group.children]) { this.group.remove(ch); ch.geometry?.dispose(); ch.material?.dispose(); }
     // No axes or floor grid: the only meaningful frame is the origin, from which the scored volume is measured.
-    this.group.add(originMarker(o.text ?? '#555555', this.camera.top));
+    this.group.add(originMarker(o.text ?? '#555555', this.frameH ?? this.camera.top));
+    // The unit sphere: every embedding has length 1, so the completions lie on it (or inside it, when
+    // scaled by quality). It is the one piece of "room" the model itself has.
+    this.group.add(globe(this.scale, o.text ?? '#555555'));
     // Points.
     // Radius tied to the zoom: about 2.5 px on a 450-px-tall plot, the same as the 2-D dots.
-    const sphere = new THREE.SphereGeometry(0.011 * this.camera.top, 10, 8);
+    const sphere = new THREE.SphereGeometry(0.011 * (this.frameH ?? this.camera.top), 10, 8);
     this.mesh = new THREE.InstancedMesh(sphere, new THREE.MeshLambertMaterial(), N);
     const sel = new Set(o.sel);
     for (let i = 0; i < N; i++) this.mesh.setColorAt(i, new THREE.Color(sel.has(i) ? o.selColor(i) : o.color(i)));
@@ -193,7 +201,31 @@ export class Plot3D {
     }
   }
 
+  frameFor(o, s) {
+    const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
+    pts.push([0, 0, 0]);
+    if (o.sel.length >= 2 && o.sel.length <= 3) pts.push([0, 1, 2].map((d) => o.sel.reduce((a, i) => a + pts[i][d], 0)));
+    const lo = [0, 1, 2].map((d) => Math.min(...pts.map((p) => p[d]))), hi = [0, 1, 2].map((d) => Math.max(...pts.map((p) => p[d])));
+    const ctr = lo.map((x, d) => (x + hi[d]) / 2);
+    const r = Math.max(0.3, ...pts.map((p) => Math.hypot(p[0] - ctr[0], p[1] - ctr[1], p[2] - ctr[2])));
+    const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450;
+    return { ctr: new THREE.Vector3(...ctr), h: 1.08 * r * Math.max(1, H / W) };
+  }
+  setHalfHeight(h) {
+    const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, a = W / H;
+    Object.assign(this.camera, { left: -h * a, right: h * a, top: h, bottom: -h });
+    this.camera.updateProjectionMatrix();
+  }
+
   tick() {
+    if (this.goal) {
+      // Glide the view to the new frame: move the target (and the camera with it) and the zoom.
+      const g = this.goal, d = new THREE.Vector3().subVectors(g.ctr, this.controls.target).multiplyScalar(0.15);
+      this.controls.target.add(d); this.camera.position.add(d);
+      const h = this.camera.top + (g.h - this.camera.top) * 0.15;
+      this.setHalfHeight(h);
+      if (d.length() < 1e-4 && Math.abs(g.h - h) < 1e-4) this.goal = null;
+    }
     if (!this.targets || !this.current) return;
     let moving = false;
     this.current.forEach((p, i) => {
