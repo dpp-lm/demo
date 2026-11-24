@@ -567,7 +567,7 @@ const plot = {
   },
   highlight(i) {
     if (i < 0) i = S.pinned;
-    S.hover = i;   // also marks the leader line of that card
+    S.hover = i;
     if (S.dims === 3) { this.p3?.highlight(i); this.highlightCards(i); } else this.p2.highlight(i);
   },
   highlightCards(i) { document.querySelectorAll('.card').forEach((c) => c.classList.toggle('hl', +c.dataset.i === i)); },
@@ -619,28 +619,9 @@ function placeLabels() {
     it.el.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
   }
 }
-// Wide screens: a thin line from each card in the rail to its point on the plot.
 const wide = matchMedia('(min-width: 901px)');
-function drawLeaders() {
-  const svg = $('#leaders');
-  const covered = !$('#stage-msg').hidden && $('#stage-msg').classList.contains('over');   // a message over the plot
-  if (!wide.matches || !S.pool || !S.sel.length || covered) { if (svg.childElementCount) svg.innerHTML = ''; return; }
-  const box = $('#plot').getBoundingClientRect(), rail = $('.rail').getBoundingClientRect();
-  let out = '';
-  for (const card of document.querySelectorAll('#selected .card')) {
-    const i = +card.dataset.i, p = S.dims === 3 ? plot.p3?.screenXY(i) : plot.p2.pos?.[i];
-    const r = card.getBoundingClientRect();
-    if (!p || r.bottom < rail.top + 8 || r.top > rail.bottom - 8) continue;   // card scrolled out of view
-    const x = box.left + p[0], y = box.top + p[1];
-    if (x < box.left || x > box.right || y < box.top || y > box.bottom) continue;
-    const cy = Math.min(Math.max(r.top + Math.min(r.height / 2, 26), rail.top + 8), rail.bottom - 8);
-    out += `<line x1="${r.left.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}"${i === S.hover ? ' class="hl"' : ''}/>`;
-  }
-  if (svg.innerHTML !== out) svg.innerHTML = out;
-}
 (function follow3D() {
   if (S.dims === 3 && $('#labels').childElementCount) placeLabels();
-  drawLeaders();
   requestAnimationFrame(follow3D);
 })();
 
@@ -1024,18 +1005,12 @@ function wire() {
   $('#details-btn').onclick = () => setDrawer(!$('#details').classList.contains('open'));
   $('#details-toggle').onclick = () => { if (!wide.matches) setDrawer(!$('#details').classList.contains('open')); };
   $('#details-close').onclick = () => setDrawer(false);
-  // The selected points carry labels only where no leader lines join them to their cards.
-  $('#label-toggle').checked = !wide.matches;
-  // The plot ends where the dock begins: keep --dock-h equal to the dock's height.
-  const dock = document.querySelector('.dock');
+  // The controls column starts under the title block, whatever its height: keep --top-h equal to it.
+  const top = document.querySelector('.top');
   new ResizeObserver(() => {
-    if (!wide.matches) return;
-    const h = Math.ceil(dock.getBoundingClientRect().height);
-    if (h && String(h) + 'px' !== document.documentElement.style.getPropertyValue('--dock-h')) {
-      document.documentElement.style.setProperty('--dock-h', `${h}px`);
-      window.dispatchEvent(new Event('resize'));
-    }
-  }).observe(dock);
+    const h = Math.ceil(top.getBoundingClientRect().bottom);
+    if (h) document.documentElement.style.setProperty('--top-h', `${h}px`);
+  }).observe(top);
   for (const [a, b] of [['#adv', '#exmenu'], ['#exmenu', '#adv']]) $(a).addEventListener('toggle', () => { if ($(a).open) $(b).open = false; });
   $('.pool-table').addEventListener('toggle', () => { if ($('.pool-table').open && S.pool) renderTable(); });
   $('#live-go').onclick = () => runLive({ k: 1 });
