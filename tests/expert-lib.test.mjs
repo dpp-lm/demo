@@ -188,3 +188,53 @@ test('serverExtras: missing, malformed or minimal status gives nothing', () => {
   assert.deepEqual(serverExtras({ models: [{ key: 'a' }, { key: 'qwen3-14b' }] }).models.map((m) => m.key), ['a']);
   assert.equal(repoLabel('a/b/c'), 'c');
 });
+
+test('groupLabels: planted blocks are recovered by every method, from G alone', async () => {
+  const { groupLabels, GROUP_METHODS } = await import('../js/expert-lib.js');
+  const { gram, mulberry32 } = await import('../js/dpp.js');
+  const r = mulberry32(5), D = 12, per = 7, centers = [0, 1, 2].map((c) => Float64Array.from({ length: D }, (_, d) => (d === 4 * c ? 1 : 0)));
+  const phi = [];
+  for (const c of centers) for (let i = 0; i < per; i++) { const v = Float64Array.from(c, (x) => x + 0.08 * (r() - 0.5)); const n = Math.hypot(...v); phi.push(v.map((x) => x / n)); }
+  const N = phi.length, G = gram(phi);
+  for (const { id } of GROUP_METHODS) {
+    const { label, k } = groupLabels(G, N, { method: id, k: 3 });
+    assert.equal(k, 3, id);
+    for (let b = 0; b < 3; b++) assert.equal(new Set(Array.from(label.slice(b * per, (b + 1) * per))).size, 1, `${id} block ${b}`);
+    assert.equal(new Set(Array.from(label)).size, 3, id);
+  }
+});
+
+test('groupLabels: few distinct strings is one group; one completion is one group; empty pool is none', async () => {
+  const { groupLabels } = await import('../js/expert-lib.js');
+  const G = Float64Array.from([1, 0, 0, 1]);
+  assert.deepEqual(groupLabels(G, 2, { distinct: 2 }), { label: new Int32Array(2), k: 1 });
+  assert.equal(groupLabels(new Float64Array([1]), 1).k, 1);
+  assert.equal(groupLabels(new Float64Array(0), 0).k, 0);
+});
+
+test('groupNames: numbers, medoid text and counts', async () => {
+  const { groupNames, groupCounts, groupSlot, shortText } = await import('../js/expert-lib.js');
+  const G = Float64Array.from([1, .9, 0, .9, 1, 0, 0, 0, 1]), label = Int32Array.from([0, 0, 1]), texts = ['one two three four five six seven', 'one two', 'alone here'];
+  assert.deepEqual(groupNames('num', { label, k: 2, texts, G, N: 3 }), ['Group 1', 'Group 2']);
+  const m = groupNames('medoid', { label, k: 2, texts, G, N: 3 });
+  assert.equal(m[1], 'alone here');
+  assert.ok(m[0] === shortText(texts[0]) || m[0] === 'one two');
+  assert.equal(shortText(texts[0]), 'one two three four five…');
+  assert.deepEqual(groupCounts(label, 2), [2, 1]);
+  assert.deepEqual([0, 7, 8].map(groupSlot), [1, 8, 1]);
+});
+
+test('selectionLogScale: kappa for Most likely, kappa / q for Sample', async () => {
+  const { selectionLogScale } = await import('../js/expert-lib.js');
+  assert.deepEqual(selectionLogScale('map', [1, 2], [0.5, 0.5]), [1, 2]);
+  assert.deepEqual(selectionLogScale('sample', [1, 2], [0.5, 1]), [0.5, 1]);
+});
+
+test('treeOf caches the seriation per Gram matrix', async () => {
+  const { treeOf } = await import('../js/expert-lib.js');
+  const G = Float64Array.from([1, .5, .2, .5, 1, .3, .2, .3, 1]);
+  const t = treeOf(G, 3);
+  assert.equal(treeOf(G, 3), t);
+  assert.equal(t.order.length, 3);
+  assert.equal(t.merges.length, 2);
+});

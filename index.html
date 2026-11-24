@@ -46,6 +46,9 @@
     </div>
   </section>
 
+  <!-- expert: the similarity matrices, a panel over the open part of the plot (in flow under the plot on phones) -->
+  <section id="matpanel" class="matpanel" aria-label="Similarity matrices" hidden></section>
+
   <!-- The selected completions: a rail on the right on wide screens, under the plot on phones. -->
   <aside class="rail subset" aria-label="Selected subset">
     <div class="subset-head">
@@ -132,6 +135,7 @@
           <summary>Spectrum</summary>
           <div class="menu" id="spectrum"></div>
         </details>
+        <button type="button" class="matbtn" id="matbtn" aria-controls="matpanel" aria-expanded="false">Matrices</button><!-- expert: opens the similarity-matrices panel -->
       </div>
       <p id="fit-note" class="fit-note" hidden></p>
       <div class="stage-bar">

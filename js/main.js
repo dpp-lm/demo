@@ -3,7 +3,7 @@ import { eigSym, kdpp, greedyMAPLog, quality, diversity, mulberry32 } from './dp
 import { Plot3D } from './plot3d.js';
 import { initExplainers } from './explain.js';
 import { authEnabled, getAuth, signIn, signOut, finishSignIn } from './hfauth.js';
-import { initExpert, noteStatus, queueWatch, poolChanged, selectionChanged } from './expert.js';   // expert:
+import { initExpert, noteStatus, queueWatch, poolChanged, selectionChanged, pointColors, panelBottom } from './expert.js';   // expert:
 
 const $ = (s) => document.querySelector(s);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -271,9 +271,11 @@ function recompute({ newDraw = true } = {}) {
   const piW = S.mode === 'sample' ? dist.pi : kdpp(G, N, lw, K).pi;
   let s2 = 0; for (const p of piW) s2 += (p / K) ** 2;
   S.fit = (K * K * N * s2) / (N - K + 1);
-  // Drawn length of each point: √(weight) relative to the largest, as the kernel uses it.
-  const m = Math.max(...scale);
-  S.c = scale.map((s) => Math.exp(0.5 * (s - m)));
+  // Drawn length of each point: √κ relative to the largest, in both modes (the mode changes which points are
+  // selected, not where the points are drawn). Most likely scores exactly these arrows; Sample scores them
+  // reweighted by 1/p°_{T′}.
+  const m = Math.max(...lk);
+  S.c = lk.map((s) => Math.exp(0.5 * (s - m)));
   S.proj = project();
   render();
 }
@@ -410,7 +412,7 @@ function renderVolHint() {
   const el = $('#vol-hint');
   if (S.sel.length > 3 || S.sel.length < 2) { el.innerHTML = S.sel.length > 3 ? '<span class="muted">volume drawn for K ≤ 3</span>' : ''; return; }
   el.innerHTML = S.proj.fitted
-    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg><span class="fn">spanned volume<button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button></span>`
+    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg><span class="fn">spanned volume<button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button></span>${S.mode === 'sample' ? ' <span class="muted">of the √κ arrows</span>' : ''}`
     : `<span class="muted">volume needs ${S.sel.length}-D</span>`;
 }
 
@@ -423,7 +425,7 @@ function renderCards() {
     const s = S.pool.samples[i];
     return `<li class="card${s.ended ? '' : ' cut'}" data-i="${i}">
       <div class="txt">${escapeHtml(s.text)}${s.ended ? '' : ' …'}</div>
-      <div class="meta"><span class="dot" style="background:${css('--accent')}"></span>log p ${fmt(s.logp, 1)}<span>·</span><span class="fn">inclusion ${pct(incl(i))}<button type="button" class="xbtn" data-x="inclusion" aria-label="What is the inclusion probability?">?</button></span>${cutLabel(s)}</div></li>`;
+      <div class="meta"><span class="dot" style="background:${dotColor(i, true)}"></span>log p ${fmt(s.logp, 1)}<span>·</span><span class="fn">inclusion ${pct(incl(i))}<button type="button" class="xbtn" data-x="inclusion" aria-label="What is the inclusion probability?">?</button></span>${cutLabel(s)}</div></li>`;
   }).join('');
   renderAllCards();
   $('#selected').querySelectorAll('.card').forEach((el) => {
@@ -450,7 +452,7 @@ function renderAllCards() {
       const s = S.pool.samples[i], on = sel.has(s.text);
       return `<li class="card${s.ended ? '' : ' cut'}" data-i="${i}">
       <div class="txt">${escapeHtml(s.text)}${s.ended ? '' : ' …'}</div>
-      <div class="meta"><span class="dot" style="background:${on ? css('--accent') : css('--ramp-lo')}"></span>${n > 1 ? `×${n}<span>·</span>` : ''}log p ${fmt(s.logp, 1)}<span>·</span>inclusion ${pct(incl(i))}${cutLabel(s)}</div></li>`;
+      <div class="meta"><span class="dot" style="background:${dotColor(i, on)}${pointColors() && on ? `;box-shadow:0 0 0 1.5px var(--surface),0 0 0 3px ${css('--accent')}` : ''}"></span>${n > 1 ? `×${n}<span>·</span>` : ''}log p ${fmt(s.logp, 1)}<span>·</span>inclusion ${pct(incl(i))}${cutLabel(s)}</div></li>`;
     }).join('');
     $('#all-cards').querySelectorAll('.card').forEach((el) => {
       el.onmouseenter = () => plot.highlight(+el.dataset.i);
@@ -459,6 +461,8 @@ function renderAllCards() {
     });
   }, 150);
 }
+// The dot on a card: the selection's red or the plot's grey, or the completion's group color (expert: Groups).
+const dotColor = (i, on) => pointColors()?.dot(i) ?? (on ? css('--accent') : css('--ramp-lo'));
 // Inclusion probability of a completion's text: copies of the same string can never be selected
 // together, so the probability that the string appears is the sum over its copies.
 function inclusionOfText() {
@@ -569,22 +573,29 @@ class Plot2D {
       .attr('fill', css('--text')).attr('fill-opacity', 0.04)
       .attr('stroke', css('--text-2')).attr('stroke-opacity', 0.7).attr('stroke-width', 1).attr('stroke-linejoin', 'round')
       .transition(t).attr('d', face);
+    const xc = pointColors();   // expert: group colors, selected points larger with an outline
     this.gDot.selectAll('circle').data(idx).join('circle')
-      .attr('fill', (i) => (sel.has(i) ? css('--accent') : css('--ink')))
-      .attr('stroke', css('--surface')).attr('stroke-width', 0.75)
-      .attr('r', 1.6)
+      .attr('fill', (i) => (xc ? (sel.has(i) ? xc.selColor(i) : xc.color(i)) : sel.has(i) ? css('--accent') : css('--ink')))
+      .attr('stroke', (i) => (xc && sel.has(i) ? css('--text') : css('--surface'))).attr('stroke-width', (i) => (xc && sel.has(i) ? 1.4 : 0.75))
+      .attr('r', (i) => (xc && sel.has(i) ? 3.2 : 1.6))
       .sort((a, b) => sel.has(a) - sel.has(b))
       .transition(t).attr('cx', (i) => this.pos[i][0]).attr('cy', (i) => this.pos[i][1]);
   }
-  highlight(i) {
+  highlight(i, i2 = -1) {   // expert: i2, a second point (the pair under the cursor in a similarity matrix)
     if (!this.svg) return;
     if (i < 0) i = S.pinned;
     S.hover = i;
-    this.gDot.selectAll('circle').attr('stroke', (j) => (j === i ? css('--text') : css('--surface'))).attr('stroke-width', (j) => (j === i ? 1.5 : 0.75));
+    const grouped = !!pointColors(), isSel = (j) => grouped && S.sel.includes(j);
+    this.gDot.selectAll('circle').attr('stroke', (j) => (j === i || j === i2 ? css('--text') : isSel(j) ? css('--text') : css('--surface'))).attr('stroke-width', (j) => (j === i || j === i2 ? (grouped ? 2.6 : 1.5) : isSel(j) ? 1.4 : 0.75));
     document.querySelectorAll('.card').forEach((c) => c.classList.toggle('hl', +c.dataset.i === i));
   }
 }
 
+// Point colors for the 3-D plot: his ink and red, or (expert: Groups) the group colors with the selected points outlined and the red rods kept.
+const colorHooks = () => {
+  const xc = pointColors();
+  return xc ? { color: xc.color, selColor: xc.selColor, rodColor: () => css('--accent'), selRing: css('--text') } : { color: () => css('--ink'), selColor: () => css('--accent') };
+};
 const plot = {
   p2: new Plot2D($('#plot')),
   p3: null,
@@ -601,7 +612,7 @@ const plot = {
       }
       this.p3.update({
         coords: S.proj.coords, c: S.c, sel: S.sel, scaled: $('#scale-toggle').checked, fitted: S.proj.fitted,
-        color: () => css('--ink'), selColor: () => css('--accent'), accent: css('--accent'), text: css('--text-2'), muted: css('--muted'), bg: css('--surface'),
+        ...colorHooks(), accent: css('--accent'), text: css('--text-2'), muted: css('--muted'), bg: css('--surface'),
       });
     } else this.p2.update();
   },
@@ -609,6 +620,9 @@ const plot = {
     if (i < 0) i = S.pinned;
     S.hover = i;
     if (S.dims === 3) { this.p3?.highlight(i); this.highlightCards(i); } else this.p2.highlight(i);
+  },
+  mark(i, j) {   // expert: the pair of completions under the cursor in a similarity matrix
+    if (S.dims === 3) this.p3?.mark([i, j]); else this.p2.highlight(i, j);
   },
   highlightCards(i) { document.querySelectorAll('.card').forEach((c) => c.classList.toggle('hl', +c.dataset.i === i)); },
 };
@@ -665,7 +679,8 @@ function openArea() {
   const p = $('#plot').getBoundingClientRect();
   if (!wide.matches) return { L: 8, T: 8, R: p.width - 8, B: p.height - 8 };
   const left = Math.max($('.dock').getBoundingClientRect().right, $('.top').getBoundingClientRect().right);
-  return { L: left + 20 - p.left, T: 20 - p.top, R: $('.rail').getBoundingClientRect().left - 20 - p.left, B: $('#details').getBoundingClientRect().top - 20 - p.top };
+  const mat = panelBottom();   // expert: the similarity-matrices panel, when open, takes the bottom of the open area
+  return { L: left + 20 - p.left, T: 20 - p.top, R: $('.rail').getBoundingClientRect().left - 20 - p.left, B: Math.min($('#details').getBoundingClientRect().top, mat ?? Infinity) - 20 - p.top };
 }
 (function follow3D() {
   if (S.dims === 3 && $('#labels').childElementCount) placeLabels();
@@ -1088,7 +1103,8 @@ function wire() {
   initExpert({
     backends: BACKENDS, setStatus, openSettings: () => { $('#adv').open = true; },
     refresh: () => { const keep = $('#model').value; fillModels(); $('#model').value = BACKENDS.some((b) => b.id === keep) ? keep : 'server'; onSettings(); },
-    pool: () => S.pool, G: () => S.G, selection: () => S.sel,
+    pool: () => S.pool, G: () => S.G, selection: () => S.sel, eig: () => S.eig, embedder: () => S.view?.embedder,
+    redraw: () => { if (S.pool) { plot.update(); renderCards(); } }, mark: (i, j) => plot.mark(i, j),
     weights: () => ({ logp: S.logp, logq: S.logq, logKappa: S.pool ? logKappa() : null, T: S.T, mode: S.mode, target: S.target, K: S.K }),
   });
   let rt = 0;

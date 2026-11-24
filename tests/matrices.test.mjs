@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { gram, symEig, mulberry32 } from '../js/dpp.js';
-import { viridis, viridisCss, textOn, range, unitPos, fmtSig, weightsFromLog, buildB, buildAll, largestGroup, seriate, seriation, dendrogramLayout, nodeGroups, medoidOf, groupTexts, principalAxes, projectedDual, normalizeCorr, submatrix, permuted, rowOrder, countAbove, primalMatrix, dualMatrix, trace, heatmapPixels } from '../js/matrices.js';
+import { gram, symEig, eigSym, mulberry32 } from '../js/dpp.js';
+import { viridis, viridisCss, textOn, range, unitPos, fmtSig, weightsFromLog, buildB, buildAll, largestGroup, seriate, seriation, dendrogramLayout, nodeGroups, medoidOf, groupTexts, principalAxes, projectedDual, normalizeCorr, submatrix, permuted, rowOrder, countAbove, primalMatrix, dualMatrix, trace, heatmapPixels, parseHex, rampBetween, weightedGram, dualInAxes } from '../js/matrices.js';
 
 const close = (a, b, tol = 1e-9) => assert.ok(Math.abs(a - b) <= tol * Math.max(1, Math.abs(a), Math.abs(b)), `${a} vs ${b}`);
 function pool(N, D, seed = 3) {
@@ -196,4 +196,48 @@ test('groupTexts: medoid first, then nearest members, distinct, isolated skipped
   const long = groupTexts(G, N, [0, 0, 0, 0, 0, 0], 1, ['y'.repeat(500), 'b', 'c', 'd', 'e', 'f'], { perGroup: 4, maxChars: 240 });
   assert.equal(long.groups[0].length, 4);
   assert.ok(long.groups[0].every((t) => t.length <= 240));
+});
+
+test('parseHex and rampBetween: endpoints, clamping, NaN', () => {
+  assert.deepEqual(parseHex('#555555'), [85, 85, 85]);
+  assert.deepEqual(parseHex('#fa0'), [255, 170, 0]);
+  assert.equal(parseHex('rgb(1,2,3)'), null);
+  const f = rampBetween([250, 250, 248], [80, 80, 80]);
+  assert.deepEqual(f(0), [250, 250, 248]);
+  assert.deepEqual(f(1), [80, 80, 80]);
+  assert.deepEqual(f(2), f(1));
+  assert.deepEqual(f(NaN), f(0));
+  assert.deepEqual(f(0.5), [165, 165, 164]);
+});
+
+test('heatmapPixels takes a colormap', () => {
+  const f = rampBetween([255, 255, 255], [0, 0, 0]);
+  const px = heatmapPixels(new Float64Array([0, 1, 1, 0]), 2, undefined, f);
+  assert.deepEqual(Array.from(px.slice(0, 4)), [255, 255, 255, 255]);
+  assert.deepEqual(Array.from(px.slice(4, 8)), [0, 0, 0, 255]);
+});
+
+test('weightedGram is diag(sqrt w) G diag(sqrt w) and its submatrix on S is the K x K primal of buildB', () => {
+  const phi = pool(9, 12), w = [0.2, 1, 0.5, 0.05, 0.9, 0.3, 0.7, 0.1, 0.4], N = 9;
+  const G = gram(phi), L = weightedGram(G, N, w), sel = [4, 1, 6];
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) close(L[i * N + j], Math.sqrt(w[i] * w[j]) * G[i * N + j], 1e-14);
+  const Lb = primalMatrix(buildB(phi, sel, w)), Ls = submatrix(L, N, sel);
+  for (let t = 0; t < 9; t++) close(Ls[t], Lb[t], 1e-12);
+});
+
+test('dualInAxes equals projectedDual on principalAxes; unit weights give a diagonal of the eigenvalues', () => {
+  const N = 14, phi = pool(N, 10), G = gram(phi), w = Array.from({ length: N }, (_, i) => 0.1 + ((i * 7) % 5) / 5);
+  const eig = eigSym(G, N), ax = principalAxes(phi, G, N, 6);
+  const ref = projectedDual(buildAll(phi, w), ax.V, 6), got = dualInAxes(eig, w, 6);
+  assert.equal(got.r, 6);
+  for (let t = 0; t < 36; t++) close(got.C[t], ref[t], 1e-9);
+  const unit = dualInAxes(eig, w.map(() => 1), 6);
+  for (let a = 0; a < 6; a++) for (let b = 0; b < 6; b++) close(unit.C[a * 6 + b], a === b ? eig.values[a] : 0, 1e-9);
+});
+
+test('dualInAxes drops axes below 1e-9 of the largest eigenvalue (rank-deficient pool)', () => {
+  const D = 3, N = 8, phi = pool(N, D), G = gram(phi), eig = eigSym(G, N);
+  const d = dualInAxes(eig, Array(N).fill(1), 32);
+  assert.equal(d.r, 3);
+  assert.equal(d.C.length, 9);
 });

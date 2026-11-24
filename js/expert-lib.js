@@ -3,6 +3,8 @@
 // server side). Nothing here is imported by the default page.
 
 import { columnLogScale, ess, eigSym } from './dpp.js';
+import { clusterLinkage, cutClusters, clusterPool, clusterKeywords, distFromGram } from './layout.js';
+import { seriation, medoidOf } from './matrices.js';
 
 /**
  * Unit vectors whose Gram matrix is G (N×N, flat, symmetric, unit diagonal): row i is V·√Λ at i from the
@@ -176,4 +178,68 @@ export function serverExtras(status, { known = ['qwen3-emb', 'own'], defKey = 'q
       embedders: [...known.filter((id) => id !== 'own' && id in emb), ...embedders.map((e) => e.id), ...(known.includes('own') && own.includes(m.key) ? ['own'] : [])],
     }));
   return { embedders, models };
+}
+
+
+// ---------- groups: coloring the completions by cluster (a reading aid, never seen by the DPP) ----------
+
+/** The grouping methods, in menu order. 'tree' cuts the average-linkage tree on 1 - cos that also orders the similarity matrix; 'far' is complete linkage and 'avg' average linkage on sqrt(2 - 2 cos); 'kmeans' needs vectors. */
+export const GROUP_METHODS = [
+  { id: 'tree', label: 'Tree' }, { id: 'far', label: 'Far apart' }, { id: 'avg', label: 'Average' }, { id: 'kmeans', label: 'k-means' },
+];
+
+/**
+ * Group the N completions from their unit Gram matrix G alone. Returns { label: Int32Array (group 0.. by decreasing size), k }.
+ * `tree` (optional) is a precomputed seriation(G, N) and `vectors` rows with Gram G (k-means only; computed from G when missing).
+ * With `distinct` <= 3 distinct strings the pool is one group.
+ */
+export function groupLabels(G, N, { method = 'tree', k = 6, tree = null, vectors = null, distinct = N } = {}) {
+  if (N < 2 || distinct <= 3) return { label: new Int32Array(N), k: N ? 1 : 0 };
+  if (method === 'kmeans') {
+    const r = clusterPool(vectors ?? gramToVectors(G, N), k, 1);
+    return { label: r.label, k: r.k };
+  }
+  const merges = method === 'tree' ? (tree ?? seriation(G, N)).merges
+    : clusterLinkage(distFromGram(G, N), N, { method: method === 'avg' ? 'average' : 'complete' });
+  const c = cutClusters(merges, N, { k, minSize: 1 });
+  return { label: c.label, k: c.k };
+}
+
+/** The first five words of a text, with an ellipsis when it is longer. */
+export function shortText(t) {
+  const w = String(t).replace(/\s+/g, ' ').trim().split(' ');
+  return w.length > 5 ? w.slice(0, 5).join(' ') + '…' : w.join(' ');
+}
+
+/** One name per group 0..k-1: 'num' "Group 1", 'kw' the group's keyword, 'medoid' the start of its most typical completion. */
+export function groupNames(kind, { label, k, texts, logp = null, G, N }) {
+  if (kind === 'kw') return clusterKeywords(texts, label, k, logp).map((x, c) => x || `Group ${c + 1}`);
+  if (kind === 'medoid') {
+    return Array.from({ length: k }, (_, c) => {
+      const m = []; for (let i = 0; i < N; i++) if (label[i] === c) m.push(i);
+      return m.length ? shortText(texts[medoidOf(G, N, m)]) : `Group ${c + 1}`;
+    });
+  }
+  return Array.from({ length: k }, (_, c) => `Group ${c + 1}`);
+}
+
+/** Members of each group: counts[c] for c in 0..k-1 (label < 0 is not counted). */
+export function groupCounts(label, k) {
+  const n = new Array(k).fill(0);
+  for (const c of label) if (c >= 0 && c < k) n[c]++;
+  return n;
+}
+
+/** Palette slot (1..8) of group c, cycling; the page's --c1 .. --c8. */
+export const groupSlot = (c) => (c % 8) + 1;
+
+/** The log of the kernel's diagonal weight used to pick the subset: Most likely uses kappa, Sample uses kappa / q. */
+export const selectionLogScale = (mode, logKappa, logq) => (mode === 'map' ? Array.from(logKappa) : logKappa.map((x, i) => x - logq[i]));
+
+const TREES = new WeakMap();
+/** The average-linkage seriation of the pool (see matrices.seriation), computed once per Gram matrix object G. */
+export function treeOf(G, N) {
+  let t = TREES.get(G);
+  if (!t) { t = seriation(G, N); TREES.set(G, t); }
+  return t;
 }

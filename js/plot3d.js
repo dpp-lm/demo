@@ -223,11 +223,16 @@ export class Plot3D {
       const p = this.current[i];
       const len = p.length();
       if (len < 1e-4) continue;
-      const color = new THREE.Color(o.selColor(i));
+      const color = new THREE.Color(o.rodColor ? o.rodColor(i) : o.selColor(i));   // expert: rodColor keeps the rods red when the points carry group colors
       const z = this.view?.h ?? this.frameH ?? 1;   // widths follow the zoom, so they look the same at any frame
       if (few) this.dyn.add(rod(O, p, 0.0055 * z, color));
       else this.dyn.add(new THREE.ArrowHelper(p.clone().normalize(), O, len, color, Math.min(0.06 * z, len * 0.3), Math.min(0.03 * z, len * 0.15)));
     }
+    // expert: selected points outlined and larger, and the points a similarity matrix marks (this.marks)
+    const r0 = 0.0055 * (this.frameH ?? this.camera.top) * (this.frameH ? this.view.h / this.frameH : 1);
+    const disc = (p, r, c, side) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), new THREE.MeshBasicMaterial({ color: c, side })); m.position.copy(p); this.dyn.add(m); };
+    if (o.selRing) for (const i of o.sel) { disc(this.current[i], 2.5 * r0, o.selRing, THREE.BackSide); disc(this.current[i], 1.6 * r0, o.selColor(i), THREE.FrontSide); }
+    for (const i of this.marks ?? []) if (this.current[i]) disc(this.current[i], 3.4 * r0, new THREE.Color(o.text ?? '#555555'), THREE.BackSide);
     if (o.sel.length >= 2 && few) {
       const v = o.sel.map((i) => this.current[i]);
       const n = v.length;
@@ -459,6 +464,7 @@ export class Plot3D {
   }
 
   highlight(i) { this.hovered = i; this.layout(); }
+  mark(list) { this.marks = list.filter((x) => x >= 0); this.layout(); }   // expert: points a similarity matrix marks
 
   dispose() {
     this.alive = false;

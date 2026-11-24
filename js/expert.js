@@ -8,10 +8,14 @@
 //   setStatus(text): the status line under the prompt,
 //   openSettings(): open the Settings menu,
 //   pool(), G(), weights(), selection(): the pool on screen, its similarity matrix, the weights in use and the selected indices,
+//   eig(), embedder(): the eigendecomposition of G and the embedder's repo id,
+//   redraw(): redraw the plot and the cards (colors changed), mark(i, j): mark up to two points in the plot (-1 for none),
 // }
 
 import { EXPLAIN } from './explain.js';
 import { serverExtras, queueText, newRequestId } from './expert-lib.js';
+import { groupsSection, initGroups, groupColors, groupInfo } from './groups.js';
+import { initMatrices, matricesRefresh, matricesReset, panelBottom as matPanelBottom } from './matrix-panel.js';
 
 const KEY = 'dpp-expert';
 let H = null;
@@ -27,7 +31,11 @@ export const onPool = (fn) => listeners.pool.push(fn);
 export const onSelection = (fn) => listeners.selection.push(fn);
 export const onOff = (fn) => listeners.off.push(fn);
 export const poolChanged = () => { if (on) listeners.pool.forEach((f) => f()); };
-export const selectionChanged = () => { if (on) listeners.selection.forEach((f) => f()); };
+export const selectionChanged = () => { matricesRefresh(); if (on) listeners.selection.forEach((f) => f()); };   // the matrices panel is in the default view too
+/** Group colors for the points and card dots, or null (his colors) with the switch off or Groups off. */
+export const pointColors = () => (on ? groupColors() : null);
+/** Top of the similarity-matrices panel when it is open on a wide screen (viewport pixels), else null. */
+export const panelBottom = matPanelBottom;
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const $ = (s) => document.querySelector(s);
@@ -37,7 +45,7 @@ const $ = (s) => document.querySelector(s);
 export function noteStatus(B, body) {
   B.statusBody = body ?? null;
   B.queue = !!(body && typeof body.queue === 'object' && body.queue);
-  if (on) { applyServerExtras(); renderMenu(); }
+  if (on) { applyServerExtras(); renderPanel(); }
 }
 
 /**
@@ -89,70 +97,125 @@ function removeServerExtras() {
   for (let i = H.backends.length - 1; i > 0; i--) if (H.backends[i].expert) H.backends.splice(i, 1);
 }
 
-// ---------------------------------------------------------------- the menu
-const SECTIONS = [
-  { id: 'models', title: 'Models and embeddings', render: () => {
-    const B = SERVER(), x = serverExtras(B.statusBody, { known: ['qwen3-emb', 'own'], defKey: 'qwen3-14b' });
-    const list = (a) => a.map(escapeHtml).join(', ');
-    const rows = [];
-    if (!B.statusBody) rows.push('<p class="x-note">The GPU server did not answer, so its extra models and embeddings are not listed.</p>');
-    else {
-      rows.push(x.embedders.length
-        ? `<p class="x-note">Embedding choices added to Settings: ${list(x.embedders.map((e) => e.label))}.</p>`
-        : '<p class="x-note">The GPU server offers no embeddings beyond the default ones.</p>');
-      rows.push(x.models.length
-        ? `<p class="x-note">Model choices added to Settings: ${list(x.models.map((m) => m.name))}.</p>`
-        : '<p class="x-note">The GPU server reports one model, so the model choice is unchanged.</p>');
-    }
-    rows.push('<p class="x-act"><button type="button" class="btn" data-xact="settings">Open settings</button></p>');
-    return rows.join('');
-  } },
-];
+// ---------------------------------------------------------------- the control panel
+// A column under the prompt and subset controls (a section below them on phones), shown while the switch is on.
+// Each section is { id, title, render() -> html, on(event) }. Add a section with registerSection({...}); the
+// panel re-renders after any change, keeps keyboard focus on the control used, and remembers closed sections.
+const SECTIONS = [];
+export function registerSection(sec, { before = null } = {}) {
+  const at = before ? SECTIONS.findIndex((s) => s.id === before) : -1;
+  if (at >= 0) SECTIONS.splice(at, 0, sec); else SECTIONS.push(sec);
+}
 
-function renderMenu() {
+const CLOSED_KEY = 'dpp-expert-closed';
+const readClosed = () => { try { return new Set(JSON.parse(localStorage.getItem(CLOSED_KEY) ?? '[]')); } catch { return new Set(); } };
+const writeClosed = (set) => { try { localStorage.setItem(CLOSED_KEY, JSON.stringify([...set])); } catch { /* storage may be blocked */ } };
+
+/** A select that mirrors one of the page's own selects (Settings) and drives it. `data-mirror` names the original's id. */
+const mirror = (id, label, x) => {
+  const src = $(`#${id}`);
+  if (!src) return '';
+  const opts = [...src.options].map((o) => `<option value="${escapeHtml(o.value)}"${o.value === src.value ? ' selected' : ''}>${escapeHtml(o.textContent)}</option>`).join('');
+  return `<label class="x-row"><span class="x-lab">${label}<button type="button" class="xbtn" data-x="${x}" aria-label="About ${label.toLowerCase()}">?</button></span><select class="x-select" data-mirror="${id}">${opts}</select></label>`;
+};
+
+registerSection({
+  id: 'models', title: 'Models and embeddings',
+  render: () => {
+    const B = SERVER(), x = serverExtras(B.statusBody, { known: ['qwen3-emb', 'own'], defKey: 'qwen3-14b' });
+    const rows = [mirror('model', 'Model', 'model'), mirror('embedder', 'Embedding', 'embedder'), mirror('target', 'Target quality', 'target')];
+    if (!B.statusBody) rows.push('<p class="x-note">The GPU server did not answer, so its extra models and embeddings are not listed.</p>');
+    else if (!x.embedders.length && !x.models.length) rows.push('<p class="x-note">The GPU server offers no models or embeddings beyond the default ones.</p>');
+    return rows.join('');
+  },
+  on(e) {
+    const id = e.target.dataset?.mirror;
+    if (e.type !== 'change' || !id) return;
+    const src = $(`#${id}`);
+    src.value = e.target.value;
+    src.dispatchEvent(new Event('change', { bubbles: true }));   // the page reacts as if Settings had been used
+  },
+});
+registerSection(groupsSection);
+
+function renderPanel() {
   const body = $('#expert-body');
-  if (!body) return;
-  const open = new Set([...body.querySelectorAll('details[open]')].map((d) => d.dataset.sec));
-  const first = !body.childElementCount;
-  body.innerHTML = SECTIONS.map((s) => `<details class="xsec" data-sec="${s.id}"${first || open.has(s.id) ? ' open' : ''}><summary>${s.title}</summary><div class="xsec-body">${s.render()}</div></details>`).join('');
+  if (!body || !on) return;
+  const focus = document.activeElement?.dataset?.f ?? document.activeElement?.dataset?.mirror;
+  const closed = readClosed();
+  body.innerHTML = SECTIONS.map((s) => `<details class="xsec" data-sec="${s.id}"${closed.has(s.id) ? '' : ' open'}><summary>${s.title}</summary><div class="xsec-body">${s.render()}</div></details>`).join('');
+  if (focus) (body.querySelector(`[data-f="${focus}"]`) ?? body.querySelector(`[data-mirror="${focus}"]`))?.focus();
+  fitPanel();
+}
+
+/** On wide screens the panel scrolls inside the room left under the controls. */
+function fitPanel() {
+  const p = $('#xpanel');
+  if (!p || p.hidden) return;
+  if (!matchMedia('(min-width: 901px)').matches) { p.style.maxHeight = ''; return; }
+  const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h')) || 40;
+  p.style.maxHeight = '0px';   // measure the room without the panel's own height
+  const top = p.getBoundingClientRect().top;
+  p.style.maxHeight = `${Math.max(160, innerHeight - bar - top - 14)}px`;
 }
 
 function setOn(v, { save = true } = {}) {
   on = v;
   if (save) write(v);
   $('#expert-toggle').checked = v;
-  $('#expertmenu').hidden = !v;
-  if (v) { applyServerExtras(); renderMenu(); }
+  $('#xpanel').hidden = !v;
+  $('#xgo').hidden = !v;
+  if (v) { applyServerExtras(); }
   else {
-    $('#expertmenu').open = false;
     removeServerExtras();
     listeners.off.forEach((f) => f());
+    matricesReset();
   }
   H.refresh();
+  if (v) renderPanel();
+  matricesRefresh(true);
 }
 
 export function initExpert(hooks) {
   H = hooks;
   EXPLAIN.expert = {
     title: 'Expert tools',
-    body: `<p>Extra controls for people who know the paper: more models and embeddings from the GPU server, and further tools as they are added. They appear in the <b>Expert</b> menu and in Settings.</p>
+    body: `<p>Extra controls for people who know the paper. They appear in a panel under the prompt and subset controls: the models and embeddings the GPU server offers, grouping of the completions, and further tools as they are added. The similarity matrices get extra options in their own panel.</p>
       <p>Turning the switch off puts every setting back to the default page.</p>`,
   };
+  EXPLAIN.gmethod = { title: 'Grouping method', body: '<p>How the completions are split into groups. All methods use only the similarity between completions.</p><ul><li><b>Tree</b> cuts the average-linkage tree on $1 - \\cos$, the one that orders the similarity matrices.</li><li><b>Far apart</b> uses complete linkage: no group holds two completions farther apart than the height at which it formed.</li><li><b>Average</b> uses average linkage, which balances that with group size.</li><li><b>k-means</b> builds compact groups around centers, so an isolated completion can join the nearest group.</li></ul>' };
+  EXPLAIN.gcount = { title: 'Number of groups', body: '<p>How many groups the completions are cut into, from 2 to 8. Groups are numbered from the largest. Tree, Far apart and Average can return fewer when the completions do not split that far.</p>' };
+  EXPLAIN.gnames = { title: 'Group names', body: '<p>What the legend calls each group. <b>Numbers</b> are Group 1, 2, and so on. <b>Keywords</b> picks the word that is most common in the group and rare outside it. <b>Typical member</b> shows the start of the completion most similar to the rest of the group.</p>' };
   const anchor = document.querySelector('.drawer-body > .stage-bar');   // the bar that holds View
   const bar = document.createElement('span');
   bar.className = 'expert-bar';
-  bar.innerHTML = `<details class="viewmenu expertmenu" id="expertmenu" hidden><summary>Expert</summary><div class="menu" id="expert-body"></div></details>
+  bar.innerHTML = `<button type="button" class="matbtn" id="xgo" hidden>Expert</button>
     <label class="toggle expert-switch"><input type="checkbox" id="expert-toggle" role="switch"><span>Expert tools<button type="button" class="xbtn" data-x="expert" aria-label="What are the expert tools?">?</button></span></label>`;
   anchor.after(bar);
-  $('#expert-toggle').addEventListener('change', (e) => setOn(e.target.checked));
-  $('#expert-body').addEventListener('click', (e) => {
-    if (e.target.closest('[data-xact="settings"]')) { $('#expertmenu').open = false; setTimeout(H.openSettings, 0); }   // after the page's own outside-click handler has run
-  });
-  // Close on an outside click or Escape, like the View and Spectrum menus.
-  document.addEventListener('click', (e) => {
-    const m = $('#expertmenu');
-    if (m.open && !e.composedPath().includes(m) && !e.target.closest('.xpop')) m.open = false;
-  });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#expertmenu').open = false; });
+  const panel = document.createElement('section');
+  panel.id = 'xpanel';
+  panel.className = 'step xpanel';
+  panel.hidden = true;
+  panel.setAttribute('aria-label', 'Expert tools');
+  panel.innerHTML = '<h2>Expert tools</h2><div id="expert-body"></div>';
+  document.querySelector('.dock').append(panel);
+  $('#expert-toggle').addEventListener('change', (e) => { setOn(e.target.checked); if (e.target.checked && !matchMedia('(min-width: 901px)').matches) $('#xpanel').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+  $('#xgo').onclick = () => $('#xpanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // The tools: the page's own bits of state they read, and how they redraw.
+  const ctx = { H, isExpert, rerender: renderPanel, onPool, onSelection, onOff, groups: groupInfo };
+  initGroups(ctx);
+  initMatrices(ctx);
+  for (const type of ['change', 'click']) $('#expert-body').addEventListener(type, (e) => SECTIONS.forEach((s) => s.on?.(e)));
+  $('#expert-body').addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (!d.dataset?.sec) return;
+    const c = readClosed();
+    if (d.open) c.delete(d.dataset.sec); else c.add(d.dataset.sec);
+    writeClosed(c);
+  }, true);
+  // The mirrored selects follow Settings, whoever changes them.
+  for (const id of ['model', 'embedder', 'target']) $(`#${id}`)?.addEventListener('change', () => setTimeout(renderPanel, 0));
+  window.addEventListener('resize', fitPanel);
+  new ResizeObserver(fitPanel).observe(document.querySelector('.dock'));
   if (read()) setOn(true, { save: false });
 }

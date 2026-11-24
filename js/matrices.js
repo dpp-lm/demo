@@ -120,11 +120,11 @@ export const countAbove = (values, rel = 1e-9) => values.filter((v) => v > rel *
 
 export const trace = (A, n) => { let t = 0; for (let i = 0; i < n; i++) t += A[i * n + i]; return t; };
 
-/** RGBA bytes (Uint8ClampedArray, n*n*4) of an n x n matrix on its own min..max viridis scale. */
-export function heatmapPixels(A, n, sc = range(A)) {
+/** RGBA bytes (Uint8ClampedArray, n*n*4) of an n x n matrix on its own min..max scale; `cmap` maps a position in [0, 1] to [r, g, b] (viridis by default). */
+export function heatmapPixels(A, n, sc = range(A), cmap = viridis) {
   const px = new Uint8ClampedArray(n * n * 4);
   for (let i = 0; i < n * n; i++) {
-    const [r, g, b] = viridis(unitPos(A[i], sc));
+    const [r, g, b] = cmap(unitPos(A[i], sc));
     px[4 * i] = r; px[4 * i + 1] = g; px[4 * i + 2] = b; px[4 * i + 3] = 255;
   }
   return px;
@@ -279,4 +279,45 @@ export function normalizeCorr(A, n) {
     out[i * n + j] = d > 0 ? A[i * n + j] / d : 0;
   }
   return out;
+}
+
+/** [r, g, b] (0..255) of '#rgb' or '#rrggbb'; anything else gives null. */
+export function parseHex(h) {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(h).trim());
+  if (!m) return null;
+  const x = m[1].length === 3 ? [...m[1]].map((c) => c + c).join('') : m[1];
+  return [0, 2, 4].map((k) => parseInt(x.slice(k, k + 2), 16));
+}
+
+/** A one-color ramp: t in [0, 1] runs from the color `lo` (e.g. the page's paper) to `hi` (e.g. its ink), both [r, g, b]. Same call shape as viridis. */
+export const rampBetween = (lo, hi) => (t) => {
+  const x = Math.min(1, Math.max(0, Number.isFinite(t) ? t : 0));
+  return lo.map((c, k) => Math.round(c + (hi[k] - c) * x));
+};
+
+/** L = diag(sqrt w) G diag(sqrt w), N x N row-major: the kernel over the whole pool from its unit Gram G and the weights w. */
+export function weightedGram(G, N, w) {
+  const r = Float64Array.from(w, (x) => Math.sqrt(Math.max(0, x))), L = new Float64Array(N * N);
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) L[i * N + j] = r[i] * r[j] * G[i * N + j];
+  return L;
+}
+
+/**
+ * The dual matrix of the weighted pool in the pool's principal axes, from the eigendecomposition of the unit Gram G alone
+ * (eig = eigSym(G, N): values descending, vectors[k] the unit eigenvector k). With G u_a = lambda_a u_a and the axis
+ * v_a = Phi^T u_a / sqrt(lambda_a), Phi v_a = sqrt(lambda_a) u_a, so C'_ab = v_a^T Phi^T diag(w) Phi v_b = sqrt(lambda_a lambda_b) sum_i w_i u_a[i] u_b[i].
+ * Keeps the first r <= rmax axes with lambda_a > 1e-9 lambda_1. Equals projectedDual of buildAll(phi, w) on principalAxes(phi, G, N, rmax).
+ * Returns { C: Float64Array r x r, r, values: lambda_1..lambda_r }.
+ */
+export function dualInAxes(eig, w, rmax = 32) {
+  const N = w.length, { values, vectors } = eig;
+  let r = 0;
+  while (r < Math.min(rmax, N) && values[r] > 1e-9 * values[0]) r++;
+  const C = new Float64Array(r * r);
+  for (let a = 0; a < r; a++) for (let b = a; b < r; b++) {
+    let s = 0; const ua = vectors[a], ub = vectors[b];
+    for (let i = 0; i < N; i++) s += w[i] * ua[i] * ub[i];
+    C[a * r + b] = C[b * r + a] = Math.sqrt(values[a] * values[b]) * s;
+  }
+  return { C, r, values: Array.from(values).slice(0, r) };
 }

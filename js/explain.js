@@ -17,12 +17,13 @@ export const EXPLAIN = {
       $$\\det \\mathbf L_S = \\Big(\\prod_{y\\in S}\\kappa(y)\\Big)\\,\\det\\!\\big(\\Phi_S^\\top \\Phi_S\\big).$$
       The volume is large when the arrows are long (likely completions) and point different ways (different meanings), and zero when two are the same. This is a determinantal point process (DPP).</p>
       <p><b>Most likely</b> picks the set with the largest volume among the completions, adding one at a time. Exact search is NP-hard; the greedy answer is within a factor $(K!)^2$ of the best.</p>
-      <p><b>Sample</b> draws a random set from the DPP over all strings, approximated with the completions: each is weighted by $\\kappa(y)/p^{\\circ}_{T'}(y)$ to undo how it was drawn. Press Sample again for another draw.</p>`,
+      <p><b>Sample</b> draws a random set from the DPP over all strings, approximated with the completions: each is weighted by $\\kappa(y)/p^{\\circ}_{T'}(y)$ to undo how it was drawn. Press Sample again for another draw. The plot draws the same arrow lengths in both modes, so switching changes which points are selected, not how long the arrows are.</p>`,
   },
   volume: {
     title: 'Spanned volume',
-    body: `<p>The grey box is spanned by the selected arrows. Its squared volume is $\\det \\mathbf L_S$, the subset's score: long arrows (likely completions) pointing in different directions (different meanings) make a big box; near-duplicates flatten it.</p>
-      <p>For $K \\le 3$ the plot's first axes are chosen to contain the selected arrows, so the box drawn is exactly the volume being scored, not a projection of it.</p>`,
+    body: `<p>The grey box is spanned by the selected arrows, each drawn at length $\\sqrt{\\kappa(y)}$ in both modes. With <b>Most likely</b> its squared volume is $\\det \\mathbf L_S$, the subset's score: long arrows (likely completions) pointing in different directions (different meanings) make a big box; near-duplicates flatten it.</p>
+      <p>With <b>Sample</b> the sets are scored with the arrows lengthened by $1/\\sqrt{p^{\\circ}_{T'}(y)}$, to undo how the completions were drawn. The box still shows the $\\sqrt{\\kappa(y)}$ arrows, so its volume is not the quantity Sample draws from.</p>
+      <p>For $K \\le 3$ the plot's first axes are chosen to contain the selected arrows, so the box drawn is exactly the volume of those arrows, not a projection of it.</p>`,
   },
   logp: {
     title: 'log P(S)',
@@ -89,12 +90,12 @@ export const EXPLAIN = {
   },
   scale: {
     title: 'Scale points by quality',
-    body: `<p>When on, each point sits at length $\\sqrt{\\kappa(y)}$ along its embedding direction (relative to the longest): the same arrows the score uses, so changing $T$ grows or shrinks them. When off, every completion is drawn at unit length, showing directions only.</p>`,
+    body: `<p>When on, each point sits at length $\\sqrt{\\kappa(y)}$ along its embedding direction (relative to the longest). These are the arrows <b>Most likely</b> scores. <b>Sample</b> scores them reweighted by $1/p^{\\circ}_{T'}(y)$, but the drawing stays the same, so switching between the two changes which points are selected and not their lengths. Changing $T$ grows or shrinks the arrows. When off, every completion is drawn at unit length, showing directions only.</p>`,
   },
   pca: {
     title: 'Spectrum',
     body: `<p>The completions' embeddings have hundreds of dimensions. The bars show how much of their spread lies along each of the first principal axes (uncentred, so arrows start at the origin, where volume is measured from). A pool whose spread sits in very few axes has little room for diverse subsets.</p>
-      <p>For $K \\le 3$ the plot's axes are fitted to the selected completions instead; otherwise it shows the first principal axes.</p>`,
+      <p>For $K \\le 3$ the plot's axes are fitted to the selected completions instead; otherwise it shows the first principal axes. Fitted axes follow the selection, so the cloud turns when the selected set changes, for example when you switch between Most likely and Sample.</p>`,
   },
 };
 
