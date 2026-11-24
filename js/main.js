@@ -1019,7 +1019,14 @@ function wire() {
   $('#details-btn').onclick = () => setDrawer(!$('#details').classList.contains('open'));
   $('#details-toggle').onclick = () => { if (!wide.matches) setDrawer(!$('#details').classList.contains('open')); };
   $('#details-close').onclick = () => setDrawer(false);
-  $('#readout').addEventListener('click', (e) => { if (e.target.closest('#fit-why') && wide.matches) $('#fit-note').classList.toggle('show'); });
+  $('#readout').addEventListener('click', (e) => {
+    const v = e.target.closest('#fit-why');
+    if (!v || !wide.matches) return;
+    // Open just above the value that was clicked, kept on screen.
+    const note = $('#fit-note'), bar = $('#details').getBoundingClientRect(), r = v.getBoundingClientRect();
+    note.classList.toggle('show');
+    note.style.left = `${Math.max(8, Math.min(r.left - bar.left - 16, bar.width - Math.min(520, bar.width - 16) - 8))}px`;
+  });
   document.addEventListener('click', (e) => { if (!e.target.closest('#fit-note, #fit-why')) $('#fit-note').classList.remove('show'); });
   // The controls column starts under the title block, whatever its height: keep --top-h equal to it.
   const top = document.querySelector('.top');

@@ -56,6 +56,7 @@ export class Plot3D {
     this.controls.enablePan = false;
     this.turnLeft = 0;
     this.view = { cx: 0, cy: 0, h: 1 };
+    this.pan = { x: 0, y: 0 };   // the visitor's shift of the picture, in units of the frame's half-height
     this.installPan();
     this.group = new THREE.Group();
     this.scene.add(this.group);
@@ -86,7 +87,7 @@ export class Plot3D {
       const W = el.clientWidth, H = el.clientHeight;
       if (!W || !H) return;
       this.renderer.setSize(W, H, false);
-      if (this.o && this.camSet) { const f = this.frameFor(this.o, this.scale, this.turnLeft); this.frameH = f.h; this.goal = null; this.setView(f); }
+      if (this.o && this.camSet) this.setView(this.view);   // new aspect; the fit follows in tick()
     });
     this.ro.observe(el);
     const loop = () => {
@@ -94,6 +95,7 @@ export class Plot3D {
       requestAnimationFrame(loop);
       this.tick();
       this.controls.update();
+      this.followFit();   // after the camera moved this frame, so the fit never lags it
       this.shadeDepth();
       this.renderer.render(this.scene, this.camera);
     };
@@ -119,15 +121,10 @@ export class Plot3D {
       this.camSet = true;
       this.startView();
       this.turnLeft = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : (30 * Math.PI) / 180;
-      const frame = this.frameFor(o, s, this.turnLeft);
-      this.frameH = frame.h;
-      this.setView(frame);
-    } else if (this.lastFitted !== o.fitted) {
       const frame = this.frameFor(o, s, 0);
-      this.frameH = frame.h;
-      this.goal = frame;
+      this.frameH = frame.h;   // sizes of dots and rods are set for this frame and scaled with the view
+      this.setView(frame);
     }
-    this.lastFitted = o.fitted;
     this.targets = o.coords.map((c, i) => {
       const f = (o.scaled ? o.c[i] : 1) * s;
       return new THREE.Vector3(c[0] * f, c[1] * f, c[2] * f);
@@ -146,12 +143,14 @@ export class Plot3D {
     this.globeInk = new THREE.Color(o.text ?? '#555555');
     this.group.add(this.globe);
     const z = this.frameH ?? this.camera.top;
+    this.heads = [];
     const headMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(o.bg ?? '#fbfaf8').lerp(this.globeInk, 0.55) });
     for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
       const dir = new THREE.Vector3(...d), head = new THREE.Mesh(new THREE.ConeGeometry(0.014 * z, 0.045 * z, 14), headMat);
       head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
       head.position.copy(dir).multiplyScalar(this.scale);   // the tip sits just past the end of the axis
       head.position.addScaledVector(dir, 0.0225 * z);
+      this.heads.push(head);
       this.group.add(head);
     }
     const grid = new THREE.GridHelper(2 * this.scale, 16, o.text, o.text);
@@ -180,8 +179,11 @@ export class Plot3D {
     const o = this.o;
     const m = new THREE.Matrix4();
     const sel = new Set(o.sel);
+    const sc = this.frameH ? this.view.h / this.frameH : 1;   // constant size on screen as the view zooms
+    this.laidH = this.view.h;
+    for (const hd of this.heads ?? []) hd.scale.setScalar(sc);
     this.current.forEach((p, i) => {
-      m.makeScale(1, 1, 1).setPosition(p);   // all points the same size; colour marks the selected ones
+      m.makeScale(sc, sc, sc).setPosition(p);   // all points the same size; colour marks the selected ones
       this.mesh.setMatrixAt(i, m);
     });
     this.mesh.instanceMatrix.needsUpdate = true;
@@ -195,7 +197,7 @@ export class Plot3D {
       const len = p.length();
       if (len < 1e-4) continue;
       const color = new THREE.Color(o.selColor(i));
-      const z = this.frameH ?? 1;   // widths follow the zoom, so they look the same at any frame
+      const z = this.view?.h ?? this.frameH ?? 1;   // widths follow the zoom, so they look the same at any frame
       if (few) this.dyn.add(rod(O, p, 0.0055 * z, color));
       else this.dyn.add(new THREE.ArrowHelper(p.clone().normalize(), O, len, color, Math.min(0.06 * z, len * 0.3), Math.min(0.03 * z, len * 0.15)));
     }
@@ -297,7 +299,7 @@ export class Plot3D {
     const cv = this.renderer.domElement, touches = new Map();
     let drag = null;
     const perPx = () => (2 * this.view.h) / (this.camera.zoom * (this.el.clientHeight || 450));
-    const shift = (dx, dy) => { this.goal = null; this.setView({ cx: this.view.cx - dx * perPx(), cy: this.view.cy + dy * perPx(), h: this.view.h }); };
+    const shift = (dx, dy) => { const k = perPx() / this.view.h; this.pan.x -= dx * k; this.pan.y += dy * k; };
     const stopTurn = () => (this.turnLeft = 0);
     cv.addEventListener('pointerdown', (e) => {
       stopTurn();
@@ -320,10 +322,21 @@ export class Plot3D {
     cv.addEventListener('contextmenu', (e) => e.preventDefault());
     cv.addEventListener('dblclick', () => {
       if (!this.o) return;
-      stopTurn(); this.goal = null; this.startView();
-      const f = this.frameFor(this.o, this.scale, 0);
-      this.frameH = f.h; this.setView(f);
+      stopTurn(); this.pan = { x: 0, y: 0 }; this.startView();
     });
+  }
+
+  followFit() {
+    if (this.o && this.camSet) {
+      // Keep everything drawn inside the plot at every angle: follow the fit for the current view
+      // smoothly, plus the visitor's shift. Dots, vectors and arrowheads keep their size on screen.
+      const f = this.frameFor(this.o, this.scale, 0), v = this.view, k = 0.35;
+      const g = { cx: f.cx + this.pan.x * f.h, cy: f.cy + this.pan.y * f.h, h: f.h };
+      if (Math.abs(g.cx - v.cx) + Math.abs(g.cy - v.cy) + Math.abs(g.h - v.h) > 1e-5 * v.h) {
+        this.setView({ cx: v.cx + (g.cx - v.cx) * k, cy: v.cy + (g.cy - v.cy) * k, h: v.h + (g.h - v.h) * k });
+        if (Math.abs(this.view.h - (this.laidH ?? 0)) > 0.01 * this.view.h) this.layout();
+      }
+    }
   }
 
   tick() {
@@ -332,13 +345,6 @@ export class Plot3D {
       const step = Math.min(this.turnLeft, Math.max(0.0015, this.turnLeft * 0.035));
       this.camera.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), step);
       this.turnLeft -= step;
-    }
-    if (this.goal) {
-      // Glide to a new frame.
-      const g = this.goal, v = this.view, k = 0.15;
-      const nv = { cx: v.cx + (g.cx - v.cx) * k, cy: v.cy + (g.cy - v.cy) * k, h: v.h + (g.h - v.h) * k };
-      this.setView(nv);
-      if (Math.abs(g.cx - nv.cx) + Math.abs(g.cy - nv.cy) + Math.abs(g.h - nv.h) < 1e-4) { this.setView(g); this.goal = null; }
     }
     if (!this.targets || !this.current) return;
     let moving = false;
