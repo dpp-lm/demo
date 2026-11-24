@@ -33,16 +33,24 @@ routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T�
 - Open question: should ↑ on a cached setting add fresh draws, or show the cached ones?
 
 ## Waiting on Manuel
-- CORS for https://timvieira.github.io on the server.
 - The server to follow docs/BACKEND.md (scripts/conformance.mjs): refuse n > 200 with 400
   bad_request instead of capping; send G instead of emb; version and limits in /status; /embed.
 - Qwen3-Embedding-4B is now on the server (qwen3-emb-4b): decide whether to add it to the page and
   re-embed the precomputed pools (Modal and the Space would need it too).
-- The own-state files for Qwen3 14B (P, mean, meta), so other backends compute the same vectors.
 
-## Later
-- Check the LM's own states against Qwen3-Embedding (the picks on the joke and sorting presets)
-  before relying on them.
+## Later: the LM's own states as an embedding
+- Manuel sent the files (Google Drive folder own_emb_qwen3-14b: P.safetensors, a 151,936 × 256 fp16
+  map from logits; mu.npy, a fixed 256-d mean; meta.json). With them, Modal and the Space could compute
+  the same vectors as his server.
+- Before wiring them in: (1) they are a random 5120 → 256 projection, against "no random projection
+  anywhere"; the alternative is exact own states on every backend (a change on his server); (2) ask him
+  how tokens are pooled (meta.json does not say; our note assumed the mean over generated tokens);
+  (3) check the own states against Qwen3-Embedding (the picks on the joke and sorting presets).
+
+## Untested
+- Hugging Face sign-in end to end, now that the page is back at the main address.
+- The Space's /embed end to end (the anonymous ZeroGPU quota ran out during testing).
+- Two-finger panning on a real touch screen.
 
 ## Later: pool fit and the default T (see docs/figures/pool-fit-vs-T.png)
 - Report the fit as an effective number of completions, N/ρ̂ = 1/Σ(π_i/K)² (between K and N by
