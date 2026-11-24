@@ -370,4 +370,18 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
 
 /* No pool for the current settings: show nothing but the note under the stage. */
 body.empty .plot-wrap, body.empty .stage-foot, body.empty .subset, body.empty .pool-table, body.empty #viewmenu { display: none; }
-body.empty .stage { min-height: 120px; }
+
+/* Messages in the plot area: nothing yet, a run in progress, a failure. */
+.stage { position: relative; }
+.stage-msg { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 48px 24px; min-height: 260px; }
+.stage-msg.over { position: absolute; inset: 0 0 auto 0; height: 100%; z-index: 25; background: rgb(251 250 248 / .88); min-height: 0; }
+.stage-msg p { margin: 0; max-width: 46ch; }
+.stage-msg .t { font: 500 18px var(--serif); color: var(--text); }
+.stage-msg .d { font-size: 13.5px; color: var(--text-2); line-height: 1.45; }
+.stage-msg .a { margin-top: 8px; display: flex; gap: 8px; }
+.stage-msg.error .t { color: var(--accent); }
+.stage-msg.error { box-shadow: inset 0 3px 0 var(--accent); }
+.spinner { width: 26px; height: 26px; border-radius: 50%; border: 3px solid var(--border); border-top-color: var(--accent); animation: spin .9s linear infinite; margin-bottom: 4px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-top-color: var(--accent); } }
+body.empty .stage { min-height: 0; }

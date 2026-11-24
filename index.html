@@ -60,7 +60,7 @@
           <button id="live-go" class="sendbtn" aria-label="Generate completions" title="Generate (Enter)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg></button>
         </div>
       </div>
-      <p id="live-status" class="status" aria-live="polite">Runs on your device; the first run downloads ~0.5&nbsp;GB.</p>
+      <p id="live-status" class="status" aria-live="polite"></p>
     </section>
 
     <section class="step step-2">
@@ -92,6 +92,7 @@
   </aside>
 
   <section class="stage" aria-label="Embeddings">
+    <div id="stage-msg" class="stage-msg" role="status" aria-live="polite" hidden></div>
     <div class="plot-wrap">
       <div class="plot-box">
         <div id="plot" class="plot" aria-label="Projection of the completions' embeddings"></div>

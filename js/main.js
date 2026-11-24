@@ -109,6 +109,17 @@ function setPool(pool, phi, cfg, { cached = false } = {}) {
   recompute({ newDraw: true });
 }
 
+// A message in the plot area: nothing to show yet, a run in progress, or a failure.
+// While a run is in progress over an existing plot, it covers the plot.
+function stageMsg(kind, { title = '', detail = '', actions = '' } = {}) {
+  const el = $('#stage-msg');
+  if (!kind) { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  el.className = `stage-msg ${kind}${S.pool ? ' over' : ''}`;
+  el.innerHTML = `${kind === 'running' ? '<span class="spinner" aria-hidden="true"></span>' : ''}<p class="t">${title}</p>` +
+    (detail ? `<p class="d">${detail}</p>` : '') + (actions ? `<p class="a">${actions}</p>` : '');
+}
+
 // No pool for the current configuration: show nothing rather than something else.
 function clearPool() {
   S.pool = null; S.cfg = null; S.sel = [];
@@ -116,7 +127,7 @@ function clearPool() {
   $('#labels').innerHTML = '';
   $('#selected').innerHTML = '';
   $('#readout').innerHTML = '';
-  $('#stage-note').textContent = 'No completions for these settings yet.';
+  $('#stage-note').textContent = '';
 }
 
 // ---------------------------------------------------------------- inference
@@ -537,9 +548,16 @@ function configChanged() {
   const cfg = readConfig();
   if (S.cfg && sameCfg(S.cfg, cfg)) return;
   const hit = CACHE.findLast((e) => sameCfg(e, cfg));   // your latest run first
-  if (hit) { showCached(hit, cfg).catch(() => clearPool()); return; }
+  if (hit) { stageMsg(null); showCached(hit, cfg).catch(() => { clearPool(); emptyMsg(cfg); }); return; }
   clearPool();
-  $('#live-status').textContent = cfg.prompt ? `Press ↑ to sample ${cfg.N} completions.` : '';
+  emptyMsg(cfg);
+  $('#live-status').textContent = '';
+}
+
+function emptyMsg(cfg) {
+  stageMsg('empty', cfg.prompt
+    ? { title: 'No completions for these settings yet.', detail: `Press ↑ to sample ${cfg.N} completions.` }
+    : { title: 'Type a prompt, or pick one with +.' });
 }
 
 let cloudAbort = null;
@@ -552,8 +570,16 @@ async function runLive() {
   const signal = cloudAbort.signal;
   $('#live-go').hidden = true; $('#live-stop').hidden = false;
   const t0 = performance.now(), secs = () => ((performance.now() - t0) / 1000).toFixed(0);
-  $('#live-status').textContent = `Sampling ${cfg.N} completions…`;
-  const tick = setInterval(() => ($('#live-status').textContent = `Sampling ${cfg.N} completions… ${secs()}s`), 1000);
+  const where = escapeHtml(B.label);
+  const slow = B.id === 'server' ? '' : ' The first run starts a GPU, which can take a minute or two.';
+  const show = () => stageMsg('running', {
+    title: `Sampling ${cfg.N} completions… ${secs()}s`,
+    detail: `${where}.${slow}`,
+    actions: '<button type="button" class="btn" data-act="stop">Stop</button>',
+  });
+  show();
+  $('#live-status').textContent = '';
+  const tick = setInterval(show, 1000);
   const seed = Math.floor(Math.random() * 2 ** 31);
   try {
     let pool;
@@ -582,14 +608,25 @@ async function runLive() {
     }
     // Only a pool made with exactly the requested configuration is shown.
     if (pool.N !== cfg.N || pool.maxNewTokens !== cfg.maxNewTokens) throw new Error('the server did not run the requested settings');
-    if (!sameCfg(readConfig(), cfg)) { $('#live-status').textContent = 'The settings changed during the run; press ↑ again.'; return; }
+    if (!sameCfg(readConfig(), cfg)) { configChanged(); $('#live-status').textContent = 'The settings changed during the run, so its result is not shown.'; return; }
     const phi = decodeEmb(pool.emb, pool.N, pool.D);
     CACHE.push({ ...cfg, mem: { pool, phi } });   // kept for this visit, so going back to these settings shows it again
     setPool(pool, phi, cfg);
+    stageMsg(null);
     $('#live-status').textContent = `Sampled in ${secs()}s.`;
   } catch (e) {
-    $('#live-status').textContent = e.name === 'AbortError' ? 'Stopped.'
-      : e instanceof TypeError ? `Could not reach ${B.label.split(' · ')[1]}. Try another model.` : 'Error: ' + (e.message || e);
+    if (e.name === 'AbortError') {
+      if (S.pool) stageMsg(null); else emptyMsg(cfg);
+      $('#live-status').textContent = 'Stopped.';
+    } else {
+      const reason = e instanceof TypeError ? `${escapeHtml(B.label.split(' · ')[1])} could not be reached. It may be offline.` : escapeHtml(e.message || String(e));
+      stageMsg('error', {
+        title: 'Sampling failed.',
+        detail: `${reason}<br>You can try again, or pick another model in the settings next to ↑.`,
+        actions: '<button type="button" class="btn" data-act="retry">Try again</button>' + (S.pool ? ' <button type="button" class="btn" data-act="dismiss">Dismiss</button>' : ''),
+      });
+      $('#live-status').textContent = '';
+    }
   } finally {
     clearInterval(tick);
     cloudAbort = null;
@@ -676,6 +713,12 @@ function wire() {
   // Only one composer menu open at a time.
   for (const [a, b] of [['#adv', '#exmenu'], ['#exmenu', '#adv']]) $(a).addEventListener('toggle', () => { if ($(a).open) $(b).open = false; });
   $('#live-stop').onclick = () => cloudAbort?.abort();
+  $('#stage-msg').addEventListener('click', (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'stop') cloudAbort?.abort();
+    if (act === 'retry') runLive();
+    if (act === 'dismiss') stageMsg(null);
+  });
   let rt = 0;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { plot.reset(); render(); }, 200); });
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { plot.reset(); render(); });
