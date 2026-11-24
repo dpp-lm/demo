@@ -17,18 +17,22 @@ const { chromium } = require('playwright');
       await sl.evaluate((el) => { el.value = 250; el.dispatchEvent(new Event('input')); });
       await page.waitForTimeout(800);
       await page.screenshot({ path: `${out}/desktop-lowT.png` });
-      await page.click('input[value=map]');
+      await page.click('.pick-btn[data-mode=sample]');
+      await page.waitForTimeout(500);
+      await page.click('.pick-btn[data-mode=map]');
       await page.waitForTimeout(800);
       await page.screenshot({ path: `${out}/desktop-map.png` });
-      await page.click('#eigbars .bar[data-k="2"]');
+      await page.click('#specmenu summary');
+      await page.click('#spectrum .pick-btn[data-dims="2"]');
       await page.waitForTimeout(1500);
       await page.screenshot({ path: `${out}/desktop-2d.png` });
-      await page.click('#eigbars .bar[data-k="1"]');
+      await page.click('#spectrum .pick-btn[data-dims="1"]');
       await page.waitForTimeout(800);
       await page.screenshot({ path: `${out}/desktop-1d.png` });
-      await page.evaluate(() => document.querySelector('.pool-table').open = true);
-      await page.waitForTimeout(1500);
-      await page.screenshot({ path: `${out}/desktop-full.png`, fullPage: true });
+      await page.click('#specmenu summary');
+      await page.waitForTimeout(500);
+      if (!(await page.$$eval('#all-cards .card', (r) => r.length))) errors.push('[desktop] All completions is empty');
+      await page.screenshot({ path: `${out}/desktop-details.png` });
     }
     await page.close();
   }

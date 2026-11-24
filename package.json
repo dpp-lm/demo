@@ -3,10 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
-    "gallery": "node scripts/build-gallery.mjs"
-  },
-  "devDependencies": {
-    "@huggingface/transformers": "3.8.1"
+    "test": "node --test tests/dpp.test.mjs tests/dpp-reference.test.mjs tests/expert-lib.test.mjs tests/matrices.test.mjs tests/layout.test.mjs"
   }
 }

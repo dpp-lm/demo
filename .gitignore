@@ -1,5 +1,5 @@
 node_modules/
 __pycache__/
-# precomputed pools and embeddings: node scripts/fetch-data.mjs
+# old page data, no longer used
 data/pools/
 data/emb/

@@ -1,0 +1,38 @@
+[
+ {
+  "label": "Story opening",
+  "prompt": "Write the opening sentence of a short story. Reply with one sentence only."
+ },
+ {
+  "label": "City to visit",
+  "prompt": "Name a city worth visiting and say why, in one sentence."
+ },
+ {
+  "label": "Surprising animal fact",
+  "prompt": "Name an animal and one surprising fact about it, in one sentence."
+ },
+ {
+  "label": "Old bicycle",
+  "prompt": "Give one creative use for an old bicycle, in one sentence."
+ },
+ {
+  "label": "First date idea",
+  "prompt": "Suggest an idea for a first date, in one sentence."
+ },
+ {
+  "label": "Birthday gift",
+  "prompt": "Suggest a birthday gift for a friend, in one sentence."
+ },
+ {
+  "label": "Dinner idea",
+  "prompt": "Suggest something to cook for dinner tonight, in one sentence."
+ },
+ {
+  "label": "Tell a joke",
+  "prompt": "Tell me a joke."
+ },
+ {
+  "label": "Sorting algorithm",
+  "prompt": "Implement a sorting algorithm from scratch in Python."
+ }
+]

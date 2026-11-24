@@ -1,10 +1,7 @@
 // 3D view: quality-scaled embeddings as points, the selected set as arrows from the
 // origin, and (for K ≤ 3) the parallelepiped whose squared volume the DPP scores.
-// Everything drawn is scaled into a unit bounding sphere (radius 1); sizes below are in that frame.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { easeInOut, pairSelected } from './shared.js';
-import { tipSheet } from './layout.js';
 
 function rod(a, b, r, color) {
   const d = new THREE.Vector3().subVectors(b, a);
@@ -14,69 +11,53 @@ function rod(a, b, r, color) {
   return m;
 }
 
-// Depth cues: faces write depth (back sides faint, front sides a bit stronger and tinted), edges are drawn solid where
-// visible and dashed and dim where something nearer hides them (GreaterDepth pass). renderOrder: faces 1-2, visible 3, hidden 4.
-function addFaces(group, tri, o) {
-  const geo = new THREE.BufferGeometry().setFromPoints(tri);
-  const grey = new THREE.Color(o.text), tint = grey; // neutral in both colour modes
-  const mk = (color, opacity, side, order) => {
-    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side, depthWrite: true, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
-    m.renderOrder = order;
-    group.add(m);
+// The x, y, z axes through the origin, from −1 to 1 (the length of every embedding). Coloured per
+// vertex so the near end is darker than the far end (see shadeDepth).
+function axesLines(scale) {
+  // Drawn first and without depth writes, so points, vectors and the volume always sit on top.
+  const g = new THREE.Group(), mat = new THREE.LineBasicMaterial({ vertexColors: true, depthWrite: false });
+  const line = (pts, ink) => {
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(pts.length * 3), 3));
+    const l = new THREE.Line(geo, mat);
+    l.renderOrder = -1; l.userData.ink = ink;   // how dark the line is, near side (shadeDepth)
+    return l;
   };
-  mk(grey, 0.06, THREE.BackSide, 1);
-  mk(tint, 0.13, THREE.FrontSide, 2);
-}
-function addEdges(group, pts, color) {
-  const geo = new THREE.BufferGeometry().setFromPoints(pts);
-  const vis = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.8 }));
-  vis.renderOrder = 3;
-  const hid = new THREE.LineSegments(geo.clone(), new THREE.LineDashedMaterial({ color, transparent: true, opacity: 0.35, dashSize: 0.03, gapSize: 0.02, depthFunc: THREE.GreaterDepth, depthWrite: false }));
-  hid.computeLineDistances();
-  hid.renderOrder = 4;
-  group.add(vis, hid);
-}
-function addRod(group, a, b, r, color) {
-  const vis = rod(a, b, r, color), hid = rod(a, b, r, color);
-  vis.material.transparent = true; vis.renderOrder = 3;
-  Object.assign(hid.material, { transparent: true, opacity: 0.6, depthFunc: THREE.GreaterDepth, depthWrite: false });
-  hid.renderOrder = 4;
-  group.add(vis, hid);
-}
-// Rod from a to b with a small cone arrowhead at b.
-function addArrow(group, a, b, r, color) {
-  const d = new THREE.Vector3().subVectors(b, a), len = d.length();
-  if (len < 1e-6) return;
-  const dir = d.clone().normalize();
-  const head = Math.min(0.07, len * 0.35);
-  addRod(group, a, b.clone().addScaledVector(dir, -head * 0.9), r, color);
-  const cone = new THREE.Mesh(new THREE.ConeGeometry(Math.max(0.018, r * 2.6), head, 14), new THREE.MeshBasicMaterial({ color, transparent: true }));
-  cone.position.copy(b).addScaledVector(dir, -head / 2);
-  cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-  cone.renderOrder = 3;
-  const hid = cone.clone();
-  hid.material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, depthFunc: THREE.GreaterDepth, depthWrite: false });
-  hid.renderOrder = 4;
-  group.add(cone, hid);
+  for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
+    const pts = []; for (let t = -1; t <= 1.0001; t += 0.05) pts.push(new THREE.Vector3(d[0] * t, d[1] * t, d[2] * t));
+    g.add(line(pts, 0.6));
+  }
+  g.scale.setScalar(scale);
+  return g;
 }
 
-let dotTex = null;
-function roundDot() {
-  if (dotTex) return dotTex;
-  const c = document.createElement('canvas');
-  c.width = c.height = 32;
-  const g = c.getContext('2d');
-  g.fillStyle = '#fff';
-  g.beginPath(); g.arc(16, 16, 14, 0, 2 * Math.PI); g.fill();
-  dotTex = new THREE.CanvasTexture(c);
-  return dotTex;
+// The floor: a grid in the x–z plane through the origin, cells of 1/8, that fades out with distance
+// from the origin (gone by 6 units), so it reads as endless and no edge ever comes into view.
+function endlessFloor(scale, bg, ink) {
+  const R = 6, step = 1 / 8, seg = 1 / 16, pos = [], col = [], c = new THREE.Color();
+  const shade = (x, z) => { const t = Math.max(0, 1 - Math.hypot(x, z) / R); c.copy(bg).lerp(ink, 0.2 * t); return [c.r, c.g, c.b]; };
+  for (let k = -R; k <= R + 1e-9; k += step) {
+    for (let u = -R; u < R - 1e-9; u += seg) {
+      for (const [x0, z0, x1, z1] of [[k, u, k, u + seg], [u, k, u + seg, k]]) {
+        pos.push(x0, 0, z0, x1, 0, z1);
+        col.push(...shade(x0, z0), ...shade(x1, z1));
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  const floor = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, depthWrite: false }));
+  floor.renderOrder = -2;
+  floor.scale.setScalar(scale);
+  return floor;
 }
-
-const R_SEL = 0.018, R_FREE = 0.010, R_FLOOR = 0.006;
 
 export class Plot3D {
-  constructor(el, { onHover, onTap }) {
+  constructor(el, { onHover, onTap, safeRect }) {
     this.el = el;
+    // The open part of the plot, in canvas pixels, not covered by panels floating over it.
+    this.safeRect = safeRect ?? (() => ({ L: 8, T: 8, R: (el.clientWidth || 600) - 8, B: (el.clientHeight || 450) - 8 }));
     this.onHover = onHover;
     this.onTap = onTap;
     const W = el.clientWidth || 600, H = el.clientHeight || 450;
@@ -85,25 +66,36 @@ export class Plot3D {
     this.renderer.setSize(W, H, false);
     el.appendChild(this.renderer.domElement);
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(40, W / H, 0.01, 100);
+    // Orthographic: no perspective, so every point is drawn the same size at any depth and
+    // lengths (quality) are drawn to one scale. The view holds the unit ball on any aspect.
+    const a = W / H, h = Math.max(0.78, 0.9 / a);
+    this.camera = new THREE.OrthographicCamera(-h * a, h * a, h, -h, -50, 50);
     this.camera.position.set(1.6, 1.2, 2.2);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
-    this.userRotate = !matchMedia('(prefers-reduced-motion: reduce)').matches; // cleared by the first drag
-    this.controls.autoRotate = this.userRotate;
-    this.controls.autoRotateSpeed = 0.6;
-    this.renderer.domElement.addEventListener('pointerdown', () => { this.userRotate = false; this.controls.autoRotate = false; });
+    // No continuous rotation: one 30° turn when the view first appears (none if the visitor asks for
+    // reduced motion), stopped by any touch. Panning slides the picture on screen, so the view still
+    // turns about the origin: Shift-drag or right-drag with a mouse, two fingers on a touch screen.
+    // Double-click returns to the starting view.
+    this.controls.enablePan = false;
+    this.turnLeft = 0;
+    this.view = { cx: 0, cy: 0, h: 1 };
+    // Where the origin sits on screen, as a fraction of the open area (0..1 across, 0..1 down). Fixed
+    // until the visitor moves the picture, so the view visibly turns about the origin.
+    this.anchor = { ax: 0.5, ay: 0.5 };
+    this.home = { ax: 0.5, ay: 0.5 };   // the default place, which sets the zoom; panning only moves the picture
+    this.installPan();
     this.group = new THREE.Group();
     this.scene.add(this.group);
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.8));
     const dl = new THREE.DirectionalLight(0xffffff, 0.8);
     dl.position.set(2, 3, 4);
     this.scene.add(dl);
+    this.ray = new THREE.Raycaster();
     this.mouse = new THREE.Vector2();
-    this.hovered = -1; this.hovered2 = -1;
+    this.hovered = -1;
     this.targets = null;
     this.current = null;
-    this.goal = null; // where the orbit target is heading (the centre of the drawn bounding sphere)
     // Hover tooltips for mice; a tap (pointer down and up without dragging) inspects
     // the nearest point on screen within a finger-sized radius.
     const cv = this.renderer.domElement;
@@ -116,219 +108,96 @@ export class Plot3D {
       this.onTap?.(this.nearest(e.clientX, e.clientY, e.pointerType === 'mouse' ? 16 : 32));
     });
     this.alive = true;
+    // When the plot area changes size (window resize, the docked controls measuring themselves),
+    // resize the canvas and re-frame, so the drawing is never stretched or cut off.
+    this.ro = new ResizeObserver(() => {
+      const W = el.clientWidth, H = el.clientHeight;
+      if (!W || !H) return;
+      this.renderer.setSize(W, H, false);
+      if (this.o && this.camSet) this.setView(this.view);   // new aspect; the fit follows in tick()
+    });
+    this.ro.observe(el);
     const loop = () => {
       if (!this.alive) return;
       requestAnimationFrame(loop);
       this.tick();
       this.controls.update();
-      if (this.scene.fog) { const d = this.camera.position.distanceTo(this.controls.target); this.scene.fog.near = d - 0.4; this.scene.fog.far = d + 1.8; }
+      this.followFit();   // after the camera moved this frame, so the fit never lags it
+      this.shadeDepth();
       this.renderer.render(this.scene, this.camera);
     };
     loop();
   }
 
-  // Bounding sphere of everything drawn, in the data frame: the drawn points, the ghost unit points when shown,
-  // the origin, and all corners of the parallelepiped. Centre = bounding-box centre, radius = farthest distance from it.
-  frame(o) {
-    if (o.fixedFrame) {
-      // Fixed axes: frame the unit positions and the origin only (the scaled points lie between them), so the camera does not
-      // follow the selection or T. The radius has a constant margin for the parallelepiped.
-      const pts = [[0, 0, 0], ...o.coords.map((c) => [c[0], c[1], c[2]])];
-      // Room for the parallelepiped: the far corner of a typical triple lies near 2.5 times the mean unit position.
-      const n = o.coords.length || 1;
-      pts.push([0, 1, 2].map((d) => 2.5 * o.coords.reduce((a, c) => a + c[d], 0) / n));
-      const lo = [0, 1, 2].map((d) => Math.min(...pts.map((p) => p[d]))), hi = [0, 1, 2].map((d) => Math.max(...pts.map((p) => p[d])));
-      const center = lo.map((l, d) => (l + hi[d]) / 2);
-      let r = 0;
-      for (const p of pts) r = Math.max(r, Math.hypot(p[0] - center[0], p[1] - center[1], p[2] - center[2]));
-      return { center, radius: (r || 1) * 1.05 };
-    }
-    const pts = [[0, 0, 0]];
-    const f = (i) => (o.scaled ? o.c[i] : 1);
-    o.coords.forEach((c, i) => {
-      pts.push([c[0] * f(i), c[1] * f(i), c[2] * f(i)]);
-      if (o.scaled) pts.push([c[0], c[1], c[2]]);
-    });
-    const K = o.sel.length;
-    if (K >= 2 && K <= 3) {
-      const v = o.sel.map((i) => [0, 1, 2].map((d) => o.coords[i][d] * f(i)));
-      for (let mask = 1; mask < 1 << K; mask++) pts.push([0, 1, 2].map((d) => v.reduce((a, x, k) => (mask & (1 << k) ? a + x[d] : a), 0)));
-    }
-    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-    for (const p of pts) for (let d = 0; d < 3; d++) { lo[d] = Math.min(lo[d], p[d]); hi[d] = Math.max(hi[d], p[d]); }
-    const center = lo.map((l, d) => (l + hi[d]) / 2);
-    let r = 0;
-    for (const p of pts) r = Math.max(r, Math.hypot(p[0] - center[0], p[1] - center[1], p[2] - center[2]));
-    return { center, radius: r || 1 };
-  }
-
-  // o.morph: a snapshot() of the previous view; the selected set glides to its new place and the other points cross-fade.
-  update(o, morph = null) {
+  update(o) {
     this.o = o;
     const N = o.coords.length;
-    this.scene.fog = new THREE.Fog(o.bg, 1, 10); // near/far follow the camera distance every frame
-    const { center, radius } = this.frame(o);
-    const s = 1 / radius;
-    this.scale = s;
-    const cw = new THREE.Vector3(center[0] * s, center[1] * s, center[2] * s);
-    this.centerW = cw;
+    // Fit points and (for K ≤ 3) the far corner of the spanned volume inside the unit ball.
+    let m = 0;
+    for (const c of o.coords) m = Math.max(m, Math.hypot(...c));
+    if (o.sel.length >= 2 && o.sel.length <= 3) {
+      const far = [0, 1, 2].map((d) => o.sel.reduce((acc, i) => acc + o.coords[i][d] * (o.scaled ? o.c[i] : 1), 0));
+      m = Math.max(m, Math.hypot(...far));
+    }
+    this.scale = 1 / (m || 1);
+    const s = this.scale;
+    // Placed once, looking at the origin, and framed so that the drawing (points, vectors, volume) is
+    // centred and fills the plot over the opening turn; the origin sits wherever that puts it. Framed
+    // again, smoothly, when the view switches between fitted axes (K ≤ 3) and principal axes.
     if (!this.camSet) {
-      // Place the camera so the unit sphere fits the narrower of the vertical and horizontal fields of view, with 10% margin.
       this.camSet = true;
-      const vh = (this.camera.fov * Math.PI) / 360, hh = Math.atan(Math.tan(vh) * this.camera.aspect);
-      const dist = 1.1 / Math.sin(Math.min(vh, hh));
-      this.controls.target.copy(cw);
-      this.camera.position.copy(cw).addScaledVector(new THREE.Vector3(1.1, 0.8, 1.55).normalize(), dist);
-      this.goal = null;
-    } else this.goal = cw; // the orbit target and the camera glide by the same step in tick(), so the view direction and distance stay
+      this.startView();
+      this.turnLeft = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : (30 * Math.PI) / 180;
+      // Place the origin for the angle where the opening turn ends, then start the turn from before it.
+      const Y = new THREE.Vector3(0, 1, 0), upd = () => { this.camera.lookAt(0, 0, 0); this.camera.updateMatrixWorld(); };
+      this.camera.position.applyAxisAngle(Y, this.turnLeft); upd();
+      this.placeOrigin(o, s);
+      this.followFit(true);   // also sets the size dots and rods are drawn at for this frame
+      this.camera.position.applyAxisAngle(Y, -this.turnLeft); upd();
+    }
     this.targets = o.coords.map((c, i) => {
       const f = (o.scaled ? o.c[i] : 1) * s;
       return new THREE.Vector3(c[0] * f, c[1] * f, c[2] * f);
     });
-    this.rFree = this.freeRadius();
-    this.initCurrent(N, morph);
+    if (!this.current || this.current.length !== N) this.current = this.targets.map((v) => v.clone());
     this.rebuildStatic();
-  }
-
-  // Radius of the non-selected balls: 0.010, shrunk to 0.35 × the median nearest-neighbour distance when crowded (floor 0.006).
-  freeRadius() {
-    const sel = new Set(this.o.sel);
-    const P = this.targets.filter((_, i) => !sel.has(i));
-    if (P.length < 2) return R_FREE;
-    const nn = P.map((p, i) => { let b = Infinity; for (let j = 0; j < P.length; j++) if (j !== i) b = Math.min(b, p.distanceToSquared(P[j])); return Math.sqrt(b); });
-    nn.sort((x, y) => x - y);
-    const med = nn[Math.floor(nn.length / 2)];
-    return Math.max(R_FLOOR, Math.min(R_FREE, 0.35 * med));
-  }
-
-  initCurrent(N, morph) {
-    this.endMorph();
-    if (morph?.instant) this.current = this.targets.map((v) => v.clone());
-    else if (morph && morph.kind === '3d') {
-      this.current = this.targets.map((v) => v.clone());
-      this.beginMorph(morph);
-    } else if (!this.current || this.current.length !== N) this.current = this.targets.map((v) => v.clone());
-  }
-
-  // Everything needed to start a morph from the current view: positions, colours, ball radii, the selected set.
-  snapshot() {
-    const o = this.o;
-    if (!o || !this.current) return null;
-    const sel = new Set(o.sel);
-    return {
-      kind: '3d', pos: this.current.map((v) => v.clone()), sel: o.sel.slice(),
-      colors: o.coords.map((_, i) => new THREE.Color(sel.has(i) ? o.selColor(i) : o.color(i))),
-      scales: this.current.map((_, i) => this.radius(i, sel, false)),
-    };
-  }
-
-  // Ball radius in the unit frame (the sphere geometry has radius 1).
-  radius(i, sel, hover) {
-    return (sel.has(i) ? R_SEL : this.rFree) * (hover ? 1.5 : 1) * (this.o?.rs ? this.o.rs[i] : 1);
-  }
-
-  beginMorph(snap) {
-    const o = this.o;
-    const oldSel = new Set(snap.sel);
-    const idx = snap.pos.map((_, i) => i).filter((i) => !oldSel.has(i));
-    const mat = new THREE.MeshLambertMaterial({ transparent: true, opacity: 1, depthWrite: false });
-    const old = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 12, 8), mat, idx.length);
-    const m = new THREE.Matrix4();
-    idx.forEach((i, k) => {
-      const r = snap.scales[i];
-      old.setMatrixAt(k, m.makeScale(r, r, r).setPosition(snap.pos[i]));
-      old.setColorAt(k, snap.colors[i]);
-    });
-    old.instanceMatrix.needsUpdate = true;
-    if (old.instanceColor) old.instanceColor.needsUpdate = true;
-    this.scene.add(old);
-    const px = snap.pos.map((v) => v.x), nx = this.targets.map((v) => v.x);
-    const dbg = window.__dppDebug;
-    if (dbg) { dbg.morphs++; dbg.lastKind = '3d'; }
-    this.morph = { t0: performance.now(), dur: 500, snap, old, pairs: pairSelected(snap.sel, px, o.sel, nx) };
-  }
-
-  endMorph() {
-    const mo = this.morph;
-    if (!mo) return;
-    if (window.__dppDebug) window.__dppDebug.lastMorphMs = Math.round(performance.now() - mo.t0);
-    this.morph = null;
-    this.scene.remove(mo.old);
-    mo.old.geometry.dispose(); mo.old.material.dispose(); mo.old.dispose?.();
-    if (this.mesh) { Object.assign(this.mesh.material, { transparent: false, opacity: 1, depthWrite: true }); this.mesh.material.needsUpdate = true; }
-  }
-
-  tickMorph() {
-    const mo = this.morph;
-    const t = Math.min(1, (performance.now() - mo.t0) / mo.dur), e = easeInOut(t);
-    for (const [ni, oi] of mo.pairs) this.current[ni].lerpVectors(mo.snap.pos[oi], this.targets[ni], e);
-    if (this.mesh) this.mesh.material.opacity = e;
-    mo.old.material.opacity = 1 - e;
-    this.layout();
-    if (t >= 1) { this.endMorph(); this.layout(); }
   }
 
   rebuildStatic() {
     const o = this.o;
     const N = o.coords.length;
     for (const ch of [...this.group.children]) { this.group.remove(ch); ch.geometry?.dispose(); ch.material?.dispose(); }
-    // Axes from the origin.
-    const axMat = new THREE.LineBasicMaterial({ color: o.text, transparent: true, opacity: 0.35 });
+    // The x, y, z axes through the origin, which the view turns about, with arrowheads at their positive
+    // ends; and a faint floor grid in the x–z plane through the origin (as in the paper's Fig. 1).
+    this.globe = axesLines(this.scale);
+    this.globeInk = new THREE.Color(o.text ?? '#555555');
+    this.group.add(this.globe);
+    const z = this.frameH ?? this.camera.top;
+    this.heads = [];
+    const headMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(o.bg ?? '#fbfaf8').lerp(this.globeInk, 0.55) });
     for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
-      const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(...d).multiplyScalar(0.9)]);
-      this.group.add(new THREE.Line(g, axMat));
+      const dir = new THREE.Vector3(...d), head = new THREE.Mesh(new THREE.ConeGeometry(0.014 * z, 0.045 * z, 14), headMat);
+      head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      head.position.copy(dir).multiplyScalar(this.scale);   // the tip sits just past the end of the axis
+      head.position.addScaledVector(dir, 0.0225 * z);
+      this.heads.push(head);
+      this.group.add(head);
     }
-    // Faint floor grid through the origin (as in the paper's Fig. 1), sized to cover the frame.
-    const grid = new THREE.GridHelper(2.4, 24, o.text, o.text);
-    grid.material.transparent = true;
-    grid.material.opacity = 0.12;
-    grid.material.depthWrite = false;
-    grid.position.set(this.centerW.x, 0, this.centerW.z);
-    this.group.add(grid);
-    // Ghosts: the unit position of each point, same colour as the point, only where the scaled point is not already (almost) there.
-    const s = this.scale;
-    this.ghostIdx = []; this.ghostPos = new Map(); this.ghostGeo = null;
-    if (o.scaled && o.ghosts !== false) {
-      o.coords.forEach((c, i) => {
-        const g = new THREE.Vector3(c[0] * s, c[1] * s, c[2] * s);
-        if (g.distanceTo(this.targets[i]) >= 0.03) { this.ghostIdx.push(i); this.ghostPos.set(i, g); }
-      });
-      const gpos = new Float32Array(this.ghostIdx.length * 3);
-      this.ghostIdx.forEach((i, k) => gpos.set(this.ghostPos.get(i).toArray(), k * 3));
-      const gg = new THREE.BufferGeometry();
-      gg.setAttribute('position', new THREE.BufferAttribute(gpos, 3));
-      gg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(this.ghostIdx.length * 3), 3));
-      this.ghostGeo = gg;
-      this.paintGhosts();
-      this.group.add(new THREE.Points(gg, new THREE.PointsMaterial({ vertexColors: true, size: 0.024, map: roundDot(), alphaTest: 0.2, transparent: true, opacity: 0.6, depthWrite: false })));
-    }
+    this.group.add(endlessFloor(this.scale, new THREE.Color(o.bg ?? '#fbfaf8'), new THREE.Color(o.text ?? '#555555')));
     // Points.
-    this.mesh = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 12, 8), new THREE.MeshLambertMaterial(), N);
-    if (this.morph) Object.assign(this.mesh.material, { transparent: true, opacity: 0, depthWrite: false });
+    // Radius tied to the zoom: about 1.5 px on a 600-px-tall plot, the same as the 2-D dots.
+    const sphere = new THREE.SphereGeometry(0.0055 * (this.frameH ?? this.camera.top), 10, 8);
+    this.mesh = new THREE.InstancedMesh(sphere, new THREE.MeshLambertMaterial(), N);
     const sel = new Set(o.sel);
-    for (let i = 0; i < N; i++) this.mesh.setColorAt(i, new THREE.Color(sel.has(i) ? o.selColor(i) : o.color(i)));
+    // Base colours; shadeDepth() fades each toward the background by its distance from the viewer.
+    this.base = Array.from({ length: N }, (_, i) => new THREE.Color(sel.has(i) ? o.selColor(i) : o.color(i)));
+    this.isSel = Array.from({ length: N }, (_, i) => sel.has(i));
+    this.bgCol = new THREE.Color(o.bg ?? '#fbfaf8');
+    for (let i = 0; i < N; i++) this.mesh.setColorAt(i, this.base[i]);
     this.group.add(this.mesh);
     // Arrows + parallelepiped edges are rebuilt every tick from current positions.
     this.dyn = new THREE.Group();
     this.group.add(this.dyn);
-    this.layout();
-  }
-
-  paintGhosts() {
-    if (!this.ghostGeo) return;
-    const o = this.o, sel = new Set(o.sel), col = this.ghostGeo.getAttribute('color'), c = new THREE.Color();
-    this.ghostIdx.forEach((i, k) => { c.set(sel.has(i) ? o.selColor(i) : o.color(i)); col.setXYZ(k, c.r, c.g, c.b); });
-    col.needsUpdate = true;
-  }
-
-  // New colour functions (a legend chip dims other clusters): repaint balls, ghosts and arrows without moving anything.
-  recolor(color, selColor) {
-    if (!this.o || !this.mesh) return;
-    this.o.color = color; this.o.selColor = selColor;
-    const sel = new Set(this.o.sel);
-    for (let i = 0; i < this.o.coords.length; i++) this.mesh.setColorAt(i, new THREE.Color(sel.has(i) ? selColor(i) : color(i)));
-    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
-    this.paintGhosts();
     this.layout();
   }
 
@@ -337,54 +206,34 @@ export class Plot3D {
     const o = this.o;
     const m = new THREE.Matrix4();
     const sel = new Set(o.sel);
-    // During a morph the selected points leave the cross-fading mesh and are drawn as solid spheres below.
-    const morphing = !!this.morph;
+    const sc = this.frameH ? this.view.h / this.frameH : 1;   // constant size on screen as the view zooms
+    this.laidH = this.view.h;
+    for (const hd of this.heads ?? []) hd.scale.setScalar(sc);
     this.current.forEach((p, i) => {
-      const r = morphing && sel.has(i) ? 0 : this.radius(i, sel, i === this.hovered || i === this.hovered2);
-      m.makeScale(r, r, r).setPosition(p);
+      m.makeScale(sc, sc, sc).setPosition(p);   // all points the same size; colour marks the selected ones
       this.mesh.setMatrixAt(i, m);
     });
     this.mesh.instanceMatrix.needsUpdate = true;
     for (const ch of [...this.dyn.children]) { this.dyn.remove(ch); ch.geometry?.dispose(); ch.material?.dispose?.(); }
-    if (morphing) {
-      for (const i of o.sel) {
-        const s = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), new THREE.MeshLambertMaterial({ color: new THREE.Color(o.selColor(i)) }));
-        s.position.copy(this.current[i]);
-        s.scale.setScalar(this.radius(i, sel, i === this.hovered || i === this.hovered2));
-        this.dyn.add(s);
-      }
-    }
     const few = o.sel.length <= 3;
     const O = new THREE.Vector3();
-    // Edges from the origin to each selected point: one colour per item, with an arrowhead.
+    // Edges from the origin to each selected point: arrows for large K, plain coloured
+    // rods (one colour per item) for K ≤ 3, as in the paper's Fig. 1.
     for (const i of o.sel) {
       const p = this.current[i];
       const len = p.length();
       if (len < 1e-4) continue;
       const color = new THREE.Color(o.selColor(i));
-      if (few) addArrow(this.dyn, O, p, 0.006, color);
-      else this.dyn.add(new THREE.ArrowHelper(p.clone().normalize(), O, len, color, Math.min(0.06, len * 0.3), Math.min(0.03, len * 0.15)));
-    }
-    if (o.sel.length > 3) {
-      // K > 3: an open triangulated sheet through the tips (a cloth over the arrow tips), see-through from both sides.
-      const P = o.sel.map((i) => this.current[i]);
-      const { tris } = tipSheet(P.map((p) => [p.x, p.y, p.z]));
-      if (tris.length) {
-        addFaces(this.dyn, tris.flatMap((t) => t.map((i) => P[i])), o);
-        const seen = new Set(), seg = [];
-        for (const t of tris) for (let k = 0; k < 3; k++) {
-          const a = t[k], b = t[(k + 1) % 3], id = a < b ? `${a},${b}` : `${b},${a}`;
-          if (!seen.has(id)) { seen.add(id); seg.push(P[a], P[b]); }
-        }
-        addEdges(this.dyn, seg, new THREE.Color(o.text));
-      }
+      const z = this.view?.h ?? this.frameH ?? 1;   // widths follow the zoom, so they look the same at any frame
+      if (few) this.dyn.add(rod(O, p, 0.0055 * z, color));
+      else this.dyn.add(new THREE.ArrowHelper(p.clone().normalize(), O, len, color, Math.min(0.06 * z, len * 0.3), Math.min(0.03 * z, len * 0.15)));
     }
     if (o.sel.length >= 2 && few) {
       const v = o.sel.map((i) => this.current[i]);
       const n = v.length;
       const corner = (mask) => v.reduce((c, x, k) => (mask & (1 << k) ? c.add(x) : c), new THREE.Vector3());
       const grey = new THREE.Color(o.text);
-      // Translucent faces (depth-writing, back and front sides tinted differently).
+      // Translucent faces.
       const tri = [];
       for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++) {
         const others = [...Array(n).keys()].filter((k) => k !== a && k !== b);
@@ -393,28 +242,181 @@ export class Plot3D {
           tri.push(q[0], q[1], q[2], q[0], q[2], q[3]);
         }
       }
-      addFaces(this.dyn, tri, o);
-      // Edges (solid where visible, dashed where hidden), except the ones from the origin (drawn above in colour).
+      const fg = new THREE.BufferGeometry().setFromPoints(tri);
+      this.dyn.add(new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ color: grey, transparent: true, opacity: 0.08, side: THREE.DoubleSide, depthWrite: false })));
+      // Dark edges, except the ones from the origin (drawn above in colour).
       const seg = [];
       for (let a = 0; a < 1 << n; a++) for (let k = 0; k < n; k++) {
         const b = a | (1 << k);
         if (b !== a && a !== 0) seg.push(corner(a), corner(b));
       }
-      addEdges(this.dyn, seg, grey);
+      this.dyn.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(seg), new THREE.LineBasicMaterial({ color: grey, transparent: true, opacity: 0.75 })));
     }
   }
 
-  tick() {
-    // Auto-rotation pauses while a morph runs, then resumes unless the user has dragged.
-    this.controls.autoRotate = this.userRotate && !this.morph;
-    // The orbit target glides to the new frame centre; the camera moves by the same step, so the view does not jump.
-    if (this.goal) {
-      const d = this.goal.clone().sub(this.controls.target);
-      if (d.lengthSq() < 1e-8) { this.controls.target.copy(this.goal); this.goal = null; }
-      else { d.multiplyScalar(0.18); this.camera.position.add(d); this.controls.target.add(d); }
+  // Depth shading: a point's colour moves toward the background the farther it is from the viewer
+  // (up to 60% for grey points, 35% for the selected ones), so the cloud's depth reads as it turns.
+  shadeDepth() {
+    if (!this.mesh || !this.current || !this.base) return;
+    const fwd = new THREE.Vector3(); this.camera.getWorldDirection(fwd);
+    const ds = this.current.map((p) => p.dot(fwd));
+    let lo = Infinity, hi = -Infinity; for (const d of ds) { if (d < lo) lo = d; if (d > hi) hi = d; }
+    const span = Math.max(hi - lo, 1e-6), c = new THREE.Color();
+    ds.forEach((d, i) => {
+      const t = (d - lo) / span;   // 0 nearest, 1 farthest
+      c.copy(this.base[i]).lerp(this.bgCol, (this.isSel[i] ? 0.35 : 0.6) * t);
+      this.mesh.setColorAt(i, c);
+    });
+    this.mesh.instanceColor.needsUpdate = true;
+    // The axes: near end `ink` of the way from the background to the ink colour, far side 5%.
+    if (this.globe) {
+      for (const line of this.globe.children) {
+        const pos = line.geometry.attributes.position, col = line.geometry.attributes.color;
+        for (let k = 0; k < pos.count; k++) {
+          const t = (1 - (pos.getX(k) * fwd.x + pos.getY(k) * fwd.y + pos.getZ(k) * fwd.z)) / 2;   // 1 nearest
+          c.copy(this.bgCol).lerp(this.globeInk, 0.05 + (line.userData.ink - 0.05) * t);
+          col.setXYZ(k, c.r, c.g, c.b);
+        }
+        col.needsUpdate = true;
+      }
     }
+  }
+
+  // Look down from 35°: a vector lying near the floor is foreshortened at most to sin 35° ≈ 0.57 of its
+  // length as the view turns, so no selected vector can collapse onto the origin.
+  startView() {
+    const el = (35 * Math.PI) / 180, az = (40 * Math.PI) / 180;
+    this.controls.target.set(0, 0, 0);
+    this.camera.position.set(3 * Math.cos(el) * Math.sin(az), 3 * Math.sin(el), 3 * Math.cos(el) * Math.cos(az));
+    this.camera.zoom = 1;
+    this.camera.lookAt(0, 0, 0);
+    this.camera.updateMatrixWorld();
+  }
+  // The rectangle on screen that holds everything drawn (the points and, for K ≤ 3, every corner of the
+  // spanned volume) as the view turns by up to `turn` about the vertical axis from where it is now.
+  frameFor(o, s, turn) {
+    const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
+    pts.push([0, 0, 0]);
+    const sel = o.sel.length >= 2 && o.sel.length <= 3 ? o.sel : [];
+    for (let mask = 3; mask < 1 << sel.length; mask++) {
+      if ((mask & (mask - 1)) === 0) continue;   // single vectors are points already
+      pts.push([0, 1, 2].map((d) => sel.reduce((a, i, k) => a + (mask & (1 << k) ? pts[i][d] : 0), 0)));
+    }
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    const Y = new THREE.Vector3(0, 1, 0), steps = turn > 0 ? 12 : 0;
+    for (let k = 0; k <= steps; k++) {
+      const q = new THREE.Quaternion().setFromAxisAngle(Y, steps ? (turn * k) / steps : 0).multiply(this.camera.quaternion);
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q), up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+      for (const p of pts) {
+        const v = new THREE.Vector3(...p), x = v.dot(right), y = v.dot(up);
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+    const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450;
+    return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, h: Math.max(0.05, 1.08 * Math.max((y1 - y0) / 2, ((x1 - x0) / 2) * H / W)) };
+  }
+  // The camera's view rectangle: centred at (cx, cy) in screen coordinates, half-height h.
+  setView(v) {
+    this.view = { cx: v.cx, cy: v.cy, h: v.h };
+    const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, a = W / H;
+    Object.assign(this.camera, { left: v.cx - v.h * a, right: v.cx + v.h * a, top: v.cy + v.h, bottom: v.cy - v.h });
+    this.camera.updateProjectionMatrix();
+  }
+  installPan() {
+    const cv = this.renderer.domElement, touches = new Map();
+    let drag = null;
+    const perPx = () => (2 * this.view.h) / (this.camera.zoom * (this.el.clientHeight || 450));
+    const shift = (dx, dy) => {
+      const r = this.safeRect();
+      this.anchor.ax += dx / (r.R - r.L);
+      this.anchor.ay += dy / (r.B - r.T);
+    };
+    const stopTurn = () => (this.turnLeft = 0);
+    cv.addEventListener('pointerdown', (e) => {
+      stopTurn();
+      if (e.pointerType === 'touch') { touches.set(e.pointerId, [e.clientX, e.clientY]); return; }
+      if (e.button === 2 || (e.button === 0 && e.shiftKey)) drag = [e.clientX, e.clientY];
+    });
+    window.addEventListener('pointermove', (e) => {
+      if (drag && e.pointerType !== 'touch') { shift(e.clientX - drag[0], e.clientY - drag[1]); drag = [e.clientX, e.clientY]; return; }
+      if (!touches.has(e.pointerId)) return;
+      if (touches.size === 2) {
+        const [a, b] = [...touches.values()], mid0 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        touches.set(e.pointerId, [e.clientX, e.clientY]);
+        const [c, d] = [...touches.values()], mid1 = [(c[0] + d[0]) / 2, (c[1] + d[1]) / 2];
+        shift(mid1[0] - mid0[0], mid1[1] - mid0[1]);
+      } else touches.set(e.pointerId, [e.clientX, e.clientY]);
+    });
+    const up = (e) => { if (e.pointerType === 'touch') touches.delete(e.pointerId); else drag = null; };
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    cv.addEventListener('contextmenu', (e) => e.preventDefault());
+    cv.addEventListener('dblclick', () => {
+      if (!this.o) return;
+      stopTurn(); this.startView(); this.placeOrigin(this.o, this.scale);
+    });
+  }
+
+  // Put the origin where the drawing, seen from the current view, is centred in the open area.
+  placeOrigin(o, s) {
+    let x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+    for (const [x, y] of this.projected(o, s)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    const r = this.safeRect(), k = Math.min((r.R - r.L) / Math.max(x1 - x0, 1e-6), (r.B - r.T) / Math.max(y1 - y0, 1e-6));
+    const ox = (r.L + r.R) / 2 - k * (x0 + x1) / 2, oy = (r.T + r.B) / 2 + k * (y0 + y1) / 2;
+    this.home = { ax: (ox - r.L) / (r.R - r.L), ay: (oy - r.T) / (r.B - r.T) };
+    this.anchor = { ...this.home };
+  }
+  // Keep everything drawn inside the open area at every angle, with the origin fixed on screen: the
+  // scale is the largest for which every point and every corner of the volume lies inside the open
+  // area (with an 8% margin). The canvas covers the whole window, so nothing is ever cut off; the
+  // fit only keeps the drawing clear of the floating panels. Followed smoothly; dots, vectors and
+  // arrowheads keep their size on screen.
+  followFit(now = false) {
+    if (!this.o || !this.camSet) return;
+    const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, r = this.safeRect(), m = 1.08;
+    // The zoom: the largest that keeps everything inside the open area with the origin at its default
+    // place (so the visitor's panning never changes it); then the origin goes where the visitor put it.
+    const hx = r.L + this.home.ax * (r.R - r.L), hy = r.T + this.home.ay * (r.B - r.T);
+    let k = Infinity;   // pixels per unit
+    for (const [x, y] of this.projected(this.o, this.scale)) {
+      if (x > 1e-9) k = Math.min(k, (r.R - hx) / x); else if (x < -1e-9) k = Math.min(k, (hx - r.L) / -x);
+      if (y > 1e-9) k = Math.min(k, (hy - r.T) / y); else if (y < -1e-9) k = Math.min(k, (r.B - hy) / -y);
+    }
+    const ox = r.L + this.anchor.ax * (r.R - r.L), oy = r.T + this.anchor.ay * (r.B - r.T);
+    if (!isFinite(k) || k <= 0) k = H / 2;
+    k /= m;
+    const h = H / (2 * k), g = { cx: (W / 2 - ox) / k, cy: (oy - H / 2) / k, h };
+    const v = this.view, t = now ? 1 : 0.35;
+    if (now || Math.abs(g.cx - v.cx) + Math.abs(g.cy - v.cy) + Math.abs(g.h - v.h) > 1e-5 * v.h) {
+      this.setView({ cx: v.cx + (g.cx - v.cx) * t, cy: v.cy + (g.cy - v.cy) * t, h: v.h + (g.h - v.h) * t });
+      if (now) this.frameH = this.view.h;
+      if (Math.abs(this.view.h - (this.laidH ?? 0)) > 0.01 * this.view.h) this.layout();
+    }
+  }
+  // Everything drawn (points, and for K ≤ 3 every corner of the volume), in screen coordinates
+  // relative to the origin, for the current view.
+  projected(o, s) {
+    const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
+    const sel = o.sel.length >= 2 && o.sel.length <= 3 ? o.sel : [];
+    for (let mask = 3; mask < 1 << sel.length; mask++) {
+      if ((mask & (mask - 1)) === 0) continue;
+      pts.push([0, 1, 2].map((d) => sel.reduce((acc, i, k) => acc + (mask & (1 << k) ? pts[i][d] : 0), 0)));
+    }
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion), up = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
+    return pts.map(([x, y, z]) => [x * right.x + y * right.y + z * right.z, x * up.x + y * up.y + z * up.z]);
+  }
+
+  tick() {
+    const tickStart = performance.now();
+    if (this.turnLeft > 0) {
+      const now = performance.now(), dt = Math.min(0.1, (now - (this.lastTick ?? now)) / 1000);
+      // ease out over about 2 s, at any frame rate
+      const step = Math.min(this.turnLeft, Math.max(0.02 * dt, this.turnLeft * (1 - Math.exp(-2.5 * dt))));
+      this.camera.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), step);
+      this.turnLeft -= step;
+    }
+    this.lastTick = tickStart;
     if (!this.targets || !this.current) return;
-    if (this.morph) { this.tickMorph(); return; }
     let moving = false;
     this.current.forEach((p, i) => {
       const t = this.targets[i];
@@ -423,11 +425,13 @@ export class Plot3D {
     if (moving) this.layout();
   }
 
-  // Balls are small, so hovering uses the nearest point on screen (10 px) instead of a ray hit.
   pick(e) {
     if (!this.mesh) return;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    this.mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    // The nearest point on screen within 10 px (the dots are too small to hit exactly).
     const i = this.nearest(e.clientX, e.clientY, 10);
-    if (i !== this.hovered || this.hovered2 >= 0) { this.hovered = i; this.hovered2 = -1; this.layout(); }
+    if (i !== this.hovered) { this.hovered = i; this.layout(); }
     this.onHover(i, e.clientX, e.clientY);
   }
 
@@ -437,16 +441,11 @@ export class Plot3D {
     const rect = this.renderer.domElement.getBoundingClientRect();
     let best = -1, bd = r * r, bz = Infinity;
     const v = new THREE.Vector3();
-    const test = (p, i) => {
+    this.current.forEach((p, i) => {
       v.copy(p).project(this.camera);
       const sx = rect.left + ((v.x + 1) / 2) * rect.width, sy = rect.top + ((1 - v.y) / 2) * rect.height;
       const d = (sx - x) ** 2 + (sy - y) ** 2;
       if (d < bd || (d === bd && v.z < bz)) { bd = d; bz = v.z; best = i; }
-    };
-    this.current.forEach((p, i) => {
-      test(p, i);
-      // A point collapsed onto the origin is reached through its unit-position ghost.
-      if (this.ghostPos?.has(i) && this.targets[i].length() < 0.02) test(this.ghostPos.get(i), i);
     });
     return best;
   }
@@ -459,11 +458,11 @@ export class Plot3D {
     return [((v.x + 1) / 2) * w, ((1 - v.y) / 2) * h];
   }
 
-  highlight(i, j = -1) { this.hovered = i; this.hovered2 = j; this.layout(); }
+  highlight(i) { this.hovered = i; this.layout(); }
 
   dispose() {
-    this.endMorph();
     this.alive = false;
+    this.ro?.disconnect();
     this.controls.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();

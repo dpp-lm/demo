@@ -31,8 +31,21 @@ export async function signIn(stash = {}) {
 
 // On page load: finish a sign-in if we are coming back from Hugging Face.
 // Returns { auth, stash } after a redirect, null otherwise.
+// A refused or failed sign-in comes back with ?error=…: returns { error, stash } so the page can restore
+// the visitor's settings and say what happened.
+const takeStash = () => {
+  let stash = {};
+  try { stash = JSON.parse(sessionStorage.getItem(KEY + '-stash') || '{}'); sessionStorage.removeItem(KEY + '-stash'); } catch {}
+  return stash;
+};
 export async function finishSignIn() {
-  if (!authEnabled() || !/[?&]code=/.test(location.search)) return null;
+  if (!authEnabled()) return null;
+  const q = new URLSearchParams(location.search);
+  if (q.has('error')) {
+    history.replaceState(null, '', location.pathname);
+    return { error: q.get('error_description') || q.get('error'), stash: takeStash() };
+  }
+  if (!q.has('code')) return null;
   const { oauthHandleRedirectIfPresent } = await import(HUB);
   const r = await oauthHandleRedirectIfPresent();
   history.replaceState(null, '', location.pathname); // drop ?code=…&state=…
@@ -42,7 +55,5 @@ export async function finishSignIn() {
     user: r.userInfo?.preferred_username, isPro: !!r.userInfo?.isPro,
   };
   try { localStorage.setItem(KEY, JSON.stringify(auth)); } catch {}
-  let stash = {};
-  try { stash = JSON.parse(sessionStorage.getItem(KEY + '-stash') || '{}'); sessionStorage.removeItem(KEY + '-stash'); } catch {}
-  return { auth, stash };
+  return { auth, stash: takeStash() };
 }
