@@ -52,8 +52,8 @@ LARGE = {
 }
 MODELS = LARGE if ON_ZEROGPU else SMALL
 DEFAULT = os.environ.get("MODEL_KEY", next(iter(MODELS)))
-EMBEDDER = "Qwen/Qwen3-Embedding-0.6B"   # the same embedder as the demo's GPU server
-EMBEDDER_ID = "qwen3-emb"
+EMBEDDER = "Qwen/Qwen3-Embedding-4B"   # the same embedder as the demo's GPU server (its default)
+EMBEDDER_ID = "qwen3-emb-4b"
 MAX_N, MAX_TOKENS = 200, 256   # docs/BACKEND.md
 
 _cache = {}
