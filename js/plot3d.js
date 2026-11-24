@@ -13,10 +13,10 @@ function rod(a, b, r, color) {
 
 // "origin", written just left of the origin (a sprite, so it always faces the viewer). The selected
 // vectors are drawn from the origin, so their meeting point marks it; the word names it.
-// The unit sphere (every embedding has length 1), drawn as a faint globe. Its lines are coloured per
-// vertex so that the near side can be drawn darker than the far side (see shadeDepth).
+// The x, y, z axes through the origin, from −1 to 1 (the length of every embedding). Coloured per
+// vertex so the near end is darker than the far end (see shadeDepth).
 function globe(scale) {
-  // Drawn first and without depth writes, so points, vectors and the volume always sit on top of it.
+  // Drawn first and without depth writes, so points, vectors and the volume always sit on top.
   const g = new THREE.Group(), mat = new THREE.LineBasicMaterial({ vertexColors: true, depthWrite: false });
   const line = (pts, ink) => {
     const geo = new THREE.BufferGeometry().setFromPoints(pts);
@@ -25,14 +25,10 @@ function globe(scale) {
     l.renderOrder = -1; l.userData.ink = ink;   // how dark the line is, near side (shadeDepth)
     return l;
   };
-  const circle = (f) => { const pts = []; for (let t = 0; t <= 96; t++) pts.push(f((2 * Math.PI * t) / 96)); return line(pts, 0.26); };
-  // The x, y, z axes: the globe's three diameters through the origin, a little darker than its lines.
   for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
     const pts = []; for (let t = -1; t <= 1.0001; t += 0.05) pts.push(new THREE.Vector3(d[0] * t, d[1] * t, d[2] * t));
     g.add(line(pts, 0.6));
   }
-  for (let lat = -60; lat <= 60; lat += 30) { const y = Math.sin(lat * Math.PI / 180), r = Math.cos(lat * Math.PI / 180); g.add(circle((a) => new THREE.Vector3(r * Math.cos(a), y, r * Math.sin(a)))); }
-  for (let lon = 0; lon < 180; lon += 30) { const c = Math.cos(lon * Math.PI / 180), sn = Math.sin(lon * Math.PI / 180); g.add(circle((a) => new THREE.Vector3(Math.cos(a) * c, Math.sin(a), Math.cos(a) * sn))); }
   g.scale.setScalar(scale);
   return g;
 }
@@ -151,8 +147,7 @@ export class Plot3D {
     for (const ch of [...this.group.children]) { this.group.remove(ch); ch.geometry?.dispose(); ch.material?.dispose(); }
     // No axes or floor grid: the only meaningful frame is the origin, from which the scored volume is measured.
     this.group.add(originMarker(o.text ?? '#555555', this.frameH ?? this.camera.top));
-    // The unit sphere: every embedding has length 1, so the completions lie on it (or inside it, when
-    // scaled by quality). It is the one piece of "room" the model itself has.
+    // The x, y, z axes through the origin, which the view turns about.
     this.globe = globe(this.scale);
     this.globeInk = new THREE.Color(o.text ?? '#555555');
     this.group.add(this.globe);
@@ -238,7 +233,7 @@ export class Plot3D {
       this.mesh.setColorAt(i, c);
     });
     this.mesh.instanceColor.needsUpdate = true;
-    // The globe and its axes: near side `ink` of the way from the background to the ink colour, far side 5%.
+    // The axes: near end `ink` of the way from the background to the ink colour, far side 5%.
     if (this.globe) {
       for (const line of this.globe.children) {
         const pos = line.geometry.attributes.position, col = line.geometry.attributes.color;
