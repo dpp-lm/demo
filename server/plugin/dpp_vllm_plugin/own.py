@@ -28,6 +28,7 @@ import time
 log = logging.getLogger("dpp_vllm_plugin.own")
 ROOT = os.environ.get("DPP_OWN_DIR", os.path.join(os.getcwd(), "own_emb"))   # directory with <modelKey>/{P.safetensors,meta.json,mu.npy}
 CAP = 1024      # concurrent (tag, index) slots
+CAP_EXACT = 448 # in exact mode each slot holds a V-long sum of logits (448 x 151936 x 4 B = 272 MB for Qwen3)
 LMAX = 260      # longest forced list (max_new_tokens 256 plus EOS)
 NSTOP = 8
 ROW_CHUNK = 16  # rows per P matmul, bounds the fp16 copy of the logits
@@ -53,28 +54,40 @@ class Own:
         self.repo = repo
         self.meta = json.load(open(os.path.join(d, "meta.json")))
         self.dev = torch.device("cuda")
-        self.Pt = load_file(os.path.join(d, "P.safetensors"), device="cuda")["Pt"].contiguous()
+        # Exact mode (own_emb/<key>/M.npy, see search/build_own_M.py): sum the logits themselves; the server
+        # recovers the full mean hidden state from their mean. No projection, no per-step matmul.
+        self.exact = os.path.exists(os.path.join(d, "M.npy"))
+        self.Pt = None if self.exact else load_file(os.path.join(d, "P.safetensors"), device="cuda")["Pt"].contiguous()
         # final logit soft-capping (Gemma 2): the sampler sees t = c tanh(z / c); the raw logits z = c atanh(t / c) are what W h gives
-        self.cap = float((self.meta.get("source") or {}).get("softcap") or 0.0)
-        self.V, self.r = self.Pt.shape
+        self.softcap = float((self.meta.get("source") or {}).get("softcap") or 0.0)
+        if self.exact:
+            self.V = self.r = int(self.meta["V"])   # the accumulated vector is the logit sum itself
+        else:
+            self.V, self.r = self.Pt.shape
+        cap = CAP_EXACT if self.exact else CAP
         t = torch
-        self.accum = t.zeros(CAP, self.r, dtype=t.float32, device=self.dev)
-        self.count = t.zeros(CAP, dtype=t.int32, device=self.dev)
-        self.done = t.zeros(CAP, dtype=t.bool, device=self.dev)
-        self.maxtok = t.full((CAP,), 1 << 30, dtype=t.int32, device=self.dev)
-        self.stop = t.full((CAP, NSTOP), -1, dtype=t.int64, device=self.dev)
-        self.forced = t.zeros(CAP, LMAX, dtype=t.int64, device=self.dev)
-        self.flen = t.zeros(CAP, dtype=t.int32, device=self.dev)
-        self.feos = t.zeros(CAP, dtype=t.int64, device=self.dev)
-        self.is_forced = [False] * CAP
-        self.free = list(range(CAP - 1, -1, -1))
+        self.accum = t.zeros(cap, self.r, dtype=t.float32, device=self.dev)
+        self.count = t.zeros(cap, dtype=t.int32, device=self.dev)
+        self.done = t.zeros(cap, dtype=t.bool, device=self.dev)
+        self.maxtok = t.full((cap,), 1 << 30, dtype=t.int32, device=self.dev)
+        self.stop = t.full((cap, NSTOP), -1, dtype=t.int64, device=self.dev)
+        self.forced = t.zeros(cap, LMAX, dtype=t.int64, device=self.dev)
+        self.flen = t.zeros(cap, dtype=t.int32, device=self.dev)
+        self.feos = t.zeros(cap, dtype=t.int64, device=self.dev)
+        self.is_forced = [False] * cap
+        self.cap = cap
+        self.free = list(range(cap - 1, -1, -1))
         self.slot_of = {}      # (tag, idx) -> slot
         self.touched = {}      # slot -> time
         self.req_slot = {}     # engine request id -> slot or -1
         self.steps = 0
         self.last_use = time.time()
-        log.warning("dpp_vllm_plugin own: loaded P for %s (V=%d, r=%d, %s, %.0f MiB)", repo, self.V, self.r,
-                    self.Pt.dtype, self.Pt.numel() * self.Pt.element_size() / 2**20)
+        if self.exact:
+            log.warning("dpp_vllm_plugin own: exact mode for %s (V=%d, %d slots, %.0f MiB of logit sums)", repo, self.V, cap,
+                        self.accum.numel() * 4 / 2**20)
+        else:
+            log.warning("dpp_vllm_plugin own: loaded P for %s (V=%d, r=%d, %s, %.0f MiB)", repo, self.V, self.r,
+                        self.Pt.dtype, self.Pt.numel() * self.Pt.element_size() / 2**20)
 
     # ---- slots
     def _alloc(self, key, ea, runner_vocab):
@@ -164,10 +177,12 @@ class Own:
         wl = live.float().unsqueeze(1)
         for a in range(0, len(rows), ROW_CHUNK):
             z = logits[ri[a:a + ROW_CHUNK]]
-            if self.cap:
-                z = self.cap * torch.atanh((z.float() / self.cap).clamp(-0.999999, 0.999999))
-            z = z.to(torch.float16)
-            pl = (z @ self.Pt).float() * wl[a:a + ROW_CHUNK]
+            if self.softcap:
+                z = self.softcap * torch.atanh((z.float() / self.softcap).clamp(-0.999999, 0.999999))
+            if self.exact:
+                pl = z.float() * wl[a:a + ROW_CHUNK]          # the logits themselves, summed per sequence
+            else:
+                pl = (z.to(torch.float16) @ self.Pt).float() * wl[a:a + ROW_CHUNK]
             self.accum.index_add_(0, si[a:a + ROW_CHUNK], pl)
         self.count.index_add_(0, si, live.int())
         self.steps += 1
@@ -231,9 +246,10 @@ class Own:
 
     def stats(self):
         torch = self.torch
-        return {"repo": self.repo, "V": self.V, "r": self.r, "dtype": str(self.Pt.dtype), "slots_used": CAP - len(self.free),
+        return {"repo": self.repo, "mode": "exact" if self.exact else "projected", "V": self.V, "r": self.r,
+                "dtype": "float32" if self.exact else str(self.Pt.dtype), "slots_used": self.cap - len(self.free),
                 "steps": self.steps, "allocated_mib": torch.cuda.memory_allocated() / 2**20,
-                "P_mib": self.Pt.numel() * self.Pt.element_size() / 2**20}
+                "P_mib": 0.0 if self.exact else self.Pt.numel() * self.Pt.element_size() / 2**20}
 
 
 def _get(runner):
@@ -248,7 +264,7 @@ def _get(runner):
     if m:
         repo = f"{m.group(1)}/{m.group(2)}"
     d = _repo_dirs().get(repo)
-    if d is None or not os.path.exists(os.path.join(d, "P.safetensors")):
+    if d is None or not (os.path.exists(os.path.join(d, "P.safetensors")) or os.path.exists(os.path.join(d, "M.npy"))):
         _ST["off"] = True
         log.warning("dpp_vllm_plugin own: no P for %s, feature off in this process", repo)
         return None

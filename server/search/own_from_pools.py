@@ -16,11 +16,16 @@ for f in sorted(glob.glob(f"{ROOT}/search/pools/models/{a.key}/N200_T*/*.json"))
 assert len(raws) == 14, len(raws)
 os.makedirs(f"{ROOT}/own_emb/{a.key}/raw", exist_ok=True)
 for stem, v in raws.items(): np.save(f"{ROOT}/own_emb/{a.key}/raw/{stem}.npy", v)
-mu = np.concatenate(list(raws.values())).mean(0).astype(np.float32); np.save(f"{ROOT}/own_emb/{a.key}/mu.npy", mu)
+exact = os.path.exists(f"{ROOT}/own_emb/{a.key}/M.npy")   # rows are full d-dim mean states (build_own_M.py)
+mu = np.concatenate(list(raws.values())).astype(np.float64).mean(0)
+np.save(f"{ROOT}/own_emb/{a.key}/{'mu_full' if exact else 'mu'}.npy", mu if exact else mu.astype(np.float32))
 tmp = f"{ROOT}/own_emb/{a.key}/mu.TEMP"
 if os.path.exists(tmp): os.remove(tmp)
 od = f"{a.data}/emb/own/{a.key}"; os.makedirs(od, exist_ok=True)
 for stem, v in raws.items():
     c = v.astype(np.float64) - mu; c /= np.maximum(np.linalg.norm(c, axis=1, keepdims=True), 1e-12)
-    open(f"{od}/{stem}.bin", "wb").write(c.astype("<f2").tobytes())
+    if exact:   # G (BACKEND.md): float64 inner products, diagonal 1, float32 LE, N x N
+        G = c @ c.T; np.fill_diagonal(G, 1.0); open(f"{od}/{stem}.G.bin", "wb").write(G.astype("<f4").tobytes())
+    else:
+        open(f"{od}/{stem}.bin", "wb").write(c.astype("<f2").tobytes())
 print("wrote", len(raws), "files, mu norm", float(np.linalg.norm(mu)))

@@ -35,15 +35,20 @@ for key in keys:
         info["forced_mismatch"] += len(S) - sum(d["forcedOk"])
         assert min(d["count"]) >= 1 and np.isfinite(raws[stem]).all()
     allv = np.concatenate(list(raws.values()))
-    mu = allv.mean(0).astype(np.float32)
-    np.save(f"{ROOT}/own_emb/{key}/mu.npy", mu)
+    exact = os.path.exists(f"{ROOT}/own_emb/{key}/M.npy")   # rows are full d-dim mean states (build_own_M.py)
+    mu = allv.astype(np.float64).mean(0)
+    np.save(f"{ROOT}/own_emb/{key}/{'mu_full' if exact else 'mu'}.npy", mu if exact else mu.astype(np.float32))
     tmp = f"{ROOT}/own_emb/{key}/mu.TEMP"
     if os.path.exists(tmp): os.remove(tmp)
     od = f"{a.data}/emb/own/{key}"; os.makedirs(od, exist_ok=True)
     for stem, v in raws.items():
         c = v.astype(np.float64) - mu
         c /= np.maximum(np.linalg.norm(c, axis=1, keepdims=True), 1e-12)
-        open(f"{od}/{stem}.bin", "wb").write(c.astype("<f2").tobytes())
+        if exact:   # G (BACKEND.md): float64 inner products, diagonal 1, float32 LE, N x N
+            G = c @ c.T; np.fill_diagonal(G, 1.0)
+            open(f"{od}/{stem}.G.bin", "wb").write(G.astype("<f4").tobytes())
+        else:
+            open(f"{od}/{stem}.bin", "wb").write(c.astype("<f2").tobytes())
     info["seconds"] = round(time.time() - t0, 1); log[key] = info
     print(key, info, flush=True)
 json.dump(log, open(ROOT + "/own_emb/precompute_log.json", "w"), indent=1)

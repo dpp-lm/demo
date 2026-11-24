@@ -95,20 +95,67 @@ OWN_LMAX = 258  # longest teacher-forced token list (plugin table has 260 entrie
 _OWN_MU = {}
 
 
+def own_exact(key):
+    """Exact mode: own_emb/<key>/M.npy exists (search/build_own_M.py). The plugin then sums logits and the server recovers
+    the full mean hidden state; there is no random projection."""
+    return OWN_ON and os.path.exists(os.path.join(OWN_DIR, key, "M.npy"))
+
+
 def own_has_P(key):
-    return OWN_ON and os.path.exists(os.path.join(OWN_DIR, key, "P.safetensors"))
+    return OWN_ON and (own_exact(key) or os.path.exists(os.path.join(OWN_DIR, key, "P.safetensors")))
+
+
+_OWN_REC = {}
+
+
+def own_recover(key, lbar):
+    """Mean hidden states (n x d, float64) from mean logits (n x V): h = [M Aᵀ l]_{1..d}, A = [W | 1], M = (AᵀA)⁻¹.
+    Exact up to rounding (the per-step shift c in l = W h + c·1 is absorbed by the 1 column). W is lm_head (V x d), read
+    once from the model snapshot as in build_own_P.find_W and kept as float32; AᵀA is badly conditioned, so the products
+    are done in float64, a chunk of W at a time."""
+    if key not in _OWN_REC:
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "search"))
+        from build_own_P import find_W
+        g, n, _ = find_W(MODELS[key]["repo"])
+        w = g.get_tensor(n)
+        W = w.float().numpy() if hasattr(w, "float") else np.asarray(w, dtype=np.float32)
+        _OWN_REC[key] = (np.ascontiguousarray(W, dtype=np.float32), np.load(os.path.join(OWN_DIR, key, "M.npy")))
+    W, M = _OWN_REC[key]
+    V, d = W.shape
+    lbar = np.asarray(lbar, dtype=np.float64)[:, :V]
+    ya = np.zeros((lbar.shape[0], d + 1))
+    for a in range(0, V, 16384):
+        ya[:, :d] += lbar[:, a:a + 16384] @ W[a:a + 16384].astype(np.float64)
+    ya[:, d] = lbar.sum(1)
+    return ya @ M[:, :d]
+
+
+def own_mean(sums, counts, key):
+    """Per-sequence mean of what the plugin accumulated: projected states (projected mode) or full hidden states (exact)."""
+    n = len(counts)
+    mean = np.frombuffer(sums, dtype="<f4").reshape(n, -1) / np.maximum(np.asarray(counts, np.float32), 1)[:, None]
+    return own_recover(key, mean) if own_exact(key) else mean
+
+
+def own_gram(unit):
+    """G as BACKEND.md says: float64 inner products of the unit vectors, diagonal exactly 1, float32 base64."""
+    u = np.asarray(unit, dtype=np.float64)
+    G = u @ u.T
+    np.fill_diagonal(G, 1.0)
+    return base64.b64encode(np.ascontiguousarray(G, dtype="<f4").tobytes()).decode("ascii")
 
 
 def own_mu(key):
-    """Per-model mean of the uncentered projected vectors (own_emb/<key>/mu.npy), or None."""
-    p = os.path.join(OWN_DIR, key, "mu.npy")
+    """Per-model mean of the uncentered vectors (own_emb/<key>/mu.npy; mu_full.npy, d long, in exact mode), or None."""
+    p = os.path.join(OWN_DIR, key, "mu_full.npy" if own_exact(key) else "mu.npy")
     try:
         mt = os.path.getmtime(p)
     except OSError:
         _OWN_MU.pop(key, None)
         return None
     if key not in _OWN_MU or _OWN_MU[key][0] != mt:   # reload when the file changes
-        _OWN_MU[key] = (mt, np.load(p).astype(np.float32))
+        _OWN_MU[key] = (mt, np.load(p).astype(np.float64))
     return _OWN_MU[key][1]
 
 
@@ -117,11 +164,9 @@ def own_available(key):
 
 
 def own_unit(sums, counts, key):
-    """Centered, unit-normalized own vectors from the plugin's per-sequence sums and step counts."""
-    n = len(counts)
-    mean = np.frombuffer(sums, dtype="<f4").reshape(n, -1) / np.maximum(np.asarray(counts, np.float32), 1)[:, None]
-    v = mean - own_mu(key)
-    return (v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-12)).astype(np.float32)
+    """Centered, unit-normalized own vectors from the plugin's per-sequence sums and step counts (float64)."""
+    v = own_mean(sums, counts, key) - own_mu(key)
+    return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-12)
 
 
 async def own_take(engine, items):
@@ -574,9 +619,9 @@ async def sample_pool(key, engine, prompt, n, t_prime, max_new_tokens, seed, emb
         r = (await own_take(engine, [[own_tag, len(samples)]]))[0]
         if min(r["count"]) < 1:
             raise RuntimeError("own states missing for some samples")
-        own = own_unit(r["sum"], r["count"], key)
-        own_means = (np.frombuffer(r["sum"], dtype="<f4").reshape(len(samples), -1)
-                     / np.maximum(np.asarray(r["count"], np.float32), 1)[:, None]).astype("<f4") if own_raw else None
+        own64 = own_unit(r["sum"], r["count"], key)
+        own = own64.astype(np.float32)
+        own_means = own_mean(r["sum"], r["count"], key).astype("<f4") if own_raw else None
     async with S["emb_lock"]:
         def embed_all():
             e = own if embedder == OWN_KEY else get_embedder(embedder)(texts)
@@ -593,9 +638,11 @@ async def sample_pool(key, engine, prompt, n, t_prime, max_new_tokens, seed, emb
         "seed": seed, "timing": timing, "samples": samples,
         "emb": base64.b64encode(emb.tobytes()).decode("ascii"),
     }
+    if embedder == OWN_KEY:  # G from the float64 unit vectors (in exact mode, the full d-dim states)
+        pool["G"] = own_gram(own64)
     if embs:  # the same pool under other embedders (for comparing them; not used by the page)
         pool["embs"] = embs
-    if own_raw and want_own:  # uncentered mean projected states (for building mu from live generations)
+    if own_raw and want_own:  # uncentered mean states, projected or full (for building mu / mu_full from live generations)
         pool["ownRaw"] = base64.b64encode(own_means.tobytes()).decode("ascii")
     return pool
 
@@ -831,7 +878,7 @@ async def embed_own(req: Request):
     async with S["queue"].admit(engine_name(key), rid, req.is_disconnected):
         r = await forced_own(key, prompt, texts, [bool(e) for e in ended], eos_id, req=req)
     counts = r["count"]
-    mean = np.frombuffer(r["sum"], dtype="<f4").reshape(len(counts), -1) / np.maximum(np.asarray(counts, np.float32), 1)[:, None]
+    mean = own_mean(r["sum"], counts, key)
     return {"D": int(mean.shape[1]), "vec": base64.b64encode(mean.astype("<f4").tobytes()).decode("ascii"), "count": counts,
             "logp": r["logp"], "forcedOk": r["forcedOk"], "nTokens": r["nTokens"],
             "empty": r["empty"], "promptTokens": r["promptTokens"], "eos0": r["eos0"]}
@@ -901,7 +948,9 @@ async def embed_endpoint(req: Request):
             r = await forced_own(key, prompt, texts, [bool(e) for e in ended], tail=MODELS[key].get("ended_tail", ""), req=req)
         if min(r["count"]) < 1:
             raise HTTPException(500, "The embedding pass returned no states for some texts.")
-        emb = own_unit(r["sum"], r["count"], key)
+        emb64 = own_unit(r["sum"], r["count"], key)
+        emb = emb64.astype(np.float32)
+        out["G"] = own_gram(emb64)
         out.update(model=key, approximate=True,
                    note="Teacher-forced from the text, so close to but not identical to the vectors /sample returns for the same completions "
                         "(cosine about 0.9999 for Gemma 3 and Qwen3, about 0.99 for Gemma 2 9B, whose stored text loses trailing whitespace tokens).")
