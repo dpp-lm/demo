@@ -387,3 +387,15 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
 
 /* The status line keeps one line of height even when empty. */
 #live-status { min-height: 1.45em; }
+
+/* The strip under the plot keeps one size: fixed slots and fixed-width numbers. */
+.stage-foot { flex-wrap: nowrap; }
+.legend { flex-wrap: nowrap; white-space: nowrap; overflow: hidden; min-width: 0; }
+.readout { display: grid; grid-template-columns: repeat(4, auto); gap: 4px 16px; flex: none; }
+.stat .v { display: inline-block; min-width: 7ch; text-align: right; }
+.stat.off { visibility: hidden; }
+@media (max-width: 760px) {
+  .stage-foot { display: grid; grid-template-columns: 1fr; gap: 6px; }
+  .readout { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; }
+  .readout .stat { display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; }
+}

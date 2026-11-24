@@ -183,13 +183,14 @@ function renderReadout() {
   const N = S.logp.length;
   const ok = S.sel.length === S.K;
   const e = ess(logWeights(S.logp, S.logq, S.T.sample));
-  const stat = (k, v, x) => `<span class="stat">${k} <button type="button" class="xbtn" data-x="${x}" aria-label="What is ${k}?">?</button> <span class="v">${v}</span></span>`;
-  $('#readout').innerHTML = !ok
-    ? `<span class="stat">No subset of size ${S.K}: there are fewer distinct completions than that. Lower K or generate more.</span>`
-    : stat('log P(S)', fmt(S.logP), 'logp') +
-      stat('quality', fmt(quality(S.logp, S.sel)), 'quality') +
-      stat('diversity', fmt(diversity(S.G, N, S.sel)), 'diversity') +
-      (S.mode === 'sample' ? stat('ESS', `${e.toFixed(0)}/${N}`, 'ess') : '');
+  // Always the same four slots, so the strip keeps its size (ESS is blank unless sampling).
+  const stat = (k, v, x, hide = false) => `<span class="stat${hide ? ' off' : ''}">${k} <button type="button" class="xbtn" data-x="${x}" aria-label="What is ${k}?" ${hide ? 'tabindex="-1"' : ''}>?</button> <span class="v">${v}</span></span>`;
+  $('#readout').innerHTML =
+    stat('log P(S)', ok ? fmt(S.logP) : '—', 'logp') +
+    stat('quality', ok ? fmt(quality(S.logp, S.sel)) : '—', 'quality') +
+    stat('diversity', ok ? fmt(diversity(S.G, N, S.sel)) : '—', 'diversity') +
+    stat('ESS', `${e.toFixed(0)}/${N}`, 'ess', S.mode !== 'sample');
+  $('#readout').title = ok ? '' : `No subset of size ${S.K}: there are fewer distinct completions than that.`;
 }
 
 function renderVolHint() {
@@ -197,7 +198,7 @@ function renderVolHint() {
   if (S.dims === 1) { el.innerHTML = ''; return; }
   el.innerHTML = S.sel.length <= 3 && S.sel.length >= 2
     ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg>spanned volume <button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button>`
-    : `<button id="vol-btn" class="link">Show the spanned volume (K = 3)</button>`;
+    : `<button id="vol-btn" class="link">Show volume (K = 3)</button>`;
   const b = $('#vol-btn');
   if (b) b.onclick = () => setK(3);
 }
