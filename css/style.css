@@ -549,3 +549,6 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
   .inspect { position: fixed; left: calc(var(--ctl-w) + 24px); right: calc(var(--rail-w) + 24px); top: auto; bottom: calc(var(--bar-h, 40px) + 12px);
     max-height: 48vh; z-index: 40; }
 }
+
+/* Until the first complete render the page is hidden, so no half-built state shows (js/main.js: reveal). */
+html.booting .shell { visibility: hidden; }

@@ -26,7 +26,7 @@ const S = {
   proj: null,        // { coords: [N][3], frac: number[] }
   dims: 3,
   mode: 'map',
-  T: 20,             // one temperature for both modes
+  T: NaN,            // one temperature for both modes; its starting value is the T slider's, in the HTML
   target: 'global',  // target quality: 'global' κ = p^{1/T}; 'gl' κ = p^{1/T}·p°_{T′}
   K: 3,
   pinned: -1,
@@ -1049,7 +1049,7 @@ function wire() {
     onSettings();
   });
 
-  $('#T-slider').value = tToSlider(S.T);
+  S.T = sliderToT(+$('#T-slider').value);   // the HTML is the one source of the starting T
   let raf = 0;
   $('#T-slider').addEventListener('input', (e) => {
     S.T = sliderToT(+e.target.value);
@@ -1140,6 +1140,10 @@ finishSignIn().then((r) => {
   if (c) { setStatus(`Signed in to Hugging Face as ${r.auth.user}.`); runLive({ k: c.k ?? 1 }); }
   else stageMsg('empty', { title: `Signed in to Hugging Face as ${escapeHtml(r.auth.user)}.`, detail: 'Your settings could not be kept through the sign-in. Press ↑ to run.', actions: '<button type="button" class="btn" data-act="dismiss">OK</button>', sticky: '*' });
 }).catch((e) => setStatus('Sign-in failed: ' + (e.message || e)));
+// The page stays hidden (html.booting) until its first complete render, so no half-built state shows:
+// then it appears in one step. Never longer than 6 s, whatever happens.
+const reveal = () => document.documentElement.classList.remove('booting');
+setTimeout(reveal, 6000);
 loadData().then(configChanged).catch((e) => {
   stageMsg('error', { title: 'The examples could not be loaded.', detail: escapeHtml(e.message || '') + ' You can still type a prompt and press ↑.', actions: '<button type="button" class="btn" data-act="reload" onclick="location.reload()">Try again</button>', sticky: '*' });
-});
+}).then(() => Promise.race([document.fonts?.ready, new Promise((r) => setTimeout(r, 1500))])).then(() => requestAnimationFrame(reveal));
