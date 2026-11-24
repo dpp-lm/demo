@@ -136,11 +136,12 @@ const DEMO_SERVER = new URLSearchParams(location.search).get('server') === 'loca
   ? `${location.origin}/dpp_api` : 'https://zueri-monstro.rufous-hamlet.ts.net/dpp_api';
 const MODAL_URL = 'https://timvieira--dpp-lm-sampler-web.modal.run';
 const SPACE_URL = 'https://xtimv-dpp-lm-sampler.hf.space';
+const QEMB4 = { id: 'qwen3-emb-4b', repo: 'Qwen/Qwen3-Embedding-4B', label: 'Qwen3-Embedding-4B' };
 const QEMB = { id: 'qwen3-emb', repo: 'Qwen/Qwen3-Embedding-0.6B', label: 'Qwen3-Embedding-0.6B' };
 const OWN = { id: 'own', repo: 'own:Qwen/Qwen3-14B-AWQ', label: 'Qwen3 14B’s own states' };
 const BACKENDS = [
   { id: 'server', where: 'GPU server', the: 'the GPU server', label: 'Qwen3 14B, 4-bit (AWQ) · GPU server', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
-    url: DEMO_SERVER, auth: false, embedders: [QEMB, OWN], up: null },
+    url: DEMO_SERVER, auth: false, embedders: [QEMB4, QEMB, OWN], up: null },
   { id: 'modal', where: 'Modal', the: 'Modal', label: 'Qwen3 14B, 4-bit (AWQ) · Modal', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
     url: MODAL_URL, auth: true, embedders: [QEMB], up: null },
   { id: 'space', where: 'Hugging Face Space', the: 'the Hugging Face Space', label: 'Qwen3 14B, 4-bit (AWQ) · HF Space', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
