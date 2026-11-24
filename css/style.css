@@ -556,3 +556,16 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
 
 /* Until the first complete render the page is hidden, so no half-built state shows (js/main.js: reveal). */
 html.booting .shell { visibility: hidden; }
+
+/* K: one pill in the style of the Most likely / Sample switch: minus, the number, plus. */
+.stepper { gap: 2px; padding: 2px; background: rgba(0,0,0,.04); border-radius: 4px; }
+.step-btn { width: 28px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: var(--text-2); cursor: pointer; padding: 0; }
+.step-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+.step-btn:hover { background: rgba(255,255,255,.7); color: var(--text); }
+.step-btn:active { background: #fff; box-shadow: 0 0 0 1px var(--btn-line); }
+.step-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.step-2 .stepper input, .stepper input { width: 34px; min-height: 26px; padding: 0; border: 0; border-radius: 3px; background: #fff; box-shadow: 0 0 0 1px var(--btn-line); font: 500 13px var(--mono); }
+@media (pointer: coarse), (max-width: 600px) {
+  .step-btn { width: 36px; height: 32px; }   /* finger-sized */
+  .step-2 .stepper input, .stepper input { width: 38px; min-height: 32px; font-size: 16px; }
+}
