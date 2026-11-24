@@ -441,6 +441,8 @@ function renderAllCards() {
   clearTimeout(allTimer);
   allTimer = setTimeout(() => {
     if (!S.pool) return;
+    const distinct = new Set(S.pool.samples.map((x) => x.text)).size;
+    if (!$('#all-list').open) { $('#all-meta').textContent = `${S.pool.samples.length} completions, ${distinct} distinct`; $('#all-cards').innerHTML = ''; return; }   // built only when opened
     const incl = inclusionOfText(), sel = new Set(S.sel.map((i) => S.pool.samples[i].text));
     const groups = new Map();
     S.pool.samples.forEach((s, i) => { const g = groups.get(s.text); if (g) g.n++; else groups.set(s.text, { i, n: 1 }); });
@@ -1073,6 +1075,7 @@ function wire() {
   $('#details-btn').onclick = () => setDrawer(!$('#details').classList.contains('open'));
   $('#details-toggle').onclick = () => { if (!wide.matches) setDrawer(!$('#details').classList.contains('open')); };
   $('#details-close').onclick = () => setDrawer(false);
+  $('#all-list').addEventListener('toggle', () => renderAllCards());
   $('#readout').addEventListener('click', (e) => {
     const v = e.target.closest('#fit-why');
     if (!v || !wide.matches) return;

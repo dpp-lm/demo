@@ -53,11 +53,14 @@
       <span id="subset-meta" class="note"></span>
     </div>
     <ol id="selected" class="cards" aria-label="Selected subset"></ol>
-    <div class="subset-head all-head">
-      <h2>All completions</h2>
-      <span id="all-meta" class="note"></span>
-    </div>
-    <ol id="all-cards" class="cards" aria-label="All completions"></ol>
+    <!-- All completions: collapsed by default, so the first view tells the simple story. -->
+    <details class="all-list" id="all-list">
+      <summary class="subset-head all-head">
+        <h2>All completions</h2>
+        <span id="all-meta" class="note"></span>
+      </summary>
+      <ol id="all-cards" class="cards" aria-label="All completions"></ol>
+    </details>
   </aside>
 
   <!-- Prompt and subset controls: docked at the bottom on wide screens. -->

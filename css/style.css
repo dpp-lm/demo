@@ -532,7 +532,13 @@ input[type=range] { width: 100%; accent-color: var(--ink); margin: 4px 0 0; }
 .viewmenu[open] { z-index: 60; }
 
 /* All completions: in the rail under the selected subset, in the same card style. */
-.all-head { margin-top: 18px; }
+.all-list { margin-top: 18px; }
+.all-list > summary { list-style: none; cursor: pointer; }
+.all-list > summary::-webkit-details-marker { display: none; }
+.all-list > summary h2::before { content: "▸ "; font-size: .7em; vertical-align: .12em; color: var(--muted); }
+.all-list[open] > summary h2::before { content: "▾ "; }
+.all-list > summary:hover h2 { color: var(--text-2); }
+.all-list[open] > summary { margin-bottom: 10px; }
 #all-cards .card { padding: 9px 12px 8px; }
 #all-cards .card .txt { font-size: 15.5px; }
 
