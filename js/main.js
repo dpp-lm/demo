@@ -346,7 +346,7 @@ function kabsch(P, Q, d) {
 function render() {
   const distinct = new Set(S.pool.samples.map((x) => x.text)).size;
   const N = S.pool.samples.length;
-  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? `drag to rotate · ${matchMedia('(pointer: coarse)').matches ? 'two fingers to move' : 'Shift-drag to move'} · tap a point to read it` : 'tap a point to read it'}`;
+  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate · ' : ''}${matchMedia('(pointer: coarse)').matches ? 'two fingers to move' : 'Shift-drag to move'} · tap a point to read it`;
   $('#subset-meta').textContent = `K = ${S.sel.length} · ${S.mode === 'map' ? 'most likely (greedy)' : 'sampled'} at T = ${fmtT(S.T)} · target ${TARGETS[S.target].short}`;
   $('#T-out').textContent = fmtT(S.T);
   plot.update();
@@ -550,10 +550,9 @@ class Plot2D {
   update() {
     if (!this.svg) this.build();
     const N = S.logp.length, dims = S.dims, H = this.H;
-    const scaled = $('#scale-toggle').checked;
     const sel = new Set(S.sel);
     const idx = d3.range(N);
-    const posD = idx.map((i) => (dims === 1 ? [this.dataXY(i, scaled ? S.c[i] : 1)[0], this.dataXY(i, 1)[1]] : this.dataXY(i, scaled ? S.c[i] : 1)));
+    const posD = idx.map((i) => (dims === 1 ? [this.dataXY(i, S.c[i])[0], this.dataXY(i, 1)[1]] : this.dataXY(i, S.c[i])));
     const vol = dims === 2 && S.sel.length === 2 && S.proj.fitted;
     const volD = vol ? parallelotope([0, 0], S.sel.map((i) => posD[i])) : { faces: [], corners: [] };
     this.fit([...posD, ...volD.corners.map((c) => c.p)]);
@@ -614,7 +613,7 @@ const plot = {
         });
       }
       this.p3.update({
-        coords: S.proj.coords, c: S.c, sel: S.sel, scaled: $('#scale-toggle').checked, fitted: S.proj.fitted,
+        coords: S.proj.coords, c: S.c, sel: S.sel, fitted: S.proj.fitted,
         color: () => css('--ink'), selColor: () => css('--accent'), accent: css('--accent'), text: css('--text-2'), muted: css('--muted'), bg: css('--surface'),
       });
     } else this.p2.update();
@@ -1035,7 +1034,6 @@ function wire() {
   $('#K').onchange = () => setK($('#K').value);
   $('#K-minus').onclick = () => setK(S.K - 1);
   $('#K-plus').onclick = () => setK(S.K + 1);
-  $('#scale-toggle').onchange = () => { plot.update(); renderLabels(); };
   $('#label-toggle').onchange = () => renderLabels();
   // Pop-up panels close on an outside click or Escape.
   const pops = ['#viewmenu', '#specmenu', '#adv', '#exmenu'];

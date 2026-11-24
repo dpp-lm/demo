@@ -87,10 +87,6 @@ export const EXPLAIN = {
     title: 'Sampling temperature T′',
     body: `<p>Controls how the completions are generated: every next-token distribution is raised to the power $1/T'$ and renormalized. $T' = 1$ samples the model as it is. Higher $T'$ gives more varied but less coherent text, which is why diversity comes from choosing the subset afterwards instead.</p>`,
   },
-  scale: {
-    title: 'Scale points by quality',
-    body: `<p>When on, each point sits at length $\\sqrt{\\kappa(y)}$ along its embedding direction (relative to the longest): the same arrows the score uses, so changing $T$ grows or shrinks them. When off, every completion is drawn at unit length, showing directions only.</p>`,
-  },
   pca: {
     title: 'Spectrum',
     body: `<p>The completions' embeddings have hundreds of dimensions. The bars show how much of their spread lies along each of the first principal axes (uncentred, so arrows start at the origin, where volume is measured from). A pool whose spread sits in very few axes has little room for diverse subsets.</p>

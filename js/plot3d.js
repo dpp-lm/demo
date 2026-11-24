@@ -136,7 +136,7 @@ export class Plot3D {
     let m = 0;
     for (const c of o.coords) m = Math.max(m, Math.hypot(...c));
     if (o.sel.length >= 2 && o.sel.length <= 3) {
-      const far = [0, 1, 2].map((d) => o.sel.reduce((acc, i) => acc + o.coords[i][d] * (o.scaled ? o.c[i] : 1), 0));
+      const far = [0, 1, 2].map((d) => o.sel.reduce((acc, i) => acc + o.coords[i][d] * o.c[i], 0));
       m = Math.max(m, Math.hypot(...far));
     }
     this.scale = 1 / (m || 1);
@@ -156,7 +156,7 @@ export class Plot3D {
       this.camera.position.applyAxisAngle(Y, -this.turnLeft); upd();
     }
     this.targets = o.coords.map((c, i) => {
-      const f = (o.scaled ? o.c[i] : 1) * s;
+      const f = o.c[i] * s;
       return new THREE.Vector3(c[0] * f, c[1] * f, c[2] * f);
     });
     if (!this.current || this.current.length !== N) this.current = this.targets.map((v) => v.clone());
@@ -295,7 +295,7 @@ export class Plot3D {
   // The rectangle on screen that holds everything drawn (the points and, for K ≤ 3, every corner of the
   // spanned volume) as the view turns by up to `turn` about the vertical axis from where it is now.
   frameFor(o, s, turn) {
-    const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
+    const pts = o.coords.map((c, i) => c.map((x) => x * o.c[i] * s));
     pts.push([0, 0, 0]);
     const sel = o.sel.length >= 2 && o.sel.length <= 3 ? o.sel : [];
     for (let mask = 3; mask < 1 << sel.length; mask++) {
@@ -396,7 +396,7 @@ export class Plot3D {
   // Everything drawn (points, and for K ≤ 3 every corner of the volume), in screen coordinates
   // relative to the origin, for the current view.
   projected(o, s) {
-    const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
+    const pts = o.coords.map((c, i) => c.map((x) => x * o.c[i] * s));
     const sel = o.sel.length >= 2 && o.sel.length <= 3 ? o.sel : [];
     for (let mask = 3; mask < 1 << sel.length; mask++) {
       if ((mask & (mask - 1)) === 0) continue;
