@@ -53,6 +53,10 @@ routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T�
 - Default T = T′ for the Global target (the only point where pool and target match: θ̂ at its floor for
   T′ = 1); T = ∞ is the matched point for Global and local. Today's T = 20 sits on the poor-fit plateau.
 
+## Later: a "follow the action" camera (decide later)
+- Today the view is set once, when the points are first drawn (axes, zoom, framing), and then only the
+  visitor moves it. An optional mode could re-frame or re-fit the axes as the selection changes.
+
 ## Later: the bouquet (all completions point one way from the origin)
 - Completions of one prompt share a large common direction (cosines 0.5–0.9; on the story prompt the
   first direction carries 52% of the spectrum), so the cloud is a narrow bouquet away from the origin.

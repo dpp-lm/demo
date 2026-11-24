@@ -273,14 +273,17 @@ function recompute({ newDraw = true } = {}) {
   // property of the completion, so the points do not move when the mode changes.
   const m = Math.max(...lk);
   S.c = lk.map((s) => Math.exp(0.5 * (s - m)));
-  S.proj = project();
+  // The axes are set once per pool (and per 1-D/2-D/3-D choice), when the points are first drawn, and
+  // then left alone: the selection, the mode, T and K never turn them.
+  if (!S.proj || S.proj.pool !== S.pool) S.proj = project();
   render();
 }
 
-// Axes. For K ≤ 3 (and K ≤ the drawn dimensions) the first K axes span the selected vectors, so the
-// drawn parallelepiped is exactly the volume being scored; the remaining axes are the main directions
-// of what is left. Otherwise plain uncentred PCA. Computed from G alone. Successive views are aligned
-// by a rotation (Kabsch) so the plot turns smoothly instead of jumping.
+// Axes, computed once when the points are first drawn. For K ≤ 3 (and K ≤ the drawn dimensions) the
+// first K axes span the completions selected at that moment, so the drawn parallelepiped is exactly the
+// volume being scored for that selection (for later selections it is the volume's shadow on these
+// axes); the remaining axes are the main directions of what is left. Otherwise plain uncentred PCA.
+// Computed from G alone.
 function project() {
   const N = S.logp.length, G = S.G, sel = S.sel, k = sel.length;
   const vals = S.eig.values, vecs = S.eig.vectors;
@@ -320,7 +323,7 @@ function project() {
   // Align to the previous view of the same pool with a proper rotation of the drawn dimensions.
   const prev = S.proj?.pool === S.pool ? S.proj.coords : null;
   if (prev) coords = kabsch(coords, prev, S.dims);
-  return { coords, frac, fitted, pool: S.pool };
+  return { coords, frac, fitted, k, pool: S.pool };
 }
 function kabsch(P, Q, d) {
   // Rotation R (d×d, det +1) minimising Σ‖R p_i − q_i‖² over the first d coordinates.
@@ -368,7 +371,7 @@ function renderSpectrum() {
   el.innerHTML = `<p class="sp-head"><span class="fn">Spectrum<button type="button" class="xbtn" data-x="pca" aria-label="About the spectrum">?</button></span></p>` +
     f.map((v, k) => `<div class="bar"><span>${k + 1}</span><span class="fill" style="width:${(100 * v) / max}%"></span><span class="pv">${(100 * v).toFixed(1)}%</span></div>`).join('') +
     `<p class="sp-dims"><span class="lab">Drawn in</span><span class="pick" role="group" aria-label="Dimensions">${[1, 2, 3].map((d) => `<button type="button" class="pick-btn" data-dims="${d}" aria-pressed="${S.dims === d}">${d}-D</button>`).join('')}</span></p>` +
-    `<p class="sp-note">${S.proj.fitted ? 'Axes 1–' + S.sel.length + ' of the plot span the selected completions; the rest show the main remaining directions.' : 'The plot shows the first principal axes.'}</p>`;
+    `<p class="sp-note">${S.proj.fitted ? 'Axes 1–' + S.proj.k + ' of the plot span the completions selected when it was drawn; the rest show the main remaining directions.' : 'The plot shows the first principal axes.'}</p>`;
   el.querySelectorAll('[data-dims]').forEach((b) => (b.onclick = () => setDims(+b.dataset.dims)));
 }
 function setDims(k) { S.dims = k; S.proj = null; plot.reset(); S.proj = project(); render(); }
@@ -494,7 +497,7 @@ function parallelotope(O, V) {
 
 class Plot2D {
   constructor(el) { this.el = el; this.svg = null; }
-  reset() { this.el.innerHTML = ''; this.svg = null; this.zt = d3.zoomIdentity; }
+  reset() { this.el.innerHTML = ''; this.svg = null; this.zt = d3.zoomIdentity; this.bx = null; }
   build() {
     const el = this.el;
     this.W = el.clientWidth || 600;
@@ -565,7 +568,7 @@ class Plot2D {
     const posD = idx.map((i) => (dims === 1 ? [this.dataXY(i, S.c[i])[0], this.dataXY(i, 1)[1]] : this.dataXY(i, S.c[i])));
     const vol = dims === 2 && S.sel.length === 2 && S.proj.fitted;
     const volD = vol ? parallelotope([0, 0], S.sel.map((i) => posD[i])) : { faces: [], corners: [] };
-    this.fit([...posD, ...volD.corners.map((c) => c.p)]);
+    if (!this.bx) this.fit([...posD, ...volD.corners.map((c) => c.p)]);   // framed once, when first drawn
     Object.assign(this, { posD, volD, sel });
     this.draw(true);
   }
@@ -612,7 +615,7 @@ class Plot2D {
     for (let v = Math.ceil(ya / step) * step; v <= yb; v += step) lines.push([this.x(-R), this.y(v), this.x(R), this.y(v)]);
     this.gGrid.selectAll('line').data(lines).join('line')
       .attr('x1', (d) => d[0]).attr('y1', (d) => d[1]).attr('x2', (d) => d[2]).attr('y2', (d) => d[3])
-      .attr('stroke', css('--text-2')).attr('stroke-opacity', 0.3).attr('stroke-width', 1).attr('shape-rendering', 'crispEdges');
+      .attr('stroke', css('--text-2')).attr('stroke-opacity', 0.13).attr('stroke-width', 1);   // as soft as the 3-D floor
   }
   highlight(i) {
     if (!this.svg) return;

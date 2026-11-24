@@ -83,7 +83,7 @@ export class Plot3D {
     // Where the origin sits on screen, as a fraction of the open area (0..1 across, 0..1 down). Fixed
     // until the visitor moves the picture, so the view visibly turns about the origin.
     this.anchor = { ax: 0.5, ay: 0.5 };
-    this.home = { ax: 0.5, ay: 0.5 };   // the default place, which sets the zoom; panning only moves the picture
+    this.home = { ax: 0.5, ay: 0.5 };
     this.installPan();
     this.group = new THREE.Group();
     this.scene.add(this.group);
@@ -122,7 +122,6 @@ export class Plot3D {
       requestAnimationFrame(loop);
       this.tick();
       this.controls.update();
-      this.followFit();   // after the camera moved this frame, so the fit never lags it
       this.shadeDepth();
       this.renderer.render(this.scene, this.camera);
     };
@@ -132,18 +131,17 @@ export class Plot3D {
   update(o) {
     this.o = o;
     const N = o.coords.length;
-    // Fit points and (for K ≤ 3) the far corner of the spanned volume inside the unit ball.
-    let m = 0;
-    for (const c of o.coords) m = Math.max(m, Math.hypot(...c));
-    if (o.sel.length >= 2 && o.sel.length <= 3) {
-      const far = [0, 1, 2].map((d) => o.sel.reduce((acc, i) => acc + o.coords[i][d] * o.c[i], 0));
-      m = Math.max(m, Math.hypot(...far));
+    // The scene's scale, set once when the points are first drawn and then left alone: later changes of
+    // the selection, the mode, T or K never rescale it (the visitor's view is theirs).
+    if (this.scale == null) {
+      let m = 0;
+      for (const c of o.coords) m = Math.max(m, Math.hypot(...c));
+      this.scale = 1 / (m || 1);
     }
-    this.scale = 1 / (m || 1);
     const s = this.scale;
-    // Placed once, looking at the origin, and framed so that the drawing (points, vectors, volume) is
-    // centred and fills the plot over the opening turn; the origin sits wherever that puts it. Framed
-    // again, smoothly, when the view switches between fitted axes (K ≤ 3) and principal axes.
+    // Placed and framed once, when the points are first drawn: looking at the origin, with the drawing
+    // centred in the open area and filling it at the angle where the opening turn ends. After that, only
+    // the visitor moves the view.
     if (!this.camSet) {
       this.camSet = true;
       this.startView();
@@ -152,7 +150,8 @@ export class Plot3D {
       const Y = new THREE.Vector3(0, 1, 0), upd = () => { this.camera.lookAt(0, 0, 0); this.camera.updateMatrixWorld(); };
       this.camera.position.applyAxisAngle(Y, this.turnLeft); upd();
       this.placeOrigin(o, s);
-      this.followFit(true);   // also sets the size dots and rods are drawn at for this frame
+      this.fitOnce();   // also sets the size dots and rods are drawn at for this frame
+      this.initial = { view: { ...this.view }, pos: this.camera.position.clone() };
       this.camera.position.applyAxisAngle(Y, -this.turnLeft); upd();
     }
     this.targets = o.coords.map((c, i) => {
@@ -326,11 +325,7 @@ export class Plot3D {
     const cv = this.renderer.domElement, touches = new Map();
     let drag = null;
     const perPx = () => (2 * this.view.h) / (this.camera.zoom * (this.el.clientHeight || 450));
-    const shift = (dx, dy) => {
-      const r = this.safeRect();
-      this.anchor.ax += dx / (r.R - r.L);
-      this.anchor.ay += dy / (r.B - r.T);
-    };
+    const shift = (dx, dy) => this.setView({ cx: this.view.cx - dx * perPx(), cy: this.view.cy + dy * perPx(), h: this.view.h });
     const stopTurn = () => (this.turnLeft = 0);
     cv.addEventListener('pointerdown', (e) => {
       stopTurn();
@@ -353,7 +348,12 @@ export class Plot3D {
     cv.addEventListener('contextmenu', (e) => e.preventDefault());
     cv.addEventListener('dblclick', () => {
       if (!this.o) return;
-      stopTurn(); this.startView(); this.placeOrigin(this.o, this.scale);
+      // Back to the view as it was first drawn.
+      stopTurn();
+      if (!this.initial) return;
+      this.camera.position.copy(this.initial.pos); this.camera.zoom = 1;
+      this.controls.target.set(0, 0, 0); this.camera.lookAt(0, 0, 0);
+      this.setView(this.initial.view);
     });
   }
 
@@ -366,12 +366,10 @@ export class Plot3D {
     this.home = { ax: (ox - r.L) / (r.R - r.L), ay: (oy - r.T) / (r.B - r.T) };
     this.anchor = { ...this.home };
   }
-  // Keep everything drawn inside the open area at every angle, with the origin fixed on screen: the
-  // scale is the largest for which every point and every corner of the volume lies inside the open
-  // area (with an 8% margin). The canvas covers the whole window, so nothing is ever cut off; the
-  // fit only keeps the drawing clear of the floating panels. Followed smoothly; dots, vectors and
-  // arrowheads keep their size on screen.
-  followFit(now = false) {
+  // The initial framing (called once, when the points are first drawn): the largest zoom that keeps
+  // every point and every corner of the volume inside the open area, with the origin where placeOrigin
+  // put it. After this the view belongs to the visitor.
+  fitOnce(now = true) {
     if (!this.o || !this.camSet) return;
     const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, r = this.safeRect(), m = 1.08;
     // The zoom: the largest that keeps everything inside the open area with the origin at its default
