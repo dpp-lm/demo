@@ -11,7 +11,7 @@ proxy under `/dpp_api/`. It runs on one 24 GB GPU: a resident Qwen3 14B AWQ engi
 | `GET /health` | `{"status":"ok"}`; 503 when an engine fails `check_health()`; `starting` during start-up |
 | `GET /status` | models and their state (`ready`, `loading`, `cold`, `unavailable`), embedders, limits the page needs |
 | `POST /sample` | draw `n` completions from the annealed proposal q = p_{T'} and return log p, log q, embeddings |
-| `POST /embed` | embed existing completions after the fact (`minilm`, `qwen3-emb`, `mpnet`, or the LM's own states `own`) |
+| `POST /embed` | embed existing completions after the fact (`minilm`, `qwen3-emb`, `qwen3-emb-4b`, `mpnet`, or the LM's own states `own`) |
 | `POST /embed_own` | owner only: teacher-force completions and return uncentered own states |
 | `POST /describe` | name 2 to 8 groups of completions in a few words each, with the resident model |
 | `GET /queue?id=<request_id>` | `{"state": "waiting"\|"running"\|"unknown", "ahead": int}` for a request that carried a `request_id` |
@@ -99,6 +99,14 @@ StandardError=append:%h/dpp-sampler/logs/server.log
 WantedBy=default.target
 ```
 
+## Cross-origin use
+
+`server.py` adds `CORSMiddleware` for the origin `https://timvieira.github.io` (methods GET and POST, header `content-type`). Same-origin requests carry no Origin header and are unaffected. To allow another origin, change `allow_origins` in `server.py` and restart.
+
+## Embedders
+
+`minilm` (default), `qwen3-emb` (Qwen3-Embedding-0.6B, D = 1024), `qwen3-emb-4b` (Qwen3-Embedding-4B, last-token pooling, float16, batch 8, D = 2560), `mpnet`, and `own`. Preload it with `DPP_PRELOAD=qwen3-emb,qwen3-emb-4b` only together with `DPP_MODELS=qwen3-14b`, because the slot models need that memory. With the 14B resident and both Qwen embedders preloaded (used + free = 24125 MiB), idle free memory was 2,059 to 2,279 MiB. A 200 x 256 `/sample` with `qwen3-emb-4b` left at least 1,483 MiB free (generate 43.0 s, embed 8.6 s), and `/embed` of 200 texts of 1,990 characters left at least 919 MiB (14.7 s).
+
 ## Environment variables
 
 | Variable | Default | Meaning |
@@ -109,6 +117,7 @@ WantedBy=default.target
 | `DPP_OWN_EMB` | off | `1` enables own states (plugin, `own_emb/<key>/`, `/embed` with `own`) |
 | `DPP_OWN_DIR` | `./own_emb` | where the plugin reads `P.safetensors`, `meta.json`, `mu.npy` per model |
 | `DPP_PRELOAD` | `qwen3-emb` | embedders loaded at start-up (comma list, empty for none) |
+| `DPP_MODELS` | all | comma list of model keys to serve. It must include the resident `qwen3-14b` and only known keys, or start-up fails. Other keys get 400 "Unknown model" and no slot engine loads. Unset serves every model. |
 | `DPP_EMBEDDER` | `minilm` | embedder used when a request names none |
 | `DPP_RUNS_PER_HOUR` / `DPP_EMBEDS_PER_HOUR` | 300 / 1200 | global ceilings |
 | `DPP_LOGQ_CHECK` | off | `1` makes the plugin cross-check log q (slow, for tests) |

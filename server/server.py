@@ -30,6 +30,7 @@ import uuid
 import numpy as np
 import torch
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from huggingface_hub import snapshot_download
 from transformers import AutoModel, AutoTokenizer, GenerationConfig
 from vllm import SamplingParams
@@ -75,10 +76,13 @@ MODELS["gemma-2-9b"]["ended_tail"] = " \n"   # /embed: stored Gemma 2 text lost 
 for _m in MODELS.values():
     _m.setdefault("chat", {})
     _m.setdefault("slot", "small")
+# DPP_MODELS=key1,key2 serves only these models (must include the resident key; unset = all). Others get a 400 and no slot engine loads.
+MODELS = G.filter_models(MODELS, os.environ.get("DPP_MODELS"), RESIDENT_KEY)
 DEFAULT_MODEL = RESIDENT_KEY
 EMBEDDERS = {
     "minilm": {"repo": "sentence-transformers/all-MiniLM-L6-v2", "pool": "mean", "dtype": torch.float32, "batch": 32},
     "qwen3-emb": {"repo": "Qwen/Qwen3-Embedding-0.6B", "pool": "last", "dtype": torch.float16, "batch": 8},
+    "qwen3-emb-4b": {"repo": "Qwen/Qwen3-Embedding-4B", "pool": "last", "dtype": torch.float16, "batch": 8},
     "mpnet": {"repo": "sentence-transformers/all-mpnet-base-v2", "pool": "mean", "dtype": torch.float16, "batch": 8},
 }
 DEFAULT_EMBEDDER = os.environ.get("DPP_EMBEDDER", "minilm")
@@ -395,6 +399,10 @@ async def lifespan(app):
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+# Browser pages on GitHub Pages call this API cross-origin. Same-origin requests carry no Origin header and are untouched;
+# preflights (OPTIONS with Access-Control-Request-Method) are answered here, before routing, limits and the 415 check.
+app.add_middleware(CORSMiddleware, allow_origins=["https://timvieira.github.io"], allow_methods=["GET", "POST"],
+                   allow_headers=["content-type"])
 
 
 def die(reason):

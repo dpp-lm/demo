@@ -106,7 +106,15 @@ async function loadCatalog() {
 const sortCatalog = () => CATALOG.models.sort((a, b) => (a.params ?? 1e9) - (b.params ?? 1e9));
 // One place decides which models may be selected, shown or run: all of them in expert mode, else those with tier "main".
 // Every assignment to S.model goes through setModel, which maps a disallowed key to the default (Qwen3 14B).
-const allowedKeys = () => visibleModels(CATALOG.models, S.expert).map((m) => m.key);
+// Models listed in the picker: the visible ones that a reachable backend serves (all visible ones while no backend has answered).
+function listedModels() {
+  const vis = visibleModels(CATALOG.models, S.expert);
+  const up = BACKENDS.filter((b) => usableBackend(b) && b.caps.up);
+  if (!up.length) return vis;
+  const served = vis.filter((m) => up.some((b) => b.caps.models.some((x) => x.key === m.key)));
+  return served.length ? served : vis;
+}
+const allowedKeys = () => listedModels().map((m) => m.key);
 const setModel = (key) => { S.model = guardModel(key, allowedKeys()); return S.model; };
 // In-browser running is an expert option the user turns on themselves; a saved flag is ignored in default mode.
 const browserOn = () => S.expert && S.browser;
@@ -1486,8 +1494,12 @@ async function refreshServer() {
   await Promise.all(list.map((b) => b.status()));
   let added = false;
   for (const b of list) for (const m of b.caps.models) if (!CATALOG.models.some((c) => c.key === m.key)) { CATALOG.models.push({ key: m.key, name: m.name ?? m.key, params: m.params, repo: m.repo }); added = true; }
-  if (added) { sortCatalog(); buildPickers(); }
+  if (added) sortCatalog();
+  const g = guardModel(S.model, allowedKeys());
+  if (g !== S.model) pickModel(g, { auto: true });
+  buildPickers();
   updatePickers();
+  updateBanner();
   return SERVER.ok;
 }
 async function initBackends() {
@@ -1545,7 +1557,7 @@ function chipState(m) {
 // The pills in the prompt box: language model and embedder. Expert mode lists all models, smallest first.
 function buildPickers() {
   const sel = $('#lm-select');
-  sel.innerHTML = visibleModels(CATALOG.models, S.expert).map((m) => `<option value="${escapeHtml(m.key)}">${escapeHtml(m.name)}</option>`).join('');
+  sel.innerHTML = listedModels().map((m) => `<option value="${escapeHtml(m.key)}">${escapeHtml(m.name)}</option>`).join('');
   sel.onchange = () => { if (sel.options[sel.selectedIndex]?.disabled) { sel.value = S.model; return; } pickModel(sel.value); };
   // The select must always show S.model: if it is not among the options (it cannot be, after the guard), show it rather than the first option.
   if (!sel.querySelector(`option[value="${S.model}"]`)) sel.insertAdjacentHTML('afterbegin', `<option value="${escapeHtml(S.model)}" disabled>${escapeHtml(info(S.model).name)}</option>`);
@@ -2036,7 +2048,7 @@ function applyExpert(on, { save = true } = {}) {
 }
 function updateBanner() {
   const el = $('.wip');
-  const vis = visibleModels(CATALOG.models, S.expert), served = vis.filter((m) => serverBackends().some((b) => b.caps.up && b.caps.models.some((x) => x.key === m.key)));
+  const vis = listedModels(), served = vis.filter((m) => serverBackends().some((b) => b.caps.up && b.caps.models.some((x) => x.key === m.key)));
   const params = vis.map((m) => m.params).filter(Number.isFinite), sz = (x) => `${+x.toFixed(1)}B`;
   let where;
   if (!served.length) where = 'Models run in your browser.';

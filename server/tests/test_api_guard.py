@@ -135,4 +135,17 @@ open(p, "w").write("b" * 2000)
 check("big log rotated", G.rotate_log(p, 1000) is True and os.path.getsize(p) == 0 and open(p + ".1").read() == "b" * 2000)
 open(p, "w").write("c" * 2000); G.rotate_log(p, 1000)
 check("rotation shifts old files", open(p + ".2").read() == "b" * 2000 and open(p + ".1").read() == "c" * 2000)
+# model allowlist (DPP_MODELS)
+M = {"qwen3-14b": 1, "a": 2, "b": 3}
+check("allowlist unset keeps all", G.filter_models(M, None, "qwen3-14b") == M)
+check("allowlist empty keeps all", G.filter_models(M, "  ", "qwen3-14b") == M)
+check("allowlist copies the dict", G.filter_models(M, None, "qwen3-14b") is not M)
+check("allowlist trims to one key", list(G.filter_models(M, "qwen3-14b", "qwen3-14b")) == ["qwen3-14b"])
+check("allowlist keeps source order and strips spaces", list(G.filter_models(M, "b, qwen3-14b", "qwen3-14b")) == ["qwen3-14b", "b"])
+for bad_allow in ("a", "qwen3-14b,zzz"):
+    try:
+        G.filter_models(M, bad_allow, "qwen3-14b"); r = None
+    except ValueError as e:
+        r = str(e)
+    check(f"allowlist {bad_allow!r} rejected", r is not None, r)
 print("ALL PASS" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

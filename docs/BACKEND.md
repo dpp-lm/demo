@@ -21,7 +21,7 @@ Signed-in backends (`auth: "hf"`) are used only when the page is opened with `?c
 
 ## The `http` kind
 
-The server needs CORS for the page's origin: `Access-Control-Allow-Origin`, and `authorization` and `content-type` in `Access-Control-Allow-Headers` for `GET` and `POST`.
+The server needs CORS for the page's origin: `Access-Control-Allow-Origin`, and `authorization` and `content-type` in `Access-Control-Allow-Headers` for `GET` and `POST`. The demo server (`server/server.py`) allows only `https://timvieira.github.io` and the headers `content-type`; see `server/README.md`, "Cross-origin use".
 
 ### `GET {url}/status`
 
@@ -63,7 +63,7 @@ Request (JSON):
 | `max_new_tokens` | integer | Cap on generated tokens. |
 | `seed` | integer | Random seed. A new seed gives new samples. |
 | `model` | string | Optional. Sent only to a multi-model server. |
-| `embedder` | string | Optional. Sent when the backend offers several embedders or the requested one is not its first. The deployed server accepts `minilm`, `qwen3-emb`, `mpnet`, and `own` (only for models in `ownModels`). |
+| `embedder` | string | Optional. Sent when the backend offers several embedders or the requested one is not its first. The deployed server accepts `minilm`, `qwen3-emb`, `qwen3-emb-4b`, `mpnet`, and `own` (only for models in `ownModels`). |
 | `request_id` | string | Optional, 1 to 64 characters of `A-Za-z0-9_-`. Lets the page ask `GET /queue?id=` where the request stands. 400 if malformed, 409 if another unfinished request uses it. |
 
 The deployed server runs generating work through a FIFO queue, one running job per engine (the resident model and the swappable slot model run side by side). A request waits in the queue before it runs, so the response can take a long time to start; the server answers 503 if the wait exceeds 10 minutes and 429 when 16 jobs are already waiting. A client may have one `/sample` request queued or running at a time (a second gets 429). If the client disconnects while waiting, the job is dropped.

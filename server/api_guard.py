@@ -118,6 +118,23 @@ def embedder_list(v, known, max_len):
 
 # ---------------------------------------------------------------- clients
 
+def filter_models(models, allow, resident_key):
+    """Restrict `models` (key -> config) to the comma-separated keys in `allow` (the DPP_MODELS setting).
+
+    None or an empty string keeps every model. The allowlist must name only known keys and must include
+    `resident_key`; otherwise ValueError (the service refuses to start rather than serve a wrong set).
+    Returns a new dict in the original order."""
+    if allow is None or not allow.strip():
+        return dict(models)
+    keys = [k.strip() for k in allow.split(",") if k.strip()]
+    unknown = [k for k in keys if k not in models]
+    if unknown:
+        raise ValueError(f"DPP_MODELS names unknown model keys {unknown}; known keys: {sorted(models)}")
+    if resident_key not in keys:
+        raise ValueError(f"DPP_MODELS must include the resident model {resident_key!r}")
+    return {k: v for k, v in models.items() if k in keys}
+
+
 def client_key(peer, real_ip):
     """Limit key of a request. Behind Caddy (peer is loopback) the visitor address comes from X-Real-IP; without a valid one all
     such traffic shares the key 'shared' (limits then act as global ones). IPv6 is keyed on its /64."""
