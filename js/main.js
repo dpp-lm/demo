@@ -346,7 +346,7 @@ function kabsch(P, Q, d) {
 function render() {
   const distinct = new Set(S.pool.samples.map((x) => x.text)).size;
   const N = S.pool.samples.length;
-  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate · tap a point to read it' : 'tap a point to read it'}`;
+  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? `drag to rotate · ${matchMedia('(pointer: coarse)').matches ? 'two fingers to move' : 'Shift-drag to move'} · tap a point to read it` : 'tap a point to read it'}`;
   $('#subset-meta').textContent = `K = ${S.sel.length} · ${S.mode === 'map' ? 'most likely (greedy)' : 'sampled'} at T = ${fmtT(S.T)} · target ${TARGETS[S.target].short}`;
   $('#T-out').textContent = fmtT(S.T);
   plot.update();
