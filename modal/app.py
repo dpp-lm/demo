@@ -82,7 +82,7 @@ class Sampler:
         self.model = load_awq_unpacked(MODEL_REPO, "cuda")
         # float32 throughout, so the similarity matrix is as accurate as the embedder allows.
         self.embedder = SentenceTransformer(EMBEDDER, device="cuda", model_kwargs={"dtype": torch.float32},
-                                            tokenizer_kwargs={"padding_side": "left"})
+                                            processor_kwargs={"padding_side": "left"})
 
     @modal.exit()
     def settle(self):
@@ -373,10 +373,18 @@ def smoke():
     """One small GPU run, for checking a deploy: modal run modal/app.py::smoke"""
     t = time.time()
     pool = Sampler().sample_pool.remote("Name a color in one word.", 6, 1.0, 16, 0)
-    import base64, numpy as np
-    G = np.frombuffer(base64.b64decode(pool["G"]), dtype="<f4").reshape(pool["N"], pool["N"])
-    print(f"{pool['N']} samples, D={pool['D']}, G {G.shape}, diag {G.diagonal().min():.4f}..{G.diagonal().max():.4f}, "
-          f"min eigenvalue {np.linalg.eigvalsh(G.astype(np.float64)).min():.2e}, {time.time() - t:.0f}s including start-up")
+    import base64, struct
+    n = pool["N"]
+    G = struct.unpack(f"<{n * n}f", base64.b64decode(pool["G"]))   # no numpy on the runner
+    diag = [G[i * n + i] for i in range(n)]
+    asym = max(abs(G[i * n + j] - G[j * n + i]) for i in range(n) for j in range(n))
+    assert n == 6 and all(d == 1.0 for d in diag) and asym == 0.0, (n, diag, asym)
+    E = Sampler().embed.remote([s["text"] for s in pool["samples"]])
+    G2 = struct.unpack(f"<{n * n}f", base64.b64decode(E["G"]))
+    same = max(abs(a - b) for a, b in zip(G, G2))
+    print(f"{n} samples, D={pool['D']}, G {n}x{n} symmetric with unit diagonal; embed() agrees to {same:.1e}; "
+          f"timing {pool['timing']}; {time.time() - t:.0f}s including start-up")
+    assert same < 1e-5
     for s in pool["samples"]:
         print(f"  logp={s['logp']:8.3f} logq={s['logq']:8.3f} n={s['nTokens']} ended={s['ended']} {s['text']!r}")
 
