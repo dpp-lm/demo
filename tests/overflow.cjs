@@ -28,7 +28,13 @@ const CONTAINERS = '.step, .stage, .composer, .chipmenu .menu, .viewmenu .menu, 
           for (const e of c.querySelectorAll('*')) {
             if (!vis(e) || e.closest('.labels, canvas, svg, .xpop') && e !== c) continue;
             if (e.closest('.chipmenu .menu, .viewmenu .menu') && !c.matches('.chipmenu .menu, .viewmenu .menu') && c.contains(e.closest('.chipmenu .menu, .viewmenu .menu'))) continue; // pop-up menus may extend beyond their anchor
-            const r = e.getBoundingClientRect();
+            // What is visible: the box, cut by any ancestor (inside c) that clips its overflow.
+            const r = e.getBoundingClientRect().toJSON();
+            for (let a = e.parentElement; a && a !== c; a = a.parentElement) {
+              if (getComputedStyle(a).overflowX === 'visible' && getComputedStyle(a).overflowY === 'visible') continue;
+              const ar = a.getBoundingClientRect();
+              r.left = Math.max(r.left, ar.left); r.right = Math.min(r.right, ar.right); r.top = Math.max(r.top, ar.top); r.bottom = Math.min(r.bottom, ar.bottom);
+            }
             const d = Math.max(cr.left - r.left, r.right - cr.right, cr.top - r.top, r.bottom - cr.bottom);
             if (d > 0.5) out.push(`${name(e)} spills ${d.toFixed(1)}px out of ${name(c)}`);
           }
@@ -54,4 +60,5 @@ const CONTAINERS = '.step, .stage, .composer, .chipmenu .menu, .viewmenu .menu, 
   }
   console.log(problems ? `${problems} problems` : 'no spills');
   await b.close();
+  process.exitCode = problems ? 1 : 0;
 })();

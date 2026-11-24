@@ -76,13 +76,26 @@ export class Plot3D {
       m = Math.max(m, Math.hypot(...far));
     }
     this.scale = 1 / (m || 1);
-    if (!this.camSet) {
-      this.camSet = true;
-      const cx = o.coords.reduce((a, c) => a + c[0], 0) / N * this.scale;
-      this.controls.target.set(cx / 2, 0, 0);
-      this.camera.position.set(cx / 2 + 1.1, 0.8, 1.55);
-    }
     const s = this.scale;
+    if (!this.camSet) {
+      // Frame what is drawn (the points, the origin and the spanned volume), not the empty grid.
+      // Look down from 35°: a vector lying near the floor is foreshortened at most to sin 35° ≈ 0.57
+      // of its length as the view turns, so no selected vector can collapse onto the origin.
+      this.camSet = true;
+      const pts = o.coords.map((c, i) => c.map((x) => x * (o.scaled ? o.c[i] : 1) * s));
+      pts.push([0, 0, 0]);
+      if (o.sel.length >= 2 && o.sel.length <= 3) pts.push([0, 1, 2].map((d) => o.sel.reduce((a, i) => a + pts[i][d], 0)));
+      const lo = [0, 1, 2].map((d) => Math.min(...pts.map((p) => p[d]))), hi = [0, 1, 2].map((d) => Math.max(...pts.map((p) => p[d])));
+      const ctr = lo.map((x, d) => (x + hi[d]) / 2);
+      const r = Math.max(0.3, ...pts.map((p) => Math.hypot(p[0] - ctr[0], p[1] - ctr[1], p[2] - ctr[2])));
+      const el = (35 * Math.PI) / 180, az = (40 * Math.PI) / 180;
+      this.controls.target.set(...ctr);
+      this.camera.position.set(ctr[0] + 3 * Math.cos(el) * Math.sin(az), ctr[1] + 3 * Math.sin(el), ctr[2] + 3 * Math.cos(el) * Math.cos(az));
+      const W = this.el.clientWidth || 600, H = this.el.clientHeight || 450, a = W / H;
+      const h = 1.08 * r * Math.max(1, 1 / a);
+      Object.assign(this.camera, { left: -h * a, right: h * a, top: h, bottom: -h });
+      this.camera.updateProjectionMatrix();
+    }
     this.targets = o.coords.map((c, i) => {
       const f = (o.scaled ? o.c[i] : 1) * s;
       return new THREE.Vector3(c[0] * f, c[1] * f, c[2] * f);
@@ -108,7 +121,8 @@ export class Plot3D {
     grid.material.depthWrite = false;
     this.group.add(grid);
     // Points.
-    const sphere = new THREE.SphereGeometry(0.018, 12, 8);
+    // Radius tied to the zoom: about 2.5 px on a 450-px-tall plot, the same as the 2-D dots.
+    const sphere = new THREE.SphereGeometry(0.011 * this.camera.top, 10, 8);
     this.mesh = new THREE.InstancedMesh(sphere, new THREE.MeshLambertMaterial(), N);
     const sel = new Set(o.sel);
     for (let i = 0; i < N; i++) this.mesh.setColorAt(i, new THREE.Color(sel.has(i) ? o.selColor(i) : o.color(i)));

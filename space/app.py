@@ -243,6 +243,13 @@ def embed_on_gpu(texts, embedder=EMBEDDER_ID):
     return gram(texts)
 
 
+def _as_gr_error(e):
+    # ZeroGPU quota errors keep their own text, with no code; the page recognises them by "quota".
+    if "quota" in type(e).__name__.lower() or "quota" in str(e).lower():
+        return gr.Error(str(e))
+    return gr.Error(f"server: {type(e).__name__}: {e}")
+
+
 def sample_pool(prompt: str, model: str = "", n: int = 20, t_prime: float = 1.0,
                 max_new_tokens: int = 64, seed: int = 0):
     """Draw a pool with exact log p / log q and the similarity matrix G (docs/BACKEND.md).
@@ -253,6 +260,8 @@ def sample_pool(prompt: str, model: str = "", n: int = 20, t_prime: float = 1.0,
     prompt = (prompt or "").strip()
     if not prompt or len(prompt) > 2000:
         raise gr.Error("bad_request: The prompt must have 1 to 2000 characters.")
+    if n is None or max_new_tokens is None or t_prime is None or n != int(n) or max_new_tokens != int(max_new_tokens):
+        raise gr.Error("bad_request: n and max tokens must be whole numbers; T′ must be a number.")
     n, max_new_tokens, t_prime = int(n), int(max_new_tokens), float(t_prime)
     if not (2 <= n <= MAX_N and 8 <= max_new_tokens <= MAX_TOKENS and 0.2 <= t_prime <= 2.0):
         raise gr.Error(f"bad_request: Allowed: 2 ≤ n ≤ {MAX_N}, 8 ≤ max tokens ≤ {MAX_TOKENS}, 0.2 ≤ T′ ≤ 2.")
@@ -262,7 +271,7 @@ def sample_pool(prompt: str, model: str = "", n: int = 20, t_prime: float = 1.0,
         raise
     except Exception as e:  # pass the reason on to API callers instead of a bare "error"
         print(f"sample_pool failed: {type(e).__name__}: {e}", flush=True)
-        raise gr.Error(f"server: {type(e).__name__}: {e}")
+        raise _as_gr_error(e)
     repo = MODELS[model][0]
     return {
         "prompt": prompt, "model": repo, "modelName": repo.split("/")[-1], "embedder": EMBEDDER, "embedderId": EMBEDDER_ID,
@@ -285,7 +294,7 @@ def embed(texts, embedder: str = EMBEDDER_ID):
     except gr.Error:
         raise
     except Exception as e:
-        raise gr.Error(f"server: {type(e).__name__}: {e}")
+        raise _as_gr_error(e)
     return {"embedder": EMBEDDER, "embedderId": EMBEDDER_ID, "N": len(texts), "D": D, "G": G}
 
 
@@ -306,7 +315,12 @@ with gr.Blocks(title="Diverse sampling backend") as demo:
         max_new = gr.Slider(8, 256, value=48, step=8, label="Max tokens")
         seed = gr.Number(value=0, precision=0, label="Seed")
     out = gr.JSON(label="Pool")
-    gr.Button("Sample").click(sample_pool, [prompt, model, n, t_prime, max_new, seed], out, api_name="sample")
+    gr.Button("Sample").click(sample_pool, [prompt, model, n, t_prime, max_new, seed], out, api_name=False)
+    # The API takes unbounded numbers so that sample_pool, not the sliders, refuses values outside
+    # the limits, with a "bad_request: …" message (a slider's own bound error has no code).
+    n_api, t_api, max_api = gr.Number(visible=False), gr.Number(visible=False), gr.Number(visible=False)
+    gr.Button("Sample (API)", visible=False).click(sample_pool, [prompt, model, n_api, t_api, max_api, seed], out,
+                                                   api_name="sample")
     gr.Button("List models", visible=False).click(models, None, out, api_name="models")
     texts_in = gr.JSON(visible=False)
     emb_in = gr.Textbox(value=EMBEDDER_ID, visible=False)

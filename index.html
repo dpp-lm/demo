@@ -53,6 +53,8 @@
               <label class="field"><span class="lab">Samples N<button type="button" class="xbtn" data-x="N" aria-label="What is N?">?</button></span><input id="live-N" type="number" min="2" max="200" step="10" value="200" inputmode="numeric"></label>
               <label class="field"><span class="lab">Temp. T′<button type="button" class="xbtn" data-x="Tprime" aria-label="What is T′?">?</button></span><input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0" inputmode="decimal"></label>
               <label class="field"><span class="lab">Max tokens<button type="button" class="xbtn" data-x="maxtok" aria-label="What is max tokens?">?</button></span><input id="live-max" type="number" min="8" max="256" step="8" value="128" inputmode="numeric"></label>
+              <p class="menu-note limits" id="limits-note"></p>
+              <label class="field model-field"><span class="lab">Target quality<button type="button" class="xbtn" data-x="target" aria-label="What is the target quality?">?</button></span><select id="target"></select></label>
             </div>
           </details>
           <span class="grow"></span>
@@ -94,7 +96,6 @@
         <div id="plot" class="plot" aria-label="Projection of the completions' embeddings"></div>
         <div id="labels" class="labels" aria-hidden="true"></div>
       </div>
-      <div id="eigbars" class="eigbars"></div>
       <div id="inspect" class="inspect" aria-live="polite" hidden></div>
     </div>
     <div class="stage-foot">
@@ -103,7 +104,12 @@
         <span id="vol-hint" class="lg"></span>
       </div>
       <div id="readout" class="readout"></div>
+      <details class="viewmenu specmenu" id="specmenu">
+        <summary>Spectrum</summary>
+        <div class="menu" id="spectrum"></div>
+      </details>
     </div>
+    <p id="fit-note" class="fit-note" hidden></p>
     <div class="stage-bar">
       <span id="stage-note" class="note"></span>
       <details class="viewmenu" id="viewmenu">

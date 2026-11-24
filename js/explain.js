@@ -4,33 +4,31 @@
 export const EXPLAIN = {
   T: {
     title: 'Temperature T',
-    body: `<p>Each completion gets a quality score
-      $$\\kappa(y) = p(y)^{1/T},$$
-      where $p(y)$ is the model's probability of the whole completion.</p>
+    body: `<p>Each completion gets a quality score $\\kappa(y)$ from the model's probability $p(y)$ of the whole completion, sharpened or flattened by $T$ (see <b>Target quality</b> in the settings: by default $\\kappa(y) = p(y)^{1/T}$).</p>
       <ul>
         <li><b>Small $T$</b> exaggerates differences in likelihood, so the most likely completions win (quality).</li>
-        <li><b>Large $T$</b> flattens them: every completion counts about equally, and only how different they are matters (diversity).</li>
+        <li><b>Large $T$</b> flattens them; at the right end, $T = \\infty$, they count equally and only how different the completions are matters (diversity).</li>
       </ul>
-      <p>Drag it and watch the arrows in the plot grow and shrink.</p>`,
+      <p>One $T$ serves both <b>Most likely</b> and <b>Sample</b>. Sample is only reliable near $T = T'$; the <b>pool fit</b> under the plot says when it is not.</p>`,
   },
   subset: {
     title: 'How the subset is chosen',
-    body: `<p>Think of each completion as an arrow. Its <b>direction</b> is its meaning (the embedding $\\phi(y)$) and its <b>length</b> is its quality $\\sqrt{\\kappa(y)}$. A set $S$ scores the squared volume its arrows span:
+    body: `<p>Think of each completion as an arrow. Its <b>direction</b> is its meaning (the embedding $\\phi(y)$) and its <b>length</b> is $\\sqrt{\\kappa(y)}$. A set $S$ of $K$ completions scores the squared volume its arrows span:
       $$\\det \\mathbf L_S = \\Big(\\prod_{y\\in S}\\kappa(y)\\Big)\\,\\det\\!\\big(\\Phi_S^\\top \\Phi_S\\big).$$
       The volume is large when the arrows are long (likely completions) and point different ways (different meanings), and zero when two are the same. This is a determinantal point process (DPP).</p>
-      <p><b>Most likely</b> picks the set with the largest volume, adding one completion at a time. Exact search is NP-hard; the greedy answer is within a factor $(K!)^2$ of the best.</p>
-      <p><b>Sample</b> draws a random set with probability proportional to its volume, so you see different good sets. Press Sample again for another draw.</p>`,
+      <p><b>Most likely</b> picks the set with the largest volume among the completions, adding one at a time. Exact search is NP-hard; the greedy answer is within a factor $(K!)^2$ of the best.</p>
+      <p><b>Sample</b> draws a random set from the DPP over all strings, approximated with the completions: each is weighted by $\\kappa(y)/p^{\\circ}_{T'}(y)$ to undo how it was drawn. Press Sample again for another draw.</p>`,
   },
   volume: {
     title: 'Spanned volume',
-    body: `<p>The grey box is spanned by the selected arrows. Its squared volume, $\\det \\mathbf L_S$, is the subset's score: long arrows (likely completions) pointing in different directions (different meanings) make a big box; near-duplicates flatten it.</p>
-      <p>The plot is a projection of 384-dimensional embeddings, so the box you see is a shadow of the real one.</p>`,
+    body: `<p>The grey box is spanned by the selected arrows. Its squared volume is $\\det \\mathbf L_S$, the subset's score: long arrows (likely completions) pointing in different directions (different meanings) make a big box; near-duplicates flatten it.</p>
+      <p>For $K \\le 3$ the plot's first axes are chosen to contain the selected arrows, so the box drawn is exactly the volume being scored, not a projection of it.</p>`,
   },
   logp: {
     title: 'log P(S)',
-    body: `<p>How probable this subset is among all size-$K$ subsets of the completions:
-      $$P(S) = \\frac{\\det \\mathbf L_S}{\\sum_{|S'| = K} \\det \\mathbf L_{S'}}.$$
-      The most likely subset is the one that maximizes it.</p>`,
+    body: `<p>The probability of exactly this set under the DPP over the completions:
+      $$P(S) = \\frac{\\det \\mathbf L_S}{Z}, \\qquad Z = \\sum_{|S'| = K} \\det \\mathbf L_{S'},$$
+      where $\\mathbf L_S$ is the kernel restricted to $S$ and the sum is over all $K$-element subsets $S'$ of the completions. With <b>Most likely</b>, it is the value of the objective that was maximized; with <b>Sample</b>, the probability of the set that was drawn (using the importance-weighted kernel).</p>`,
   },
   quality: {
     title: 'Quality',
@@ -42,11 +40,27 @@ export const EXPLAIN = {
       $$\\log\\det\\big(\\Phi_S^\\top\\Phi_S\\big).$$</p>
       <p>It is at most 0, reached when the completions point in completely different directions, and goes to $-\\infty$ as two of them become duplicates.</p>`,
   },
-  ess: {
-    title: 'Effective sample size',
-    body: `<p>The completions are generated at sampling temperature $T'$, but the subset should follow $\\kappa = p^{1/T}$. So <b>Sample</b> reweights each completion by
-      $$w(y) = \\frac{p(y)^{1/T}}{p^{\\circ}_{T'}(y)}.$$
-      The effective sample size $(\\sum w)^2 / \\sum w^2$ says how many completions effectively count. When $T = T'$ every weight is equal; far from $T'$ a few completions dominate.</p>`,
+  fit: {
+    title: 'Pool fit',
+    body: `<p>How well these $N$ completions can stand in for all strings when aiming at the target at this $T$. The paper's Theorem 5.2 bounds how far the sets <b>Sample</b> draws are from the target:
+      $$\\mathrm{KL} \\le \\theta = \\frac{K^2 \\rho}{N - K + 1}, \\qquad \\rho = \\mathbb E_{y \\sim p^{\\circ}_{T'}}\\Big[\\Big(\\frac{\\pi_1(y)}{p^{\\circ}_{T'}(y)}\\Big)^2\\Big],$$
+      where $\\pi_1(y)$ is the probability that a set drawn from the target contains $y$, divided by $K$. The page estimates $\\rho$ from the completions' inclusion probabilities and shows $\\theta$ in nats.</p>
+      <p>It is an <b>optimistic</b> estimate: it can only see completions the pool contains. Large values mean the pool is a poor match: Sample may be far from its target, and Most likely may miss sets the target favours. Moving $T$ toward $T'$, or sampling at a $T'$ closer to $T$, helps.</p>`,
+  },
+  inclusion: {
+    title: 'Inclusion probability',
+    body: `<p>The probability that a set drawn from the DPP over the completions contains this completion:
+      $$\\Pr(i \\in S) = \\sum_{S \\ni i,\\ |S| = K} P(S),$$
+      summed over the $K$-element subsets that contain completion $i$. Copies of the same text can never be in a set together, so for a repeated completion the probabilities of its copies are added. They are shown for the kernel of the current mode, like log P(S).</p>`,
+  },
+  target: {
+    title: 'Target quality',
+    body: `<p>What the subset should favour, besides diversity: the quality $\\kappa(y)$ of each completion.</p>
+      <ul>
+        <li><b>Global (paper):</b> $\\kappa(y) = p(y)^{1/T}$. Strings that are likely as a whole, sharpened or flattened by $T$.</li>
+        <li><b>Global and local:</b> $\\kappa(y) = p(y)^{1/T}\\, p^{\\circ}_{T'}(y)$. Strings that are likely both as a whole and token by token at $T'$. Because the completions are generated token by token at $T'$, they represent this target especially well.</li>
+      </ul>
+      <p>At $T = \\infty$ the global factor is flat, so Global and local becomes the local probability alone.</p>`,
   },
   model: {
     title: 'Model',
@@ -74,11 +88,12 @@ export const EXPLAIN = {
   },
   scale: {
     title: 'Scale points by quality',
-    body: `<p>When on, each point sits at length $\\sqrt{\\kappa(y)}$ along its embedding direction: the same arrows the score measures, so changing $T$ grows or shrinks them. When off, every completion is drawn at unit length, showing meaning only.</p>`,
+    body: `<p>When on, each point sits at length $\\sqrt{\\kappa(y)}$ along its embedding direction (relative to the longest): the same arrows the score uses, so changing $T$ grows or shrinks them. When off, every completion is drawn at unit length, showing directions only.</p>`,
   },
   pca: {
-    title: 'Projection',
-    body: `<p>The embeddings have 384 dimensions. The plot shows the top principal axes (uncentered, so arrows start at the origin, where volume is measured from). The bars show how much of the spread each axis captures; click 1, 2 or 3 to change the view.</p>`,
+    title: 'Spectrum',
+    body: `<p>The completions' embeddings have hundreds of dimensions. The bars show how much of their spread lies along each of the first principal axes (uncentred, so arrows start at the origin, where volume is measured from). A pool whose spread sits in very few axes has little room for diverse subsets.</p>
+      <p>For $K \\le 3$ the plot's axes are fitted to the selected completions instead; otherwise it shows the first principal axes.</p>`,
   },
 };
 

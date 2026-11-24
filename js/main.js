@@ -1,8 +1,5 @@
 import * as d3 from 'd3';
-import {
-  gram, symEig, kernel, spectrum, sampleKDPP, greedyMAP, logZ, logDetSub, inclusionProbs,
-  columnLogScale, logWeights, ess, quality, diversity, mulberry32,
-} from './dpp.js';
+import { eigSym, kdpp, greedyMAPLog, quality, diversity, mulberry32 } from './dpp.js';
 import { Plot3D } from './plot3d.js';
 import { initExplainers } from './explain.js';
 import { authEnabled, getAuth, signIn, signOut, finishSignIn } from './hfauth.js';
@@ -10,59 +7,87 @@ import { authEnabled, getAuth, signIn, signOut, finishSignIn } from './hfauth.js
 const $ = (s) => document.querySelector(s);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt = (x, d = 2) => (Number.isFinite(x) ? x.toFixed(d) : '—');
+const pct = (x) => (!Number.isFinite(x) ? '—' : x >= 0.995 ? '100%' : x < 0.005 ? '<1%' : `${Math.round(100 * x)}%`);
+const clampInt = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(+v || lo)));
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+// ---------------------------------------------------------------- limits (every backend enforces them too)
+const LIMITS = { maxN: 200, maxTokens: 256, bufferMax: 1000, timeoutMs: 5 * 60 * 1000 };
 
 // ---------------------------------------------------------------- state
 const S = {
-  pool: null,        // { prompt, samples, N, D, Tprime, ... }
-  phi: null,         // Float32Array[] unit embeddings
-  G: null,           // Gram ΦᵀΦ
-  cfg: null,         // the configuration that made the pool on screen
+  pool: null,        // { prompt, samples, ... } of the slice on screen
+  G: null,           // its N×N similarity matrix (unit embeddings), Float64Array
+  view: null,        // { buf, k, N, embedder }: which slice of which buffer is on screen
+  eig: null,         // eigendecomposition of G (for the spectrum panel and PCA axes)
   logp: null, logq: null,
   proj: null,        // { coords: [N][3], frac: number[] }
   dims: 3,
   mode: 'map',
-  T: { sample: 1, map: 20 },
+  T: 20,             // one temperature for both modes
+  target: 'global',  // target quality: 'global' κ = p^{1/T}; 'gl' κ = p^{1/T}·p°_{T′}
   K: 3,
-  pinned: -1,      // point shown in the inspector
+  pinned: -1,
   rng: mulberry32(12345),
-  sel: [], spec: null, L: null, c: null, pi: null, logP: NaN,
+  sel: [], pi: null, logP: NaN, fit: NaN, c: null,
   hover: -1,
+  poolNote: '',
 };
 
-// T slider: log scale over [0.1, 1000].
+// T slider: log scale over [0.1, 1000], and the right end is T = ∞ (only diversity counts).
 const T_MIN = -1, T_MAX = 3;
-const sliderToT = (v) => 10 ** (T_MIN + ((T_MAX - T_MIN) * v) / 1000);
-const tToSlider = (T) => Math.round(((Math.log10(T) - T_MIN) / (T_MAX - T_MIN)) * 1000);
+const sliderToT = (v) => (v >= 1000 ? Infinity : 10 ** (T_MIN + ((T_MAX - T_MIN) * v) / 1000));
+const tToSlider = (T) => (T === Infinity ? 1000 : Math.round(((Math.log10(T) - T_MIN) / (T_MAX - T_MIN)) * 1000));
+const fmtT = (T) => (T === Infinity ? '∞' : T < 10 ? T.toFixed(2) : T < 100 ? T.toFixed(1) : T.toFixed(0));
 
-// ---------------------------------------------------------------- data
-function decodeEmb(b64, N, D) {
+// ---------------------------------------------------------------- binary helpers
+function b64ToF32(b64) {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const f = new Float32Array(bytes.buffer);
-  return Array.from({ length: N }, (_, i) => f.subarray(i * D, (i + 1) * D));
+  return new Float32Array(bytes.buffer);
 }
-
-// float16 little-endian, N×D row-major (the cache's embedding files).
-function decodeF16(buf, N, D) {
-  const h = new Uint16Array(buf);
-  const f = new Float32Array(h.length);
-  for (let i = 0; i < h.length; i++) {
-    const x = h[i], e = (x >> 10) & 31, m = x & 1023, sgn = x & 32768 ? -1 : 1;
-    f[i] = sgn * (e === 0 ? m * 2 ** -24 : e === 31 ? (m ? NaN : Infinity) : (1 + m / 1024) * 2 ** (e - 15));
+// Similarity matrix from unit-normalised vectors (servers that still send vectors), in float64.
+function gramFromVectors(f, N, D) {
+  const V = Array.from({ length: N }, (_, i) => {
+    const v = Float64Array.from(f.subarray(i * D, (i + 1) * D));
+    const r = Math.hypot(...v) || 1;
+    return v.map((x) => x / r);
+  });
+  const G = new Float64Array(N * N);
+  for (let i = 0; i < N; i++) for (let j = i; j < N; j++) {
+    let s = 0; const a = V[i], b = V[j];
+    for (let d = 0; d < D; d++) s += a[d] * b[d];
+    G[i * N + j] = G[j * N + i] = i === j ? 1 : s;
   }
-  return Array.from({ length: N }, (_, i) => f.subarray(i * D, (i + 1) * D));
+  return G;
 }
+// The G a backend returned: an N×N float32 matrix ("G"), or vectors ("emb", "D").
+function gramOf(resp, N) {
+  if (resp.G) return Float64Array.from(b64ToF32(resp.G).subarray(0, N * N));
+  return gramFromVectors(b64ToF32(resp.emb), N, resp.D);
+}
+const sub = (G, n, idx) => {
+  const m = idx.length, out = new Float64Array(m * m);
+  for (let a = 0; a < m; a++) for (let b = 0; b < m; b++) out[a * m + b] = G[idx[a] * n + idx[b]];
+  return out;
+};
 
-// Precomputed pools, each with the exact configuration that made it. A pool is shown only when
-// the current configuration matches it exactly (see the "configuration" section below).
-let CACHE = [];
-const sameCfg = (a, b) => a.prompt === b.prompt && a.model === b.model && a.embedder === b.embedder &&
-  a.N === b.N && Math.abs(a.Tprime - b.Tprime) < 1e-9 && a.maxNewTokens === b.maxNewTokens;
+// ---------------------------------------------------------------- buffers of draws
+// A buffer holds i.i.d. draws from p°_{T′} for one (prompt, weights, T′, max tokens), in the order they
+// were drawn, from one backend. A pool of N is a slice of it: draw k = completions (k−1)N+1 … kN.
+// Similarity matrices are kept per embedder: for precomputed buffers one matrix over all draws; for
+// your runs one per batch (draws sampled together), so a slice that spans batches is re-embedded.
+let BUFFERS = [];
+const bufFor = (cfg) => BUFFERS.filter((b) => b.prompt === cfg.prompt && b.model === cfg.model &&
+  Math.abs(b.Tprime - cfg.Tprime) < 1e-9 && b.maxNewTokens === cfg.maxNewTokens);
+const bufSize = (b) => (b.samples ? b.samples.length : b.size);
 
 async function loadData() {
   const [presets, cache] = await Promise.all([fetch('data/presets.json').then((r) => r.json()), fetch('data/cache/index.json').then((r) => r.json())]);
-  CACHE = cache;
+  BUFFERS = cache.buffers.map((b) => ({ ...b, from: 'precomputed', samples: null, batches: null }));
   const el = $('#examples');
   el.innerHTML = '<div class="menu-head">Example prompts</div>' + presets.map((g, i) => `<button type="button" role="menuitem" data-i="${i}"><b>${escapeHtml(g.label)}</b><span>${escapeHtml(g.prompt)}</span></button>`).join('');
   // A preset only fills in the prompt; nothing else in the configuration changes.
@@ -74,82 +99,241 @@ async function loadData() {
   if (!$('#prompt').value.trim()) { $('#prompt').value = presets[0].prompt; $('#prompt').dispatchEvent(new Event('input')); }
 }
 
-async function showCached(entry, cfg) {
-  if (entry.mem) { setPool(entry.mem.pool, entry.mem.phi, cfg, { cached: true }); return; }   // one of your runs
-  const [rec, buf] = await Promise.all([fetch(`data/cache/${entry.pool}`).then((r) => r.json()), fetch(`data/cache/${entry.emb}`).then((r) => r.arrayBuffer())]);
-  if (!sameCfg(readConfig(), cfg)) return;   // the configuration changed while loading
-  rec.embedder = entry.embedder;
-  setPool(rec, decodeF16(buf, rec.N, entry.D), cfg, { cached: true });
+// Every buffer is a list of batches (draws sampled together, or completions embedded together), each
+// with its similarity matrix per embedder. A precomputed buffer is one batch whose matrices are files.
+async function ensureLoaded(b) {
+  if (b.samples) return;
+  b.samples = (await (await fetch(`data/cache/${b.pool}`)).json()).samples;
+  b.batches = [{ start: 0, n: b.size, G: {}, files: b.G }];
+}
+async function batchG(batch, embedder) {
+  if (!batch.G[embedder] && batch.files?.[embedder]) {
+    batch.G[embedder] = Float64Array.from(new Float32Array(await (await fetch(`data/cache/${batch.files[embedder]}`)).arrayBuffer()));
+  }
+  return batch.G[embedder] ?? null;
+}
+// The slice [start, end) of buffer b with its similarity matrix under `embedder` (a repo id), or null if
+// the buffer has fewer draws, or no single batch with that embedder covers the slice.
+async function sliceOf(b, start, end, embedder) {
+  if (end > bufSize(b)) return null;
+  await ensureLoaded(b);
+  for (const batch of b.batches) {
+    if (batch.start > start || end > batch.start + batch.n) continue;
+    const G = await batchG(batch, embedder);
+    if (!G) continue;
+    const idx = d3.range(start - batch.start, end - batch.start);
+    return { samples: b.samples.slice(start, end), G: sub(G, batch.n, idx) };
+  }
+  return null;
 }
 
-function setPool(pool, phi, cfg, { cached = false } = {}) {
+// ---------------------------------------------------------------- configuration
+// What determines the pool on screen: prompt, model weights, embedder, N, T′, max tokens, and which
+// draw. The plot always shows a pool made with exactly these, or keeps the previous one with a note.
+const DEMO_SERVER = 'https://zueri-monstro.rufous-hamlet.ts.net/dpp_api';
+const MODAL_URL = 'https://timvieira--dpp-lm-sampler-web.modal.run';
+const SPACE_URL = 'https://xtimv-dpp-lm-sampler.hf.space';
+const QEMB = { id: 'qwen3-emb', repo: 'Qwen/Qwen3-Embedding-0.6B', label: 'Qwen3-Embedding-0.6B' };
+const OWN = { id: 'own', repo: 'own:Qwen/Qwen3-14B-AWQ', label: 'Qwen3 14B’s own states' };
+const BACKENDS = [
+  { id: 'server', where: 'GPU server', the: 'the GPU server', label: 'Qwen3 14B, 4-bit (AWQ) · GPU server', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
+    url: DEMO_SERVER, auth: false, embedders: [QEMB, OWN], up: null },
+  { id: 'modal', where: 'Modal', the: 'Modal', label: 'Qwen3 14B, 4-bit (AWQ) · Modal', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
+    url: MODAL_URL, auth: true, embedders: [QEMB], up: null },
+  { id: 'space', where: 'Hugging Face Space', the: 'the Hugging Face Space', label: 'Qwen3 14B, 4-bit (AWQ) · HF Space', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
+    url: SPACE_URL, auth: true, embedders: [QEMB], up: null },
+];
+const cap = (t) => t[0].toUpperCase() + t.slice(1);
+const backend = () => BACKENDS.find((b) => b.id === $('#model').value) ?? BACKENDS[0];
+const embedderOf = (B) => B.embedders.find((e) => e.id === $('#embedder').value) ?? B.embedders[0];
+const TARGETS = { global: { label: 'Global (paper)', short: 'global' }, gl: { label: 'Global and local', short: 'global × local' } };
+
+function readConfig() {
+  const B = backend();
+  return {
+    prompt: $('#prompt').value.trim(), model: B.repo, backend: B.id, embedder: embedderOf(B).repo, embedderId: embedderOf(B).id,
+    N: clampInt($('#live-N').value, 2, LIMITS.maxN), Tprime: Math.round(10 * Math.min(2, Math.max(0.2, +$('#live-Tp').value || 1))) / 10,
+    maxNewTokens: clampInt($('#live-max').value, 8, LIMITS.maxTokens),
+  };
+}
+const viewKey = (cfg, k) => JSON.stringify([cfg.prompt, cfg.model, cfg.embedder, cfg.N, cfg.Tprime, cfg.maxNewTokens, k]);
+let drawK = 1;   // which draw the visitor asked for (1 = the first N completions)
+let pendingK = null;   // a draw to show once restored settings settle (restoreConfig)
+// A panel (failure, sign-in) stays until the settings it is about change; '*' keeps it until dismissed.
+let stickyFor = null;
+const cfgKey = (cfg) => viewKey(cfg, 0);
+
+// Called whenever the pool-determining settings change. Shows a stored slice that matches exactly,
+// otherwise keeps the current plot and says it is from earlier settings.
+async function configChanged() {
+  const cfg = readConfig();
+  syncFieldNotes();
+  const keep = !$('#stage-msg').hidden && stickyFor != null && (stickyFor === '*' || stickyFor === cfgKey(cfg));
+  if (pendingK == null && S.view && S.view.key === viewKey(cfg, drawK)) { if (!keep) setStatus(S.poolNote, { drawNext: true }); return; }
+  const want = pendingK ?? 1;
+  pendingK = null;
+  drawK = 1;
+  const key = cfgKey(cfg);
+  for (const k of want > 1 ? [want, 1] : [1]) {
+    for (const b of bufFor(cfg)) {
+      const sl = await sliceOf(b, (k - 1) * cfg.N, k * cfg.N, cfg.embedder).catch(() => null);
+      if (cfgKey(readConfig()) !== key) return;   // settings changed while loading
+      if (sl) { if (!keep) stageMsg(null); drawK = k; showSlice(b, sl, cfg, k); return; }
+    }
+  }
+  if (keep) return;
+  if (S.pool) { setStatus('The plot is from earlier settings. Press ↑.'); return; }
+  emptyMsg(cfg);
+  setStatus('');
+}
+
+function showSlice(b, sl, cfg, k) {
+  const N = cfg.N, a = (k - 1) * N + 1, z = k * N;
+  const bt = b.batches?.find((x) => x.start <= a - 1 && z <= x.start + x.n && x.files);
+  const B = BACKENDS.find((x) => x.id === b.backend) ?? BACKENDS[0];
+  const made = bt ? `Precomputed on ${B.the}` : `Sampled on ${B.the}`;
+  S.poolNote = `${made} · draw ${k} (completions ${a}–${z}).`;
+  setPool({ prompt: b.prompt, samples: sl.samples }, sl.G, { buf: b, k, N, embedder: cfg.embedder, key: viewKey(cfg, k) });
+  setStatus(S.poolNote, { drawNext: true });
+}
+
+// "Draw new ones": the next N draws of the buffer; samples only what is missing.
+async function drawNext() {
+  const cfg = readConfig();
+  const k = (S.view?.key === viewKey(cfg, drawK) ? drawK : 1) + 1;
+  for (const b of bufFor(cfg)) {
+    const sl = await sliceOf(b, (k - 1) * cfg.N, k * cfg.N, cfg.embedder).catch(() => null);
+    if (sl) { drawK = k; showSlice(b, sl, cfg, k); return; }
+  }
+  runLive({ k });
+}
+
+// ---------------------------------------------------------------- pool on screen
+function setPool(pool, G, view) {
   $('#labels').innerHTML = '';
   S.pinned = -1;
   S.pool = pool;
-  S.cfg = cfg;
-  S.phi = phi;
+  S.G = G;
+  S.view = view;
   S.logp = pool.samples.map((s) => s.logp);
   S.logq = pool.samples.map((s) => s.logq);
   const N = S.logp.length;
-  S.G = gram(phi);
-  // Uncentered PCA of the unit embeddings via the N×N Gram matrix.
-  const { values, vectors } = symEig(S.G, N);
-  const tot = values.reduce((a, b) => a + Math.max(0, b), 0);
-  S.proj = {
-    frac: values.slice(0, 8).map((v) => Math.max(0, v) / tot),
-    coords: Array.from({ length: N }, (_, n) => [0, 1, 2].map((k) => Math.sqrt(Math.max(0, values[k])) * vectors[k][n])),
-  };
+  S.eig = eigSym(G, N);
+  S.proj = null;
   S.K = Math.min(S.K, N - 1);
   $('#K').max = String(Math.min(20, N - 1));
   $('#K').value = S.K;
   S.rng = mulberry32(12345);
-  S.poolNote = !cached ? '' : CACHE.some((e) => e.mem?.pool === pool) ? 'Your earlier run with these settings.' : 'Precomputed with these settings.';
-  if (cached) $('#live-status').textContent = S.poolNote;
   plot.reset();
   recompute({ newDraw: true });
 }
 
-// A message in the plot area: nothing to show yet, a run in progress, or a failure.
-// While a run is in progress over an existing plot, it covers the plot.
-function stageMsg(kind, { title = '', detail = '', actions = '' } = {}) {
-  const el = $('#stage-msg');
-  if (!kind) { el.hidden = true; el.innerHTML = ''; return; }
-  el.hidden = false;
-  el.className = `stage-msg ${kind}${S.pool ? ' over' : ''}`;
-  el.innerHTML = `${kind === 'running' ? '<span class="spinner" aria-hidden="true"></span>' : ''}<p class="t">${title}</p>` +
-    (detail ? `<p class="d">${detail}</p>` : '') + (actions ? `<p class="a">${actions}</p>` : '');
-}
-
-
 // ---------------------------------------------------------------- inference
+// log κ for the chosen target, and the importance weights w = κ / p°_{T′} (the pool's proposal).
+function logKappa() {
+  const T = S.T, gl = S.target === 'gl';
+  return S.logp.map((lp, i) => (T === Infinity ? 0 : lp / T) + (gl ? S.logq[i] : 0));
+}
 function recompute({ newDraw = true } = {}) {
   if (!S.pool) return;
-  const N = S.logp.length, K = S.K, T = S.T[S.mode];
-  const logScale = columnLogScale(S.mode, S.logp, S.logq, T);
-  const { L, c } = kernel(S.G, N, logScale);
-  S.L = L;
-  S.c = c;
-  S.spec = spectrum(L, N);
-  S.pi = inclusionProbs(S.spec, K);
-  if (S.mode === 'map') {
-    S.sel = greedyMAP(L, N, K).set;
-  } else if (newDraw || !S.sel.length) {
-    S.sel = sampleKDPP(S.spec, K, S.rng) ?? [];
-  }
-  S.logP = S.sel.length === K ? logDetSub(L, N, S.sel) - logZ(S.spec, K) : NaN;
+  const N = S.logp.length, K = S.K, G = S.G;
+  const lk = logKappa();
+  const lw = lk.map((x, i) => x - S.logq[i]);
+  // Most likely scores sets by Π κ · det G_S; Sample draws from the K-DPP with the importance weights.
+  const scale = S.mode === 'map' ? lk : lw;
+  const dist = kdpp(G, N, scale, K);
+  if (S.mode === 'map') S.sel = greedyMAPLog(G, N, lk, K).set;
+  else if (newDraw || !S.sel.length) S.sel = dist.sample(S.rng) ?? [];
+  S.pi = dist.pi;
+  S.logP = S.sel.length === K ? dist.logProb(S.sel) : NaN;
+  // Pool fit to the target (paper, Thm 5.2): θ̂ = K²ρ̂/(N−K+1), ρ̂ = N Σ (π_i/K)² with π the inclusion
+  // probabilities of the importance-weighted K-DPP, i.e. the pool's estimate of the target.
+  const piW = S.mode === 'sample' ? dist.pi : kdpp(G, N, lw, K).pi;
+  let s2 = 0; for (const p of piW) s2 += (p / K) ** 2;
+  S.fit = (K * K * N * s2) / (N - K + 1);
+  // Drawn length of each point: √(weight) relative to the largest, as the kernel uses it.
+  const m = Math.max(...scale);
+  S.c = scale.map((s) => Math.exp(0.5 * (s - m)));
+  S.proj = project();
   render();
 }
 
-// ---------------------------------------------------------------- rendering: hero
+// Axes. For K ≤ 3 (and K ≤ the drawn dimensions) the first K axes span the selected vectors, so the
+// drawn parallelepiped is exactly the volume being scored; the remaining axes are the main directions
+// of what is left. Otherwise plain uncentred PCA. Computed from G alone. Successive views are aligned
+// by a rotation (Kabsch) so the plot turns smoothly instead of jumping.
+function project() {
+  const N = S.logp.length, G = S.G, sel = S.sel, k = sel.length;
+  const vals = S.eig.values, vecs = S.eig.vectors;
+  const tot = vals.reduce((a, b) => a + Math.max(0, b), 0);
+  const frac = vals.slice(0, 8).map((v) => Math.max(0, v) / tot);
+  let coords, fitted = false;
+  if (k >= 1 && k <= 3 && k <= S.dims && k === S.K) {
+    // Cholesky of G_SS, then a_i = R⁻¹ G_{S,i}.
+    const R = new Float64Array(k * k);
+    let ok = true;
+    for (let i = 0; i < k; i++) for (let j = 0; j <= i; j++) {
+      let s = G[sel[i] * N + sel[j]];
+      for (let m = 0; m < j; m++) s -= R[i * k + m] * R[j * k + m];
+      if (i === j) { if (!(s > 1e-12)) ok = false; R[i * k + i] = Math.sqrt(Math.max(s, 1e-300)); } else R[i * k + j] = s / R[j * k + j];
+    }
+    if (ok) {
+      const A = Array.from({ length: N }, (_, n) => {
+        const a = new Float64Array(k);
+        for (let i = 0; i < k; i++) { let s = G[sel[i] * N + n]; for (let m = 0; m < i; m++) s -= R[i * k + m] * a[m]; a[i] = s / R[i * k + i]; }
+        return a;
+      });
+      const rest = 3 - k;
+      let resid = null;
+      if (rest > 0) {
+        const Gr = new Float64Array(N * N);
+        for (let i = 0; i < N; i++) for (let j = i; j < N; j++) {
+          let s = G[i * N + j]; for (let m = 0; m < k; m++) s -= A[i][m] * A[j][m];
+          Gr[i * N + j] = Gr[j * N + i] = s;
+        }
+        resid = eigSym(Gr, N);
+      }
+      coords = A.map((a, n) => [0, 1, 2].map((d) => (d < k ? a[d] : Math.sqrt(Math.max(0, resid.values[d - k])) * resid.vectors[d - k][n])));
+      fitted = true;
+    }
+  }
+  if (!coords) coords = Array.from({ length: N }, (_, n) => [0, 1, 2].map((d) => Math.sqrt(Math.max(0, vals[d])) * vecs[d][n]));
+  // Align to the previous view of the same pool with a proper rotation of the drawn dimensions.
+  const prev = S.proj?.pool === S.pool ? S.proj.coords : null;
+  if (prev) coords = kabsch(coords, prev, S.dims);
+  return { coords, frac, fitted, pool: S.pool };
+}
+function kabsch(P, Q, d) {
+  // Rotation R (d×d, det +1) minimising Σ‖R p_i − q_i‖² over the first d coordinates.
+  if (d === 1) { let s = 0; P.forEach((p, i) => (s += p[0] * Q[i][0])); return s < 0 ? P.map((p) => [-p[0], p[1], p[2]]) : P; }
+  const H = Array.from({ length: d }, () => new Float64Array(d));
+  P.forEach((p, i) => { for (let a = 0; a < d; a++) for (let b = 0; b < d; b++) H[a][b] += p[a] * Q[i][b]; });
+  // SVD of H via the eigendecomposition of HᵀH: H = U Σ Vᵀ, R = V Uᵀ.
+  const HtH = new Float64Array(d * d);
+  for (let a = 0; a < d; a++) for (let b = 0; b < d; b++) { let s = 0; for (let c = 0; c < d; c++) s += H[c][a] * H[c][b]; HtH[a * d + b] = s; }
+  const { values, vectors } = eigSym(HtH, d);
+  const V = vectors.map((v) => Array.from(v));          // columns of V = eigenvectors
+  if (values.some((x) => !(x > 1e-12))) return P;
+  const U = V.map((v, j) => { const u = new Array(d).fill(0); for (let a = 0; a < d; a++) for (let b = 0; b < d; b++) u[a] += H[a][b] * v[b]; const r = Math.sqrt(values[j]); return u.map((x) => x / r); });
+  const R = Array.from({ length: d }, (_, a) => Array.from({ length: d }, (_, b) => V.reduce((s, v, j) => s + v[a] * U[j][b], 0)));
+  const det = d === 2 ? R[0][0] * R[1][1] - R[0][1] * R[1][0]
+    : R[0][0] * (R[1][1] * R[2][2] - R[1][2] * R[2][1]) - R[0][1] * (R[1][0] * R[2][2] - R[1][2] * R[2][0]) + R[0][2] * (R[1][0] * R[2][1] - R[1][1] * R[2][0]);
+  if (det < 0) { // flip the axis with the smallest singular value
+    const j = d - 1;
+    for (let a = 0; a < d; a++) for (let b = 0; b < d; b++) R[a][b] -= 2 * V[j][a] * U[j][b];
+  }
+  return P.map((p) => { const out = p.slice(); for (let a = 0; a < d; a++) { let s = 0; for (let b = 0; b < d; b++) s += R[a][b] * p[b]; out[a] = s; } return out; });
+}
+
+// ---------------------------------------------------------------- rendering
 function render() {
-  document.querySelectorAll('input[name=dims]').forEach((r) => (r.checked = +r.value === S.dims));
   const distinct = new Set(S.pool.samples.map((x) => x.text)).size;
   const N = S.pool.samples.length;
-  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate · tap a point to read it · change dimensions with the bars at right' : 'tap a point to read it · change dimensions with the bars at right'}`;
-  $('#subset-meta').textContent = `K = ${S.sel.length} · ${S.mode === 'map' ? 'greedy MAP' : 'K-DPP sample'} at T = ${fmtT(S.T[S.mode])}`;
-  $('#T-out').textContent = fmtT(S.T[S.mode]);
+  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate · tap a point to read it' : 'tap a point to read it'}`;
+  $('#subset-meta').textContent = `K = ${S.sel.length} · ${S.mode === 'map' ? 'most likely (greedy)' : 'sampled'} at T = ${fmtT(S.T)} · target ${TARGETS[S.target].short}`;
+  $('#T-out').textContent = fmtT(S.T);
   plot.update();
-  renderEigbars();
+  renderSpectrum();
   renderReadout();
   renderCards();
   renderVolHint();
@@ -158,64 +342,72 @@ function render() {
   if ($('.pool-table').open) renderTable();
 }
 
-const fmtT = (T) => (T < 10 ? T.toFixed(2) : T < 100 ? T.toFixed(1) : T.toFixed(0));
-
-function renderEigbars() {
-  const el = $('#eigbars');
-  const f = S.proj.frac;
-  const max = f[0];
-  el.innerHTML = `<div class="cap">PCA<button type="button" class="xbtn" data-x="pca" aria-label="About the projection">?</button></div>` + f.map((v, k) => {
-    const click = k < 3;
-    return `<div class="bar ${k < S.dims ? 'on' : ''}" data-k="${k + 1}" ${click ? `role="button" tabindex="0" aria-label="Show ${k + 1}D"` : ''}
-      title="Axis ${k + 1}: ${(100 * v).toFixed(1)}% of variance${click ? ` · click for ${k + 1}D` : ''}">
-      <span>${k + 1}</span><span class="fill" style="width:${(100 * v) / max}%"></span></div>`;
-  }).join('') + `<div class="pct">${(100 * f.slice(0, S.dims).reduce((a, b) => a + b, 0)).toFixed(0)}% shown</div>`;
-  el.querySelectorAll('.bar[role=button]').forEach((b) => {
-    const go = () => setDims(+b.dataset.k);
-    b.onclick = go;
-    b.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
-  });
+// The spectrum panel (opened from the strip under the plot): the share of the pool's variation along
+// each of the first eight principal axes, and the 1-D/2-D/3-D switch.
+function renderSpectrum() {
+  const el = $('#spectrum');
+  const f = S.proj.frac, max = f[0] || 1;
+  el.innerHTML = `<p class="sp-head"><span class="fn">Spectrum<button type="button" class="xbtn" data-x="pca" aria-label="About the spectrum">?</button></span></p>` +
+    f.map((v, k) => `<div class="bar"><span>${k + 1}</span><span class="fill" style="width:${(100 * v) / max}%"></span><span class="pv">${(100 * v).toFixed(1)}%</span></div>`).join('') +
+    `<p class="sp-dims"><span class="lab">Drawn in</span><span class="pick" role="group" aria-label="Dimensions">${[1, 2, 3].map((d) => `<button type="button" class="pick-btn" data-dims="${d}" aria-pressed="${S.dims === d}">${d}-D</button>`).join('')}</span></p>` +
+    `<p class="sp-note">${S.proj.fitted ? 'Axes 1–' + S.sel.length + ' of the plot span the selected completions; the rest show the main remaining directions.' : 'The plot shows the first principal axes.'}</p>`;
+  el.querySelectorAll('[data-dims]').forEach((b) => (b.onclick = () => setDims(+b.dataset.dims)));
 }
-
-function setDims(k) { S.dims = k; plot.reset(); render(); }
+function setDims(k) { S.dims = k; S.proj = null; plot.reset(); S.proj = project(); render(); }
 
 function renderReadout() {
-  const N = S.logp.length;
-  const ok = S.sel.length === S.K;
-  const e = ess(logWeights(S.logp, S.logq, S.T.sample));
-  // Always the same four slots, so the strip keeps its size (ESS is blank unless sampling).
-  const stat = (k, v, x, hide = false) => `<span class="stat${hide ? ' off' : ''}"><span class="fn">${k}<button type="button" class="xbtn" data-x="${x}" aria-label="What is ${k}?" ${hide ? 'tabindex="-1"' : ''}>?</button></span> <span class="v">${v}</span></span>`;
+  const N = S.logp.length, K = S.K;
+  const ok = S.sel.length === K;
+  const stat = (k, v, x, cls = '') => `<span class="stat ${cls}"><span class="fn">${k}<button type="button" class="xbtn" data-x="${x}" aria-label="What is ${k}?">?</button></span> <span class="v">${v}</span></span>`;
+  const poor = S.fit > 1;
   $('#readout').innerHTML =
     stat('log P(S)', ok ? fmt(S.logP) : '—', 'logp') +
     stat('quality', ok ? fmt(quality(S.logp, S.sel)) : '—', 'quality') +
     stat('diversity', ok ? fmt(diversity(S.G, N, S.sel)) : '—', 'diversity') +
-    stat('ESS', `${e.toFixed(0)}/${N}`, 'ess', S.mode !== 'sample');
-  $('#readout').title = ok ? '' : `No subset of size ${S.K}: there are fewer distinct completions than that.`;
+    stat('pool fit', `${fmt(S.fit)} nats`, 'fit', poor ? 'warn' : '');
+  $('#readout').title = ok ? '' : `No subset of size ${K}: the pool spans fewer than ${K} independent directions.`;
+  const note = $('#fit-note');
+  if (!ok) {
+    note.hidden = false;
+    note.textContent = `No subset of ${K} completions has positive volume in this pool: lower K, or sample more varied completions (raise T′).`;
+  } else if (poor) {
+    note.hidden = false;
+    const tp = S.view ? readConfig().Tprime : 1;
+    note.innerHTML = S.mode === 'sample'
+      ? `<b>The pool is a poor match for the target at this T</b> (pool fit ${fmt(S.fit, 1)} nats): Sample may be far from the distribution it aims at. Move T toward T′ = ${tp}, or sample the pool at a T′ closer to T.`
+      : `<b>The pool is a poor match for the target at this T</b> (pool fit ${fmt(S.fit, 1)} nats): the target favours completions the pool rarely contains, so the best set over all strings may not be in it. Move T toward T′ = ${tp}, or sample at a T′ closer to T.`;
+  } else note.hidden = true;
 }
 
 function renderVolHint() {
   const el = $('#vol-hint');
-  if (S.dims === 1) { el.innerHTML = ''; return; }
-  el.innerHTML = S.sel.length <= 3 && S.sel.length >= 2
+  if (S.sel.length > 3 || S.sel.length < 2) { el.innerHTML = S.sel.length > 3 ? '<span class="muted">volume drawn for K ≤ 3</span>' : ''; return; }
+  el.innerHTML = S.proj.fitted
     ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg><span class="fn">spanned volume<button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button></span>`
-    : `<button id="vol-btn" class="link">Show volume (K = 3)</button>`;
-  const b = $('#vol-btn');
-  if (b) b.onclick = () => setK(3);
+    : `<span class="muted">volume needs ${S.sel.length}-D</span>`;
 }
 
 function renderCards() {
   const order = S.sel.slice().sort((a, b) => S.logp[b] - S.logp[a]);
+  const incl = inclusionOfText();
   $('#selected').innerHTML = order.map((i) => {
     const s = S.pool.samples[i];
     return `<li class="card${s.ended ? '' : ' cut'}" data-i="${i}">
-      <div class="txt">${escapeHtml(s.text)}</div>
-      <div class="meta"><span class="dot" style="background:${selColor(i)}"></span>log p ${fmt(s.logp, 1)}<span>·</span>P(in set) ${fmt(S.pi[i], 2)}</div></li>`;
+      <div class="txt">${escapeHtml(s.text)}${s.ended ? '' : ' …'}</div>
+      <div class="meta"><span class="dot" style="background:${css('--accent')}"></span>log p ${fmt(s.logp, 1)}<span>·</span><span class="fn">inclusion ${pct(incl(i))}<button type="button" class="xbtn" data-x="inclusion" aria-label="What is the inclusion probability?">?</button></span></div></li>`;
   }).join('');
   $('#selected').querySelectorAll('.card').forEach((el) => {
     el.onmouseenter = () => plot.highlight(+el.dataset.i);
     el.onmouseleave = () => plot.highlight(-1);
-    el.onclick = () => inspect(+el.dataset.i);
+    el.onclick = (e) => { if (!e.target.closest('.xbtn')) inspect(+el.dataset.i); };
   });
+}
+// Inclusion probability of a completion's text: copies of the same string can never be selected
+// together, so the probability that the string appears is the sum over its copies.
+function inclusionOfText() {
+  const byText = new Map();
+  S.pool.samples.forEach((s, i) => byText.set(s.text, (byText.get(s.text) ?? 0) + S.pi[i]));
+  return (i) => byText.get(S.pool.samples[i].text);
 }
 
 // ---------------------------------------------------------------- tooltip
@@ -223,23 +415,14 @@ const tip = $('#tooltip');
 function showTip(i, x, y) {
   if (i < 0) { tip.hidden = true; return; }
   const s = S.pool.samples[i];
-  const lw = s.logp / S.T.sample - s.logq;
-  tip.innerHTML = `${escapeHtml(s.text)}${s.ended ? '' : '…'}<div class="meta">#${i} · log p ${fmt(s.logp, 2)} · log q ${fmt(s.logq, 2)} · log w ${fmt(lw, 2)}<br>P(i ∈ S) = ${fmt(S.pi[i], 3)}${S.sel.includes(i) ? ' · <b>selected</b>' : ''}</div>`;
+  tip.innerHTML = `${escapeHtml(s.text)}${s.ended ? '' : '…'}<div class="meta">log p ${fmt(s.logp, 2)} · inclusion ${pct(inclusionOfText()(i))}${S.sel.includes(i) ? ' · <b>selected</b>' : ''}</div>`;
   tip.hidden = false;
   const r = tip.getBoundingClientRect();
   tip.style.left = Math.min(window.innerWidth - r.width - 8, x + 14) + 'px';
   tip.style.top = Math.min(window.innerHeight - r.height - 8, y + 14) + 'px';
 }
 
-// ---------------------------------------------------------------- projection plot
-// With K ≤ 3 each selected vector gets its own colour and we draw the
-// parallelogram/parallelepiped it spans (paper, Fig. 1); otherwise one accent.
-const VEC = ['--series-1', '--series-2', '--series-3'];
-function selColor(i) {
-  const k = S.sel.indexOf(i);
-  return S.sel.length <= 3 && k >= 0 ? css(VEC[k]) : css('--accent');
-}
-// Faces (as corner lists) and corner points of the parallelotope spanned by vectors V from origin O.
+// ---------------------------------------------------------------- 1-D / 2-D plot
 function parallelotope(O, V) {
   const add = (a, b) => a.map((x, d) => x + b[d] - O[d]);
   const corner = (mask) => V.reduce((acc, v, k) => (mask & (1 << k) ? add(acc, v) : acc), O.slice());
@@ -249,13 +432,10 @@ function parallelotope(O, V) {
     const offs = others.length ? [0, 1 << others[0]] : [0];
     for (const o of offs) faces.push([o, o | (1 << a), o | (1 << a) | (1 << b), o | (1 << b)].map(corner));
   }
-  const full = (1 << V.length) - 1;
-  const extra = [];
-  for (let mask = 1; mask <= full; mask++) if (mask & (mask - 1)) extra.push({ p: corner(mask), far: mask === full });
-  return { faces, corners: extra };
+  const full = (1 << V.length) - 1, corners = [];
+  for (let mask = 1; mask <= full; mask++) if (mask & (mask - 1)) corners.push({ p: corner(mask) });
+  return { faces, corners };
 }
-// Every completion is drawn in one neutral colour; only the selected ones stand out.
-const colorFor = () => { const c = css('--ink'); return () => c; };
 
 class Plot2D {
   constructor(el) { this.el = el; this.svg = null; }
@@ -265,9 +445,6 @@ class Plot2D {
     this.W = el.clientWidth || 600;
     this.H = el.clientHeight || 450;
     const svg = d3.select(el).append('svg').attr('viewBox', `0 0 ${this.W} ${this.H}`);
-    svg.append('defs').append('marker').attr('id', 'arrow').attr('viewBox', '0 0 10 10').attr('refX', 9).attr('refY', 5)
-      .attr('markerWidth', 7).attr('markerHeight', 7).attr('orient', 'auto-start-reverse')
-      .append('path').attr('d', 'M0,0L10,5L0,10z').attr('fill', css('--accent'));
     this.gOrigin = svg.append('g');
     this.gOrigin.append('path').attr('stroke', css('--muted')).attr('stroke-width', 1);
     this.gOrigin.append('text').attr('class', 'direct-label').attr('font-size', 11).attr('fill', css('--muted')).text('origin');
@@ -275,7 +452,7 @@ class Plot2D {
     this.gArrow = svg.append('g');
     this.gDot = svg.append('g');
     this.svg = svg;
-    this.jit = S.proj.coords.map((_, i) => ((i * 0.6180339887) % 1) - 0.5);
+    this.jit = S.logp.map((_, i) => ((i * 0.6180339887) % 1) - 0.5);
     const nearest = (ev, r) => {
       const [px, py] = d3.pointer(ev);
       let best = -1, bd = r * r;
@@ -284,18 +461,16 @@ class Plot2D {
     };
     svg.on('pointermove', (ev) => {
       if (ev.pointerType !== 'mouse') return;
-      const best = nearest(ev, 18);
+      const best = nearest(ev, 14);
       this.highlight(best);
       showTip(best, ev.clientX, ev.clientY);
     }).on('pointerleave', () => { this.highlight(-1); showTip(-1); })
-      .on('click', (ev) => inspect(nearest(ev, ev.pointerType === 'mouse' ? 18 : 32)));
+      .on('click', (ev) => inspect(nearest(ev, ev.pointerType === 'mouse' ? 14 : 28)));
   }
-  // Data-space position of item i (scale = 1 for the unit embedding).
   dataXY(i, scale) {
     const c = S.proj.coords[i];
     return S.dims === 1 ? [c[0] * scale, this.jit[i] * 1.6] : [c[0] * scale, c[1] * scale];
   }
-  // Fit scales to everything drawn, including the far corner of the spanned volume.
   fit(points) {
     const { W, H } = this, m = 16, dims = S.dims;
     const pad = (a) => { const lo = d3.min(a), hi = d3.max(a), p = 0.06 * (hi - lo || 1); return [lo - p, hi + p]; };
@@ -314,41 +489,34 @@ class Plot2D {
     if (!this.svg) this.build();
     const N = S.logp.length, dims = S.dims, H = this.H;
     const scaled = $('#scale-toggle').checked;
-    const col = colorFor();
     const sel = new Set(S.sel);
     const idx = d3.range(N);
     const posD = idx.map((i) => (dims === 1 ? [this.dataXY(i, scaled ? S.c[i] : 1)[0], this.dataXY(i, 1)[1]] : this.dataXY(i, scaled ? S.c[i] : 1)));
-    const vol = dims === 2 && S.sel.length >= 2 && S.sel.length <= 3;
+    const vol = dims === 2 && S.sel.length === 2 && S.proj.fitted;
     const volD = vol ? parallelotope([0, 0], S.sel.map((i) => posD[i])) : { faces: [], corners: [] };
     this.fit([...posD, ...volD.corners.map((c) => c.p)]);
     const px = (q) => [this.x(q[0]), this.y(q[1])];
     this.pos = posD.map(px);
     const ox = this.x(0), oy = this.y(0);
     const t = this.svg.transition().duration(450).ease(d3.easeCubicOut);
-
     this.gOrigin.select('path').attr('stroke-dasharray', dims === 1 ? '3 3' : null).transition(t)
       .attr('d', dims === 1 ? `M${ox},16V${H - 16}` : `M${ox - 6},${oy}H${ox + 6}M${ox},${oy - 6}V${oy + 6}`);
     this.gOrigin.select('text').transition(t).attr('x', ox + 6).attr('y', dims === 1 ? 26 : oy - 6);
-    const few = S.sel.length <= 3;
     const y0 = (i) => (dims === 1 ? this.pos[i][1] : oy);
-    this.gArrow.selectAll('line').data(S.sel, (i) => i).join(
+    this.gArrow.selectAll('line').data(S.sel.length <= 3 ? S.sel : [], (i) => i).join(
       (enter) => enter.append('line').attr('x1', ox).attr('y1', y0).attr('x2', ox).attr('y2', y0),
-    ).attr('stroke', (i) => selColor(i)).attr('stroke-width', few ? 2.5 : 2)
-      .attr('marker-end', few ? null : 'url(#arrow)')
+    ).attr('stroke', css('--accent')).attr('stroke-width', 2)
       .transition(t).attr('x1', ox).attr('y1', y0)
       .attr('x2', (i) => this.pos[i][0]).attr('y2', (i) => this.pos[i][1]);
-    // Volume spanned by the selected set (K = 2: parallelogram, K = 3: parallelepiped),
-    // from the projected quality-scaled vectors; det L_S is its squared volume.
     const face = (f) => 'M' + f.map((q) => px(q).join(',')).join('L') + 'Z';
     this.gPara.selectAll('path').data(volD.faces).join('path')
       .attr('fill', css('--text')).attr('fill-opacity', 0.04)
       .attr('stroke', css('--text-2')).attr('stroke-opacity', 0.7).attr('stroke-width', 1).attr('stroke-linejoin', 'round')
       .transition(t).attr('d', face);
     this.gDot.selectAll('circle').data(idx).join('circle')
-      .attr('fill', (i) => col(i))
-      .attr('stroke', (i) => (sel.has(i) ? selColor(i) : css('--surface')))
-      .attr('stroke-width', (i) => (sel.has(i) ? 2.5 : 1))
-      .attr('r', 4.5)
+      .attr('fill', (i) => (sel.has(i) ? css('--accent') : css('--ink')))
+      .attr('stroke', css('--surface')).attr('stroke-width', 0.75)
+      .attr('r', 3)
       .sort((a, b) => sel.has(a) - sel.has(b))
       .transition(t).attr('cx', (i) => this.pos[i][0]).attr('cy', (i) => this.pos[i][1]);
   }
@@ -356,7 +524,7 @@ class Plot2D {
     if (!this.svg) return;
     if (i < 0) i = S.pinned;
     S.hover = i;
-    this.gDot.selectAll('circle').attr('stroke', (j) => (j === i ? css('--text') : S.sel.includes(j) ? selColor(j) : css('--surface')));
+    this.gDot.selectAll('circle').attr('stroke', (j) => (j === i ? css('--text') : css('--surface'))).attr('stroke-width', (j) => (j === i ? 1.5 : 0.75));
     document.querySelectorAll('.card').forEach((c) => c.classList.toggle('hl', +c.dataset.i === i));
   }
 }
@@ -364,11 +532,7 @@ class Plot2D {
 const plot = {
   p2: new Plot2D($('#plot')),
   p3: null,
-  reset() {
-    this.p2.reset();
-    this.p3?.dispose();
-    this.p3 = null;
-  },
+  reset() { this.p2.reset(); this.p3?.dispose(); this.p3 = null; },
   update() {
     if (S.dims === 3) {
       if (!this.p3) {
@@ -379,8 +543,8 @@ const plot = {
         });
       }
       this.p3.update({
-        coords: S.proj.coords, c: S.c, sel: S.sel, scaled: $('#scale-toggle').checked,
-        color: colorFor(), selColor, accent: css('--accent'), text: css('--text-2'), bg: css('--surface'),
+        coords: S.proj.coords, c: S.c, sel: S.sel, scaled: $('#scale-toggle').checked, fitted: S.proj.fitted,
+        color: () => css('--ink'), selColor: () => css('--accent'), accent: css('--accent'), text: css('--text-2'), bg: css('--surface'),
       });
     } else this.p2.update();
   },
@@ -392,10 +556,7 @@ const plot = {
 };
 
 // ---------------------------------------------------------------- labels
-// Small callouts with the opening words of each selected completion. Shown for
-// K ≤ 6 so they never swamp the plot; in 3D they follow the points every frame.
 const MAX_LABELS = 6;
-// The first few words only: enough to tell the selected completions apart.
 function labelText(s) { const w = s.text.replace(/\s+/g, ' ').trim().split(' '); return w.length > 5 ? w.slice(0, 5).join(' ') + '…' : w.join(' '); }
 function renderLabels() {
   const layer = $('#labels');
@@ -427,7 +588,6 @@ function placeLabels() {
     const p = S.dims === 3 ? plot.p3?.screenXY(i) : plot.p2.pos?.[i];
     return p && { el, x: p[0], y: p[1], w: el.offsetWidth, h: el.offsetHeight };
   }).filter(Boolean).sort((a, b) => a.y - b.y);
-  // Right of the point (left if it would leave the plot), then nudge down to avoid overlaps.
   const placed = [];
   for (const it of items) {
     let left = it.x + 8 + it.w > W - 4 ? it.x - 8 - it.w : it.x + 8;
@@ -447,7 +607,6 @@ function placeLabels() {
 })();
 
 // ---------------------------------------------------------------- inspector
-// Tap or click a point (or a card) to pin its text and numbers under the plot.
 function inspect(i) {
   S.pinned = i;
   showTip(-1);
@@ -459,12 +618,11 @@ function renderInspect() {
   const i = S.pinned;
   if (i < 0 || !S.pool || i >= S.pool.samples.length) { el.hidden = true; return; }
   const s = S.pool.samples[i];
-  const lw = s.logp / S.T.sample - s.logq;
   const inSel = S.sel.includes(i);
   el.hidden = false;
   el.innerHTML = `<div class="ins-txt">${escapeHtml(s.text)}${s.ended ? '' : ' …'}</div>
-    <div class="ins-meta">${inSel ? `<span class="pill" style="background:${selColor(i)}">selected</span>` : ''}
-      <span>log p ${fmt(s.logp, 2)}</span><span>log q ${fmt(s.logq, 2)}</span><span>log w ${fmt(lw, 2)}</span><span>P(in set) ${fmt(S.pi[i], 3)}</span></div>
+    <div class="ins-meta">${inSel ? '<span class="pill">selected</span>' : ''}
+      <span>log p ${fmt(s.logp, 2)}</span><span>log p°<sub>T′</sub> ${fmt(s.logq, 2)}</span><span>inclusion ${pct(inclusionOfText()(i))}</span></div>
     <button class="ins-close" aria-label="Close">×</button>`;
   el.querySelector('.ins-close').onclick = () => inspect(-1);
 }
@@ -472,12 +630,12 @@ function renderInspect() {
 // ---------------------------------------------------------------- pool table
 let sortKey = 'logp', sortDir = -1;
 function renderTable() {
-  const T = S.T.sample; // log w is the sampling mode's importance weight
   const sel = new Set(S.sel);
-  const rows = S.pool.samples.map((s, i) => ({ i, text: s.text + (s.ended ? '' : '…'), logp: s.logp, logq: s.logq, logw: s.logp / T - s.logq, pi: S.pi[i] }));
+  const incl = inclusionOfText();
+  const rows = S.pool.samples.map((s, i) => ({ i, text: s.text + (s.ended ? '' : '…'), logp: s.logp, logq: s.logq, incl: incl(i) }));
   rows.sort((a, b) => sortDir * (typeof a[sortKey] === 'string' ? a[sortKey].localeCompare(b[sortKey]) : a[sortKey] - b[sortKey]));
-  const cols = [['i', '#'], ['text', 'string'], ['logp', 'log p'], ['logq', 'log q'], ['logw', 'log w'], ['pi', 'P(i∈S)']];
-  $('#pool-table').innerHTML = `<div class="wrap"><table><thead><tr>${cols.map(([k, n]) => `<th data-k="${k}">${n}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr class="${sel.has(r.i) ? 'sel' : ''}"><td class="num" data-k="#">${r.i}</td><td class="str">${escapeHtml(r.text)}</td><td class="num" data-k="log p">${fmt(r.logp, 2)}</td><td class="num" data-k="log q">${fmt(r.logq, 2)}</td><td class="num" data-k="log w">${fmt(r.logw, 2)}</td><td class="num" data-k="P(in set)">${fmt(r.pi, 3)}</td></tr>`).join('')}</tbody></table></div>`;
+  const cols = [['i', '#'], ['text', 'completion'], ['logp', 'log p'], ['logq', 'log p°<sub>T′</sub>'], ['incl', 'inclusion']];
+  $('#pool-table').innerHTML = `<div class="wrap"><table><thead><tr>${cols.map(([k, n]) => `<th data-k="${k}">${n}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr class="${sel.has(r.i) ? 'sel' : ''}"><td class="num" data-k="#">${r.i + 1}</td><td class="str">${escapeHtml(r.text)}</td><td class="num" data-k="log p">${fmt(r.logp, 2)}</td><td class="num" data-k="log p°">${fmt(r.logq, 2)}</td><td class="num" data-k="inclusion">${pct(r.incl)}</td></tr>`).join('')}</tbody></table></div>`;
   $('#pool-table').querySelectorAll('th').forEach((th) => (th.onclick = () => {
     const k = th.dataset.k;
     if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = k === 'text' || k === 'i' ? 1 : -1; }
@@ -485,231 +643,384 @@ function renderTable() {
   }));
 }
 
-// ---------------------------------------------------------------- configuration
-// Everything that determines a pool: prompt, language model, embedder, N, T′ and max tokens.
-// The plot always shows a pool made with exactly this configuration (a precomputed one, or one
-// you ran), or nothing. Each choice of "model" names the exact weights and where they run.
-const DEMO_SERVER = 'https://zueri-monstro.rufous-hamlet.ts.net/dpp_api';
-const MODAL_URL = 'https://timvieira--dpp-lm-sampler-web.modal.run';
-const SPACE_URL = 'https://xtimv-dpp-lm-sampler.hf.space';
-const MINILM = { id: 'minilm', repo: 'sentence-transformers/all-MiniLM-L6-v2', label: 'MiniLM-L6' };
-const BACKENDS = [
-  { id: 'server', label: 'Qwen3 14B, 4-bit (AWQ) · GPU server', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
-    url: DEMO_SERVER, auth: false, maxN: 200, maxTokens: 256,
-    embedders: [
-      { id: 'qwen3-emb', repo: 'Qwen/Qwen3-Embedding-0.6B', label: 'Qwen3-Embedding-0.6B' },
-      { id: 'own', repo: 'own:Qwen/Qwen3-14B-AWQ', label: 'Qwen3 14B’s own states' },
-    ] },
-  { id: 'modal', label: 'Qwen3 14B, 4-bit (AWQ) · Modal, sign-in', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
-    url: MODAL_URL, auth: true, maxN: 100, maxTokens: 256, embedders: [MINILM] },
-  { id: 'space', label: 'Qwen3 14B, 4-bit (AWQ) · Hugging Face Space, sign-in', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
-    url: SPACE_URL, auth: true, maxN: 200, maxTokens: 256, embedders: [MINILM] },
-];
-const backend = () => BACKENDS.find((b) => b.id === $('#model').value) ?? BACKENDS[0];
-const embedderOf = (B) => B.embedders.find((e) => e.id === $('#embedder').value) ?? B.embedders[0];
-
-function readConfig() {
-  const B = backend();
-  return {
-    prompt: $('#prompt').value.trim(), model: B.repo, embedder: embedderOf(B).repo,
-    N: clampInt($('#live-N').value, 2, B.maxN), Tprime: Math.round(10 * Math.min(2, Math.max(0.2, +$('#live-Tp').value || 1))) / 10,
-    maxNewTokens: clampInt($('#live-max').value, 8, B.maxTokens),
-  };
+// ---------------------------------------------------------------- messages
+function setStatus(text, { drawNext: showDraw = false } = {}) {
+  const el = $('#live-status');
+  el.textContent = text;
+  if (showDraw && S.pool) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'link'; b.textContent = 'Draw new ones';
+    b.onclick = drawNext;
+    el.append(' ', b);
+  }
 }
-
-// Called whenever any part of the configuration changes.
-function configChanged() {
-  const cfg = readConfig();
-  if (S.cfg && sameCfg(S.cfg, cfg)) { $('#live-status').textContent = S.poolNote ?? ''; return; }
-  const hit = CACHE.findLast((e) => sameCfg(e, cfg));   // your latest run first
-  if (hit) { stageMsg(null); showCached(hit, cfg).catch(() => {}); return; }
-  // Nothing precomputed for these settings: keep the current plot until ↑ is pressed, and say so.
-  if (S.pool) { $('#live-status').textContent = 'The plot is from earlier settings. Press ↑.'; return; }
-  emptyMsg(cfg);
-  $('#live-status').textContent = '';
+function stageMsg(kind, { title = '', detail = '', actions = '', sticky = null } = {}) {
+  const el = $('#stage-msg');
+  stickyFor = kind ? sticky : null;
+  if (!kind) { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  el.className = `stage-msg ${kind}${S.pool ? ' over' : ''}`;
+  el.innerHTML = `${kind === 'running' ? '<span class="spinner" aria-hidden="true"></span>' : ''}<p class="t">${title}</p>` +
+    (detail ? `<p class="d">${detail}</p>` : '') + (actions ? `<p class="a">${actions}</p>` : '');
 }
-
 function emptyMsg(cfg) {
   stageMsg('empty', cfg.prompt
     ? { title: 'No completions for these settings yet.', detail: `Press ↑ to sample ${cfg.N} completions.` }
     : { title: 'Type a prompt, or pick one with +.' });
 }
+const useServerBtn = () => (BACKENDS[0].up === false ? '' : ' <button type="button" class="btn" data-act="use-server">Use the GPU server</button>');
+const otherModelBtn = () => '<button type="button" class="btn" data-act="settings">Use another model</button>';
 
+// ---------------------------------------------------------------- running
 let cloudAbort = null;
-async function runLive() {
+// A failure the page can explain: `code` follows docs/BACKEND.md.
+class RunError extends Error { constructor(code, message) { super(message); this.code = code; } }
+
+async function callBackend(B, path, body, { signal, auth }) {
+  const headers = { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${auth.token}` } : {}) };
+  let r;
+  try { r = await fetch(`${B.url}${path}`, { method: 'POST', signal, headers, body: JSON.stringify(body) }); }
+  catch (e) { if (e.name === 'AbortError') throw e; throw new RunError('unreachable', ''); }
+  const out = await r.json().catch(() => null);
+  if (r.ok && out) return out;
+  if (r.ok) throw new RunError('bad_answer', 'The server sent an answer the page could not read.');
+  const msg = out?.detail || out?.message || '';
+  const code = out?.code || ({ 400: 'bad_request', 401: 'auth', 403: 'auth', 429: 'busy', 503: 'starting' }[r.status] ?? 'server');
+  throw new RunError(code, msg);
+}
+// The Space speaks Gradio's queue protocol: join the queue, then read the event stream. (Gradio's
+// simpler /call endpoint drops error messages, and its JS client sends credentials, which the Space's
+// CORS answer does not allow for other sites.)
+async function callSpace(B, api, data, { signal, auth }) {
+  const hdr = auth ? { Authorization: `Bearer ${auth.token}` } : {};
+  const net = async (url, init) => {
+    try { return await fetch(url, { ...init, signal }); }
+    catch (e) { if (e.name === 'AbortError') throw e; throw new RunError('unreachable', ''); }
+  };
+  let r = await net(`${B.url}/config`, { headers: hdr });
+  if (!r.ok) throw new RunError(r.status === 401 || r.status === 403 ? 'auth' : 'starting', '');
+  const cfg = await r.json().catch(() => null);
+  const fn = cfg?.dependencies?.findIndex((d) => d.api_name === api) ?? -1;
+  if (fn < 0) throw new RunError('bad_answer', `The Space has no "${api}" function.`);
+  const session = Math.random().toString(36).slice(2);
+  r = await net(`${B.url}/gradio_api/queue/join`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...hdr },
+    body: JSON.stringify({ data, fn_index: fn, trigger_id: cfg.dependencies[fn].id ?? null, session_hash: session, event_data: null }),
+  });
+  if (!r.ok) throw new RunError(r.status === 401 || r.status === 403 ? 'auth' : r.status === 429 ? 'busy' : 'server', '');
+  r = await net(`${B.url}/gradio_api/queue/data?session_hash=${session}`, { headers: hdr });
+  if (!r.ok || !r.body) throw new RunError('server', '');
+  const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += value;
+    let k;
+    while ((k = buf.indexOf('\n\n')) >= 0) {
+      const line = buf.slice(0, k).split('\n').find((l) => l.startsWith('data:'));
+      buf = buf.slice(k + 2);
+      if (!line) continue;
+      const m = JSON.parse(line.slice(5));
+      if (m.msg !== 'process_completed') continue;
+      if (m.success && m.output?.data) return m.output.data[0];
+      const msg = String(m.output?.error ?? m.output?.title ?? '');
+      // The Space prefixes its own errors with a code; ZeroGPU's quota errors have none.
+      const c = /^(bad_request|server|busy|limit): (.*)$/s.exec(msg);
+      if (c) throw new RunError(c[1], c[2]);
+      throw new RunError(/quota|runs limit/i.test(msg) ? 'quota' : 'server', msg);
+    }
+  }
+  throw new RunError('bad_answer', 'The Space ended without an answer.');
+}
+
+// Sample `n` new draws for cfg on backend B; returns { samples, G (n×n), timing }.
+async function sampleDraws(B, cfg, n, opts) {
+  const seed = Math.floor(Math.random() * 2 ** 31);
+  let out;
+  if (B.id === 'space') out = await callSpace(B, 'sample', [cfg.prompt, 'qwen3-14b', n, cfg.Tprime, cfg.maxNewTokens, seed], opts);
+  else {
+    const body = { prompt: cfg.prompt, n, t_prime: cfg.Tprime, max_new_tokens: cfg.maxNewTokens, seed };
+    if (B.id === 'server') Object.assign(body, { model: 'qwen3-14b', embedder: cfg.embedderId });
+    out = await callBackend(B, '/sample', body, opts);
+  }
+  if (out.N !== n || out.maxNewTokens !== cfg.maxNewTokens || (out.Tprime != null && Math.abs(out.Tprime - cfg.Tprime) > 1e-9) || !Array.isArray(out.samples) || out.samples.length !== n) throw new RunError('mismatch', 'The server did not run the requested settings.');
+  return { samples: out.samples, G: gramOf(out, n), timing: out.timing };
+}
+// Similarity matrix of given completions under cfg's embedder, without sampling (for slices that span batches).
+async function embedTexts(B, cfg, samples, opts) {
+  const texts = samples.map((s) => s.text);
+  let out;
+  if (B.id === 'space') out = await callSpace(B, 'embed', [texts, cfg.embedderId], opts);
+  else out = await callBackend(B, '/embed', { texts, embedder: cfg.embedderId, model: 'qwen3-14b', prompt: cfg.prompt, ended: samples.map((s) => s.ended) }, opts);
+  return gramOf(out, texts.length);
+}
+
+async function runLive({ k = drawK } = {}) {
   const cfg = readConfig(), B = backend();
   if (!cfg.prompt) return;
   const auth = B.auth ? getAuth() : null;
-  if (B.auth && !auth) return signIn({ cfg: { ...cfg, backend: B.id, embedderId: embedderOf(B).id } });
+  if (B.auth && !auth) {
+    // Never leave the page without asking: explain and offer the two ways forward.
+    stageMsg('error', {
+      title: `Running on ${B.the} needs a free Hugging Face account.`,
+      detail: 'You will be sent to Hugging Face to sign in, then back here, where the run starts.',
+      actions: '<button type="button" class="btn" data-act="signin">Sign in with Hugging Face</button>' + useServerBtn() + (S.pool ? ' <button type="button" class="btn" data-act="dismiss">Cancel</button>' : ''),
+      sticky: cfgKey(cfg),
+    });
+    pendingSignIn = { ...cfg, k };
+    return;
+  }
+  const start = (k - 1) * cfg.N, end = k * cfg.N;
+  if (end > LIMITS.bufferMax) { fail(B, new RunError('limit', `At most ${LIMITS.bufferMax} completions are kept per prompt and settings.`)); return; }
+  // Draws are only combined with draws from the same backend (same weights, same arithmetic).
+  let buf = bufFor(cfg).find((b) => b.backend === B.id);
+  if (buf) await ensureLoaded(buf).catch(() => {});
+  const need = Math.max(0, end - (buf?.samples ? buf.samples.length : 0));
   cloudAbort = new AbortController();
   const signal = cloudAbort.signal;
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; cloudAbort?.abort(); }, LIMITS.timeoutMs);
   $('#live-go').hidden = true; $('#live-stop').hidden = false;
-  const t0 = performance.now(), secs = () => ((performance.now() - t0) / 1000).toFixed(0);
-  const where = escapeHtml(B.label);
-  const slow = B.id === 'server' ? '' : ' The first run starts a GPU, which can take a minute or two.';
+  const t0 = performance.now(), secs = () => Math.round((performance.now() - t0) / 1000);
+  const slowAfter = B.id === 'server' ? 20 : 90;
   const show = () => stageMsg('running', {
-    title: `Sampling ${cfg.N} completions… ${secs()}s`,
-    detail: `${where}.${slow}`,
+    title: need ? `Sampling ${need} completions… ${secs()} s` : `Embedding the completions… ${secs()} s`,
+    detail: `${escapeHtml(B.label)}.${B.id === 'server' ? '' : ' The first run starts a GPU, which can take a minute or two.'}` +
+      (secs() >= slowAfter ? ' <b>This is taking longer than usual:</b> the server may be busy with other requests, or a GPU is starting.' : ''),
     actions: '<button type="button" class="btn" data-act="stop">Stop</button>',
   });
   show();
-  $('#live-status').textContent = '';
+  setStatus('');
   const tick = setInterval(show, 1000);
-  const seed = Math.floor(Math.random() * 2 ** 31);
+  const opts = { signal, auth };
   try {
-    let pool;
-    if (B.id === 'space') {
-      const r = await fetch(`${B.url}/gradio_api/call/sample`, {
-        method: 'POST', signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
-        body: JSON.stringify({ data: [cfg.prompt, 'qwen3-14b', cfg.N, cfg.Tprime, cfg.maxNewTokens, seed] }),
-      });
-      if (!r.ok) throw new Error(`the Space answered ${r.status}`);
-      const { event_id } = await r.json();
-      const text = await (await fetch(`${B.url}/gradio_api/call/sample/${event_id}`, { signal, headers: { Authorization: `Bearer ${auth.token}` } })).text();
-      const events = [...text.matchAll(/event: (\w+)\ndata: (.*)/g)].map((m) => [m[1], m[2]]);
-      const ok = events.find(([e]) => e === 'complete'), err = events.find(([e]) => e === 'error');
-      if (!ok) throw new Error((err && err[1] !== 'null' && JSON.parse(err[1])) || 'the Space returned no result');
-      pool = JSON.parse(ok[1])[0];
-    } else {
-      const body = { prompt: cfg.prompt, n: cfg.N, t_prime: cfg.Tprime, max_new_tokens: cfg.maxNewTokens, seed };
-      if (B.id === 'server') Object.assign(body, { model: 'qwen3-14b', embedder: embedderOf(B).id });
-      const r = await fetch(`${B.url}/sample`, {
-        method: 'POST', signal, body: JSON.stringify(body),
-        headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${auth.token}` } : {}) },
-      });
-      pool = await r.json().catch(() => ({}));
-      if (r.status === 401 && auth) signOut();
-      if (!r.ok) throw new Error(pool.detail || `the server answered ${r.status}`);
+    const timing = { generate_s: 0, embed_s: 0, reported: false };
+    if (!buf) { buf = { prompt: cfg.prompt, model: cfg.model, backend: B.id, Tprime: cfg.Tprime, maxNewTokens: cfg.maxNewTokens, from: 'run', samples: [], batches: [] }; BUFFERS.push(buf); }
+    // Sample what is missing, at most LIMITS.maxN per request, appended in order.
+    for (let left = need; left > 0;) {
+      const n = Math.min(left, LIMITS.maxN);
+      const r = await sampleDraws(B, cfg, n, opts);
+      buf.batches.push({ start: buf.samples.length, n, G: { [cfg.embedder]: r.G } });
+      buf.samples.push(...r.samples);
+      if (r.timing?.generate_s != null) { timing.generate_s += r.timing.generate_s; timing.embed_s += r.timing.embed_s ?? 0; timing.reported = true; }
+      left -= n;
     }
-    // Only a pool made with exactly the requested configuration is shown.
-    if (pool.N !== cfg.N || pool.maxNewTokens !== cfg.maxNewTokens) throw new Error('the server did not run the requested settings');
-    if (!sameCfg(readConfig(), cfg)) { configChanged(); $('#live-status').textContent = 'The settings changed during the run, so its result is not shown.'; return; }
-    const phi = decodeEmb(pool.emb, pool.N, pool.D);
-    CACHE.push({ ...cfg, mem: { pool, phi } });   // kept for this visit, so going back to these settings shows it again
-    setPool(pool, phi, cfg);
+    let sl = await sliceOf(buf, start, end, cfg.embedder);
+    if (!sl) {
+      const samples = buf.samples.slice(start, end);
+      const G = await embedTexts(B, cfg, samples, opts);
+      buf.batches.push({ start, n: end - start, G: { [cfg.embedder]: G } });   // an embedding-only batch over this slice
+      sl = { samples, G };
+    }
+    const took = (need ? `Sampled in ${secs()} s` : `Embedded in ${secs()} s`) + (timing.reported ? ` (${Math.round(timing.generate_s)} s generating, ${Math.round(timing.embed_s)} s embedding)` : '') + '.';
+    if (viewKey(readConfig(), k) !== viewKey(cfg, k)) {
+      // The settings changed during the run: keep the result for its own settings, offer to show it.
+      stageMsg(null);
+      setStatus(`Done, but for earlier settings. `);
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'link'; b.textContent = 'Show it';
+      b.onclick = () => restoreConfig({ ...cfg, k });
+      $('#live-status').append(b);
+      return;
+    }
+    drawK = k;
     stageMsg(null);
-    S.poolNote = `Sampled in ${secs()}s.`;
-    $('#live-status').textContent = S.poolNote;
+    showSlice(buf, sl, cfg, k);
+    S.poolNote = `${took} Draw ${k} (completions ${start + 1}–${end}).`;
+    setStatus(S.poolNote, { drawNext: true });
   } catch (e) {
-    if (e.name === 'AbortError') {
+    if (e.name === 'AbortError' && !timedOut) {
       if (S.pool) stageMsg(null); else emptyMsg(cfg);
-      $('#live-status').textContent = 'Stopped.';
-    } else {
-      const reason = e instanceof TypeError ? `${escapeHtml(B.label.split(' · ')[1])} could not be reached. It may be offline.` : escapeHtml(e.message || String(e));
-      stageMsg('error', {
-        title: 'Sampling failed.',
-        detail: `${reason}<br>You can try again, or pick another model in the settings next to ↑.`,
-        actions: '<button type="button" class="btn" data-act="retry">Try again</button>' + (S.pool ? ' <button type="button" class="btn" data-act="dismiss">Dismiss</button>' : ''),
-      });
-      $('#live-status').textContent = '';
-    }
+      setStatus('Stopped.');
+    } else fail(B, timedOut ? new RunError('timeout', '') : e);
   } finally {
     clearInterval(tick);
+    clearTimeout(timer);
     cloudAbort = null;
     $('#live-go').hidden = false; $('#live-stop').hidden = true;
   }
 }
-const clampInt = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(+v || lo)));
 
-// ---------------------------------------------------------------- utils & wiring
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+// A failure: what happened, in plain words, and the next step that works.
+function fail(B, e) {
+  // Anything that is not a RunError was thrown while reading the answer (bad JSON, missing fields).
+  const code = e instanceof RunError ? e.code : 'bad_answer';
+  const msg = e.message ? escapeHtml(e.message) : '';
+  const retry = '<button type="button" class="btn" data-act="retry">Try again</button>';
+  const dismiss = S.pool ? ' <button type="button" class="btn" data-act="dismiss">Dismiss</button>' : '';
+  const M = {
+    unreachable: [`${cap(B.the)} isn’t responding.`, B.id === 'server' ? 'It may be offline, or not yet open to this page.' : 'It may be offline.', retry + ' ' + otherModelBtn()],
+    busy: ['Many people are sampling right now.', msg || 'Try again in a minute.', retry + ' ' + otherModelBtn()],
+    rate_limit: ['You have reached this server’s limit for now.', msg, otherModelBtn()],
+    budget: ['This month’s GPU budget for the demo is used up.', msg, otherModelBtn()],
+    quota: ['Your daily Hugging Face GPU time is used up.', msg || 'Free accounts get a few minutes a day.', otherModelBtn()],
+    auth: ['Your Hugging Face sign-in has expired.', '', '<button type="button" class="btn" data-act="signin">Sign in again</button> ' + otherModelBtn()],
+    starting: [`${cap(B.the)} is starting up.`, 'Try again in a minute.', retry],
+    timeout: ['No answer after 5 minutes.', 'Try again, or lower N or max tokens.', retry],
+    limit: ['That is more than the demo allows.', msg, ''],
+    mismatch: ['The server did not run the requested settings.', '', retry],
+    bad_answer: ['The server sent an answer the page could not read.', '', retry],
+    bad_request: ['The server did not accept these settings.', msg, ''],
+    server: ['The server hit an error while sampling.', msg, retry + ' ' + otherModelBtn()],
+  }[code] ?? ['Sampling failed.', msg, retry];
+  if (code === 'auth' && B.auth) { signOut(); refreshNote(); }
+  // A server's detail that only repeats the title adds nothing.
+  const detail = M[1] && M[1].replace(/&#?\w+;/g, '').startsWith(M[0].replace(/[.’']/g, '').slice(0, 20)) ? '' : M[1];
+  stageMsg('error', { title: M[0], detail, actions: M[2] + dismiss, sticky: cfgKey(readConfig()) });
+  setStatus('');
 }
+
+let pendingSignIn = null;
+let refreshNote = () => {};
+function restoreConfig(c) {
+  // Set every field first, then let the page react once to the complete settings.
+  pendingK = c.k > 1 ? c.k : null;
+  $('#prompt').value = c.prompt;
+  $('#model').value = c.backend;
+  window.__fillEmbedders?.();
+  $('#embedder').value = c.embedderId;
+  $('#live-N').value = c.N; $('#live-Tp').value = c.Tprime; $('#live-max').value = c.maxNewTokens;
+  $('#prompt').dispatchEvent(new Event('input'));   // the send button's state
+  window.__settingsChanged?.();
+}
+
+// ---------------------------------------------------------------- settings notes and limits
+function syncFieldNotes() {
+  const N = clampInt($('#live-N').value, 2, LIMITS.maxN), M = clampInt($('#live-max').value, 8, LIMITS.maxTokens);
+  const capN = +$('#live-N').value > LIMITS.maxN, capM = +$('#live-max').value > LIMITS.maxTokens;
+  $('#limits-note').textContent = capN || capM
+    ? `The demo allows at most ${LIMITS.maxN} samples and ${LIMITS.maxTokens} tokens per completion; using ${N} and ${M}.`
+    : `Up to ${LIMITS.maxN} samples and ${LIMITS.maxTokens} tokens.`;
+}
+
+// ---------------------------------------------------------------- wiring
 function setMode(m) {
   S.mode = m;
-  document.querySelectorAll('.pick-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
-  $('#T-slider').value = tToSlider(S.T[m]);
+  document.querySelectorAll('.step-2 .pick-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
   recompute({ newDraw: true });
 }
-
 function setK(v) {
+  if (!S.pool) return;
   S.K = clampInt(v, 1, Math.min(20, S.logp.length - 1));
   $('#K').value = S.K;
   recompute({ newDraw: true });
 }
 
+async function checkServer() {
+  const B = BACKENDS[0];
+  try {
+    const r = await fetch(`${B.url}/status`, { signal: AbortSignal.timeout(6000) });
+    B.up = r.ok;
+  } catch { B.up = false; }
+  return B.up;
+}
+
 function wire() {
   initExplainers();
-  // Settings: model (exact weights and where they run), embedder, N, T′, max tokens.
-  $('#model').innerHTML = BACKENDS.map((B) => `<option value="${B.id}">${escapeHtml(B.label)}</option>`).join('');
+  const fillModels = () => {
+    $('#model').innerHTML = BACKENDS.map((B) => `<option value="${B.id}">${escapeHtml(B.label)}${B.up === false ? ' — not available right now' : ''}</option>`).join('');
+  };
+  fillModels();
   const fillEmbedders = () => {
     const B = backend(), keep = $('#embedder').value;
     $('#embedder').innerHTML = B.embedders.map((e) => `<option value="${e.id}">${escapeHtml(e.label)}</option>`).join('');
     if (B.embedders.some((e) => e.id === keep)) $('#embedder').value = keep;
-    $('#live-N').max = String(B.maxN);
-    $('#live-max').max = String(B.maxTokens);
   };
   const modelNote = () => {
     const B = backend(), a = getAuth();
-    const where = B.id === 'server' ? 'Runs on a GPU server shared by everyone using this demo.'
-      : B.id === 'modal' ? 'Runs on a cloud GPU (Modal); needs a Hugging Face sign-in.'
-      : 'Runs on a Hugging Face ZeroGPU Space and uses your account’s daily GPU quota; needs a Hugging Face sign-in.';
+    const where = B.id === 'server'
+      ? (B.up === false ? 'The GPU server can’t be reached from this page right now. Precomputed examples still show.' : 'Runs on a GPU server shared by everyone using this demo.')
+      : B.id === 'modal' ? 'Runs on a cloud GPU (Modal); needs a free Hugging Face sign-in.'
+        : 'Runs on a Hugging Face ZeroGPU Space and uses your account’s daily GPU quota; needs a free Hugging Face sign-in.';
     $('#model-note').innerHTML = escapeHtml(where) + (B.auth && a ? ` Signed in as <b>${escapeHtml(a.user)}</b>. <button type="button" class="link" id="hf-signout">Sign out</button>` : '');
     $('#hf-signout')?.addEventListener('click', (e) => { e.stopPropagation(); signOut(); modelNote(); });
   };
-  const advSum = () => ($('#adv-sum').textContent = `${backend().short} · ${readConfig().N} samples`);
+  refreshNote = modelNote;
+  const advSum = () => ($('#adv-sum').textContent = `${backend().short} · ${TARGETS[S.target].short} · ${readConfig().N} samples`);
   const onSettings = () => { fillEmbedders(); advSum(); modelNote(); configChanged(); };
+  window.__settingsChanged = onSettings;
+  window.__fillEmbedders = fillEmbedders;
+  if (window.__dbg) Object.assign(window, { __S: S, __plot: plot, __callSpace: (...a) => callSpace(BACKENDS[2], ...a) });
   $('#model').addEventListener('change', onSettings);
   $('#embedder').addEventListener('change', onSettings);
   ['#live-N', '#live-Tp', '#live-max'].forEach((id) => $(id).addEventListener('change', onSettings));
+  $('#target').innerHTML = Object.entries(TARGETS).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join('');
+  $('#target').addEventListener('change', () => { S.target = $('#target').value; advSum(); recompute({ newDraw: true }); });
   let pt = 0;
   $('#prompt').addEventListener('input', () => { clearTimeout(pt); pt = setTimeout(configChanged, 250); });
-  fillEmbedders(); advSum(); modelNote();
-  $('#T-slider').value = tToSlider(S.T[S.mode]);
+  fillEmbedders(); advSum(); modelNote(); syncFieldNotes();
+  // The GPU server: if it can't be reached when the page opens, say so and default to Modal for this visit.
+  checkServer().then((up) => {
+    const keep = $('#model').value;
+    fillModels();
+    $('#model').value = !up && keep === 'server' ? 'modal' : keep;
+    onSettings();
+  });
+
+  $('#T-slider').value = tToSlider(S.T);
   let raf = 0;
   $('#T-slider').addEventListener('input', (e) => {
-    S.T[S.mode] = sliderToT(+e.target.value);
-    $('#T-out').textContent = fmtT(S.T[S.mode]);
+    S.T = sliderToT(+e.target.value);
+    $('#T-out').textContent = fmtT(S.T);
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => recompute({ newDraw: true }));
   });
   // "Most likely" shows the greedy MAP subset; "Sample" draws a new subset every time it is pressed.
-  document.querySelectorAll('.pick-btn').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
+  document.querySelectorAll('.step-2 .pick-btn').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
   $('#K').onchange = () => setK($('#K').value);
   $('#K-minus').onclick = () => setK(S.K - 1);
   $('#K-plus').onclick = () => setK(S.K + 1);
-  document.querySelectorAll('input[name=dims]').forEach((r) => (r.onchange = () => setDims(+r.value)));
   $('#scale-toggle').onchange = () => { plot.update(); renderLabels(); };
   $('#label-toggle').onchange = () => renderLabels();
-  // Close the View menu on an outside click or Escape.
-  document.addEventListener('click', (e) => { const m = $('#viewmenu'); if (m.open && !m.contains(e.target)) m.open = false; });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#viewmenu').open = false; });
-  $('.pool-table').addEventListener('toggle', () => { if ($('.pool-table').open) renderTable(); });
-  $('#live-go').onclick = runLive;
-  // Composer: Enter generates, Shift+Enter adds a line; the send button needs a prompt.
+  // Pop-up panels close on an outside click or Escape.
+  const pops = ['#viewmenu', '#specmenu', '#adv', '#exmenu'];
+  document.addEventListener('click', (e) => { for (const id of pops) { const m = $(id); if (m?.open && !e.composedPath().includes(m) && !e.target.closest('.xpop')) m.open = false; } });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') for (const id of pops) if ($(id)) $(id).open = false; });
+  for (const [a, b] of [['#adv', '#exmenu'], ['#exmenu', '#adv']]) $(a).addEventListener('toggle', () => { if ($(a).open) $(b).open = false; });
+  $('.pool-table').addEventListener('toggle', () => { if ($('.pool-table').open && S.pool) renderTable(); });
+  $('#live-go').onclick = () => runLive({ k: 1 });
   const syncGo = () => ($('#live-go').disabled = !$('#prompt').value.trim());
   $('#prompt').addEventListener('input', syncGo);
   $('#prompt').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!$('#live-go').hidden && !$('#live-go').disabled) runLive(); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!$('#live-go').hidden && !$('#live-go').disabled) runLive({ k: 1 }); }
   });
   syncGo();
-  // Close the settings menu on an outside click.
-  document.addEventListener('click', (e) => { for (const m of [$('#adv'), $('#exmenu')]) if (m.open && !m.contains(e.target)) m.open = false; });
-  // Only one composer menu open at a time.
-  for (const [a, b] of [['#adv', '#exmenu'], ['#exmenu', '#adv']]) $(a).addEventListener('toggle', () => { if ($(a).open) $(b).open = false; });
   $('#live-stop').onclick = () => cloudAbort?.abort();
   $('#stage-msg').addEventListener('click', (e) => {
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (act === 'stop') cloudAbort?.abort();
-    if (act === 'retry') runLive();
-    if (act === 'dismiss') stageMsg(null);
+    if (act === 'retry') runLive({ k: drawK });
+    if (act === 'dismiss') { stageMsg(null); if (!S.pool) emptyMsg(readConfig()); }
+    if (act === 'settings') { stageMsg(S.pool ? null : 'empty', S.pool ? {} : { title: 'Pick another model, then press ↑.' }); $('#adv').open = true; $('#model').focus(); }
+    if (act === 'use-server') { stageMsg(null); $('#model').value = 'server'; onSettings(); if (!S.pool) emptyMsg(readConfig()); }
+    if (act === 'signin') {
+      // The settings on screen now (a panel may have been up while they changed).
+      const now = readConfig(), cfg = pendingSignIn && cfgKey(pendingSignIn) === cfgKey(now) ? pendingSignIn : { ...now, k: drawK };
+      Promise.resolve().then(() => signIn({ cfg })).catch((err) => stageMsg('error', {
+        title: 'Could not start the Hugging Face sign-in.', detail: escapeHtml(err?.message || ''),
+        actions: '<button type="button" class="btn" data-act="signin">Try again</button>' + useServerBtn(), sticky: cfgKey(now),
+      }));
+    }
   });
   let rt = 0;
-  window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { plot.reset(); render(); }, 200); });
-  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { plot.reset(); render(); });
+  window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (!S.pool) return; plot.reset(); render(); }, 200); });
 }
+
 wire();
-// Coming back from "Sign in with Hugging Face": restore the configuration and run it.
+// Coming back from Hugging Face: restore the settings; run if the sign-in succeeded.
 finishSignIn().then((r) => {
-  const c = r?.stash?.cfg;
-  if (!c) return;
-  $('#prompt').value = c.prompt;
-  $('#model').value = c.backend;
-  $('#model').dispatchEvent(new Event('change'));
-  $('#embedder').value = c.embedderId;
-  Object.assign($('#live-N'), { value: c.N }); $('#live-Tp').value = c.Tprime; $('#live-max').value = c.maxNewTokens;
-  $('#embedder').dispatchEvent(new Event('change'));
-  $('#live-status').textContent = `Signed in to Hugging Face as ${r.auth.user}.`;
-  runLive();
-}).catch((e) => { $('#live-status').textContent = 'Sign-in failed: ' + (e.message || e); });
-loadData().then(configChanged).catch((e) => { $('#live-status').textContent = 'Could not load the examples: ' + e.message; });
+  if (!r) return;
+  const c = r.stash?.cfg;
+  if (c) restoreConfig(c);
+  if (r.error) {
+    stageMsg('error', { title: 'Sign-in was cancelled.', detail: escapeHtml(String(r.error)), actions: '<button type="button" class="btn" data-act="signin">Sign in with Hugging Face</button>' + useServerBtn() + ' <button type="button" class="btn" data-act="dismiss">Dismiss</button>', sticky: cfgKey(readConfig()) });
+    return;
+  }
+  refreshNote();
+  if (c) { setStatus(`Signed in to Hugging Face as ${r.auth.user}.`); runLive({ k: c.k ?? 1 }); }
+  else stageMsg('empty', { title: `Signed in to Hugging Face as ${escapeHtml(r.auth.user)}.`, detail: 'Your settings could not be kept through the sign-in. Press ↑ to run.', actions: '<button type="button" class="btn" data-act="dismiss">OK</button>', sticky: '*' });
+}).catch((e) => setStatus('Sign-in failed: ' + (e.message || e)));
+loadData().then(configChanged).catch((e) => {
+  stageMsg('error', { title: 'The examples could not be loaded.', detail: escapeHtml(e.message || '') + ' You can still type a prompt and press ↑.', actions: '<button type="button" class="btn" data-act="reload" onclick="location.reload()">Try again</button>', sticky: '*' });
+});
