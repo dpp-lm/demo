@@ -14,14 +14,14 @@ This server (`server/`) implements version 1 of the backend contract in `docs/BA
   "maxN": 200, "maxNewTokens": 256, "maxTextChars": 2000, "embed": true, "continuePool": true,
   "describe": true, "maxDescribeGroups": 8, "maxDescribeTexts": 4,
   "queue": {"running": 0, "waiting": 0, "max": 16}, "generating": 0, "waiting": 0, "runsLastHour": 12,
-  "logsRuns": true, "usage": true
+  "logsRuns": true, "usage": true, "drawCache": true
 }
 ```
 
 - Contract fields: `version`, `model`, `modelKey`, `embedders` (id to repo; `own` has `null`), `defaultEmbedder`, `limits`, `auth` (always `false`: no sign-in).
 - `maxN` and `maxNewTokens` at the top level are the older spelling of `limits`, kept for the page.
 - `state` of a model is `ready`, `loading`, `cold` or `unavailable`. `own` is offered for the models in `ownModels`.
-- `logsRuns`: the server stores every successful `/sample` run with its prompt and completions (the run log, below). `usage`: the server stores usage counts (sessions, UI events, one row per request; no text). The page sends `visitor`, `session` and `POST /event` only when `usage` is true, and shows a notice when `logsRuns` is true.
+- `logsRuns`: the server stores every successful `/sample` run with its prompt and completions (the run log, below). `drawCache`: `/sample` accepts `offset` (below). `usage`: the server stores usage counts (sessions, UI events, one row per request; no text). The page sends `visitor`, `session` and `POST /event` only when `usage` is true, and shows a notice when `logsRuns` is true.
 
 ## `POST /sample`
 
@@ -38,6 +38,7 @@ Request:
 | `embedder` | string | Optional: `minilm` (default), `qwen3-emb`, `qwen3-emb-4b`, `mpnet`, `own` (only for `ownModels`). |
 | `emb` | boolean | Optional. `true` adds `emb`, the unit vectors (see below). Default: not sent. |
 | `request_id` | string | Optional, 1 to 64 characters of `A-Za-z0-9_-`, for `GET /queue`. 409 while another unfinished request uses it. |
+| `offset` | integer | Optional, at least 0. Serves draws `[offset, offset + n)` of the shared stream (see "Draw cache"). Without it the request behaves as before. |
 | `visitor`, `session` | string | Optional ids from the page, 8 to 64 characters of `A-Za-z0-9_-`; see "Usage". A malformed id is ignored. |
 
 A value outside the limits is refused with 400 `bad_request`. Nothing is capped. Owner-only options (`embedders`, `own_raw`, `return_ids`) need `X-Own-Secret`.
@@ -58,6 +59,18 @@ Response:
 - `G` is the N×N matrix of inner products of the unit embeddings, computed in float64 from the float32 vectors, symmetrized, clipped to [−1, 1], diagonal exactly 1, sent as little-endian float32, row-major, base64. It is sent for every embedder, including `own`. Identical texts can have rows that differ by about 1e-5 (batched embedding); the page replaces them by the first copy's row.
 - `emb` (only with `"emb": true`): the N×D unit vectors as little-endian float32, row-major, base64. Without it the response omits `emb`, which is 200×2560 floats for `qwen3-emb-4b` and 200×5120 for `own` in exact mode.
 - `embedder` is the repo of the embedder (`own` for the model's own states), `embedderId` its key.
+
+## Draw cache (`offset`)
+
+A stream is an ordered list of i.i.d. completions for one key: (prompt as run, i.e. stripped, model key, repo and weights revision of the model, T′, max new tokens). 4-bit and 16-bit weights, and any other revision, have separate streams. A request with an integer `offset` returns draws `[offset, offset + n)` of the stream and samples only what the stream does not hold yet. The embedder does not belong to the key: draws are embedded per request (below).
+
+- **Opt in.** Only a body with `offset` uses a stream; `offset` must be an integer, at least 0 (400 `bad_request` otherwise, and when the cache is off, `/status.drawCache` false). A request without `offset` is unchanged: its `seed` is honored and its draws are never stored, because repeated seeds would add dependent copies. With `offset` the `seed` is ignored. `embedders`, `own_raw` and `return_ids` cannot be combined with `offset`.
+- **Limits.** `offset + n` is at most 1000 (400 otherwise). A request beyond the end of the stream first fills the gap, so the shortfall `offset + n − streamLength` is at most 200; otherwise 400 `bad_request` whose detail names the largest allowed offset (`streamLength + 200 − n`).
+- **i.i.d.** Extensions use seeds the server picks at random (a completion is a function of seed and index, so the seed range of a new batch never overlaps one used earlier in the same stream; the seed is recorded). A batch is appended whole, in generation order, in one transaction, at the current end of the stream only. Nothing is filtered, deduplicated or reordered. A failed or cancelled batch appends nothing. Concurrent requests for one stream are serialized: the second reads what the first appended.
+- **Response** is the `/sample` response plus `offset`, `streamLength` (after the request), `cached` (how many of the n draws were already in the stream when sampling started), and `seed: null`. `timing.generate_s` is 0 for an answer served entirely from the stream; `timing.embed_s` is the time to build `G`.
+- **Accounting.** An answer served entirely from the stream does not enter the GPU queue, does not count against the GPU budgets and does not need the one-request-per-client slot; it is limited to 120 per minute per client (429 `rate_limit`). A shortfall is sampled like any other run (queue, budgets for the shortfall only). The run log gets one record per generated batch, with `"stream": {"key", "start", "end"}` (the stream key and the positions) and the server's seed; cached reads are not logged. The usage store records `cached` and `offset` for every request.
+- **Embeddings.** Unit vectors are cached per (text, embedder id, repo, revision, dtype). `G` is built from them (float64 inner products, diagonal exactly 1), so identical texts have identical rows and a repeated request returns the same `G` byte for byte. Missing vectors are embedded on the GPU (outside the queue, like `/embed`). For `own`, the uncentered mean state of each draw is stored when the draw is generated (for every stream extension, whenever `own` is available for the model), and the vector is that state minus the model's `mu_full`, normalized. Own states cannot be recomputed exactly later (teacher forcing differs from the generation states, about 5e-4 in G), so draws stored without them answer an `own` request with 409 `bad_request`.
+- **Storage.** `drawcache/draws.sqlite3` (directory 700, file 600; `DPP_DRAW_CACHE=0` turns it off, `DPP_DRAW_CACHE_DIR` moves it, `DPP_DRAW_CACHE_MAX_GB`, default 4, caps it). Over the cap, whole streams are evicted least recently used first, then cached embeddings. A stream holds at most 1000 draws.
 
 ## `POST /embed`
 
@@ -100,7 +113,7 @@ Every successful `/sample` run is appended as one line to `runlog/runs-YYYY-MM-D
  "timing":{"generate_s":0.31,"embed_s":0.05}}
 ```
 
-`run_id` is random and links the line to a usage row (below). `revision` is the commit hash of the local weights snapshot. Writes happen under one lock as one full line; a failed write is logged to the service log and never fails the request.
+A batch generated for a stream (`offset` requests) has the same fields, `seed` is the server's seed, and an extra `"stream": {"key": "<sha256>", "start": 0, "end": 30}`. `run_id` is random and links the line to a usage row (below). `revision` is the commit hash of the local weights snapshot. Writes happen under one lock as one full line; a failed write is logged to the service log and never fails the request.
 
 `GET /runlog` (header `X-Own-Secret`, the owner key; 401 otherwise) returns `{"enabled": true, "days": [{"day": "2026-11-25", "lines": 3, "bytes": 2750}]}`. `GET /runlog?day=YYYY-MM-DD` streams that day's file as `application/x-ndjson` (404 when absent).
 
@@ -125,14 +138,14 @@ Cheap (one SQLite insert, no GPU queue). Body at most 4 KB, `Content-Type: appli
 
 All need the header `X-Stats-Password` (the stats password) or `X-Own-Secret` (the owner key). Without a configured stats password and without a valid owner key they answer 503 `server` with a detail that says so; a wrong or missing password is 401 `auth`; after 10 failed attempts within 5 minutes a client gets 429 `rate_limit` (also for the right password) until the window passes. Responses carry `Cache-Control: no-store` and `X-Robots-Tag: noindex`.
 
-**`GET /stats?days=N`** (N from 1 to 366, default 30; the window is the last N UTC days including today):
+**`GET /stats?days=N`** (N a positive integer, default 30; `days=all`, or N above 100,000, returns the whole history, with `since` the first day with data and `days` the number of days from it to today; the window is otherwise the last N UTC days including today):
 
 ```json
 {
   "generated": "2026-11-25T15:00:00Z", "days": 30, "since": "2026-10-27",
   "totals": {"visitors": 12, "sessions": 20, "sessionsWithRun": 9, "requests": 80, "runs": 41, "completions": 2900, "tokens": 120000,
-             "gpuSeconds": 410.5, "errors": 3, "medianSessionS": 95, "meanSessionS": 210},
-  "today": {"day": "2026-11-25", "visitors": 3, "sessions": 4, "runs": 7, "completions": 400, "errors": 0},
+             "gpuSeconds": 410.5, "errors": 3, "cachedRequests": 8, "cachedCompletions": 410, "medianSessionS": 95, "meanSessionS": 210},
+  "today": {"day": "2026-11-25", "visitors": 3, "sessions": 4, "runs": 7, "completions": 400, "errors": 0, "requests": 11},
   "daily": [{"day": "2026-11-24", "visitors": 5, "sessions": 6, "runs": 10, "completions": 700, "errors": 1}],
   "breakdowns": {
     "byOrigin": [{"key": "zueri-monstro.rufous-hamlet.ts.net", "requests": 60, "runs": 30, "sessions": 14}],
@@ -148,9 +161,9 @@ All need the header `X-Stats-Password` (the stats password) or `X-Own-Secret` (t
 }
 ```
 
-- A session belongs to the day of its first activity. `visitors` counts distinct visitor ids, so an anonymous visitor counts once per day. `runs` are successful `/sample` requests, `requests` all requests to the three routes, `errors` requests whose outcome is not `ok`. `gpuSeconds` is the run time (after the queue wait) of every request. Session length is last activity minus first activity.
-- `daily` has one entry per UTC day from the first day with data (at most N entries, at most 366) to today; days without activity are zeros. `today` has the same fields as a `daily` entry.
-- `byOrigin` is sorted by `requests`. `byEmbedder` counts successful runs. `byErrorCode` counts failed requests. `n`, `tprime` and `maxNewTokens` count successful runs by value, sorted by key. The medians are over `/sample` queue waits and over successful runs' `generate_s` and `embed_s`.
+- A session belongs to the day of its first activity. `visitors` counts distinct visitor ids, so an anonymous visitor counts once per day. `cachedRequests` counts successful `/sample` requests served entirely from a stream, `cachedCompletions` the draws read from streams (including the cached part of a request that also sampled); `completions` and `tokens` count only what was generated. `runs` are successful `/sample` requests, `requests` all requests to the three routes, `errors` requests whose outcome is not `ok`. `gpuSeconds` is the run time (after the queue wait) of every request. Session length is last activity minus first activity.
+- `daily` has one entry per UTC day from the first day with data (at most N entries) to today, so it is long for `days=all`; days without activity are zeros. `today` has the same fields as a `daily` entry.
+- `byOrigin` is sorted by `requests`; a request without an origin has the key `""`, the same value `origin` has in the sessions. `byEmbedder` counts successful runs. `byErrorCode` counts failed requests. `n`, `tprime` and `maxNewTokens` count successful runs by value, sorted by key. The medians are over `/sample` queue waits and over successful runs' `generate_s` and `embed_s`.
 - `sessions` has the 200 most recent sessions by last activity; `sessionsTruncated` is how many more the window holds.
 
 **`GET /stats/session?id=<session id>`**: `{session, events, requests}` in time order (404 for an unknown id, 400 for a malformed one).
@@ -160,7 +173,7 @@ All need the header `X-Stats-Password` (the stats password) or `X-Own-Secret` (t
  "events": [{"time": "2026-11-25T14:20:11Z", "type": "load", "name": "", "value": ""}, {"time": "...", "type": "ui", "name": "mode", "value": "map"}],
  "requests": [{"time": "...", "route": "/sample", "model": "qwen3-14b", "embedder": "qwen3-emb", "N": 30, "Tprime": 1.0, "maxNewTokens": 64,
                "outcome": "ok", "queueWaitS": 0.0, "runS": 4.2, "generateS": 3.1, "embedS": 0.4, "tokens": 900, "completions": 30,
-               "runId": "<32 hex>", "prompt": "..."}]}
+               "runId": "<32 hex>", "prompt": "...", "cached": 0, "offset": null}]}
 ```
 
 `prompt` is read from the run log by `runId` (`null` when the run log is off or has no such line). Requests that are not successful samples have `runId` and `prompt` absent or null.

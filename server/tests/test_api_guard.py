@@ -194,4 +194,6 @@ check("gram_b64 matches float64 inner products to float32 rounding", _np.abs(_g 
 _d = _np.vstack([_e[:1], _e[:1]])
 check("gram_b64 of identical rows is 1", _np.frombuffer(_b64.b64decode(G.gram_b64(_d)), dtype="<f4")[1] == 1.0)
 
+_s = _np.frombuffer(_b64.b64decode(G.gram_b64(_np.vstack([_e[:1], _e[1:2] * 0 + _e[:1], _e[2:3]]), same=["a", "a", "b"])), dtype="<f4").reshape(3, 3)
+check("gram_b64 with same: rows of identical texts are identical, entry between them exactly 1", _s[0, 1] == 1.0 and (_s[0] == _s[1]).all() and _s[0, 2] == _s[1, 2])
 print("ALL PASS" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

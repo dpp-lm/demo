@@ -133,15 +133,19 @@ def text(v, name, maxlen, required=True, strip=True, truncate=True):
     return v[:maxlen] if maxlen else v
 
 
-def gram_b64(emb):
+def gram_b64(emb, same=None):
     """G of docs/BACKEND.md: inner products in float64 of the unit vectors `emb` (N x D, float32), symmetrized, entries clipped to
-    [-1, 1], diagonal exactly 1, returned as base64 of little-endian float32, row-major."""
+    [-1, 1], diagonal exactly 1, returned as base64 of little-endian float32, row-major. `same` (a class id per row, e.g. the text) sets
+    the entry of two rows of one class to exactly 1, so rows of identical completions are identical."""
     import base64
     u = np.asarray(emb, dtype=np.float32).astype(np.float64)
     g = u @ u.T
     g = (g + g.T) / 2
     np.clip(g, -1.0, 1.0, out=g)
     np.fill_diagonal(g, 1.0)
+    if same is not None:
+        c = np.asarray(same)
+        g[c[:, None] == c[None, :]] = 1.0
     return base64.b64encode(np.ascontiguousarray(g, dtype="<f4").tobytes()).decode("ascii")
 
 
@@ -653,7 +657,7 @@ def utc_iso(t):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
 
 
-def sample_record(pool, key, repo, revision, embedder_id, t, run_id=None):
+def sample_record(pool, key, repo, revision, embedder_id, t, run_id=None, stream=None):
     """The run-log record of a successful /sample: configuration, seed, completions with exact logp and logq, timing, UTC time.
     Nothing about the visitor (address, client id, user agent, request_id, token) and no embeddings or G (recomputable from the texts)."""
     return {
@@ -664,6 +668,7 @@ def sample_record(pool, key, repo, revision, embedder_id, t, run_id=None):
         "samples": [{"text": s["text"], "logp": s["logp"], "logq": s["logq"], "nTokens": s["nTokens"], "ended": s["ended"]}
                     for s in pool["samples"]],
         "timing": pool.get("timing", {}),
+        **({"stream": stream} if stream else {}),
     }
 
 

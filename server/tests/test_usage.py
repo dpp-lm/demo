@@ -11,6 +11,7 @@ def check(name, cond, extra=""):
     ok &= bool(cond); print(("PASS " if cond else "FAIL ") + name, extra)
 
 mode = lambda p: stat.S_IMODE(os.stat(p).st_mode)
+day_of = U.day_of
 T0 = 1_795_000_000.0   # 2026-11-18T... UTC, a fixed clock for the fixtures
 
 # ---------------------------------------------------------------- run log
@@ -102,7 +103,20 @@ check("totals: runs, completions, tokens", (t["runs"], t["completions"], t["toke
 check("totals: requests and errors", (t["requests"], t["errors"]) == (5, 1), t)
 check("totals: GPU seconds are the run time of every request", t["gpuSeconds"] == 18.5, t["gpuSeconds"])
 check("session length: median and mean", t["medianSessionS"] == 60 and t["meanSessionS"] == round((100 + 60 + 10) / 3), (t["medianSessionS"], t["meanSessionS"]))
-check("today row", st["today"] == {"day": "2026-11-20", "visitors": 2, "sessions": 2, "runs": 2, "completions": 130, "errors": 1}, st["today"])
+check("today row (a daily row plus requests)", st["today"] == {"day": "2026-11-20", "visitors": 2, "sessions": 2, "runs": 2, "completions": 130, "errors": 1, "requests": 4}, st["today"])
+check("cached totals are zero without cached reads", t["cachedRequests"] == 0 and t["cachedCompletions"] == 0, t)
+St.record_request(NOON + 95, S3, V3, "", "/sample", "ok", model="qwen3-14b", embedder="qwen3-emb", n=10, tprime=1.0, max_new=64, wait_s=0.0, run_s=0.01, gen_s=0.0, embed_s=0.0, tokens=0, completions=0, cached=10, offset=0)
+St.record_request(NOON + 96, S3, V3, "", "/sample", "ok", model="qwen3-14b", embedder="qwen3-emb", n=10, tprime=1.0, max_new=64, wait_s=0.0, run_s=1.0, gen_s=1.0, embed_s=0.0, tokens=100, completions=5, cached=5, offset=5, run_id="e" * 32)
+st2 = St.stats(7, now=NOON + 100)
+check("cachedRequests counts requests served entirely from the stream; cachedCompletions the draws read from it", st2["totals"]["cachedRequests"] == 1 and st2["totals"]["cachedCompletions"] == 15, st2["totals"])
+check("an empty origin is '' in byOrigin and in the sessions", "" in [o["key"] for o in st2["breakdowns"]["byOrigin"]] and "(none)" not in [o["key"] for o in st2["breakdowns"]["byOrigin"]])
+check("the session lists cached and offset", [(q["cached"], q["offset"]) for q in St.session(S3)["requests"][-2:]] == [(10, 0), (5, 5)])
+al = St.stats("all", now=NOON + 100)
+check("days=all: since is the first day with data, days counts the days up to today", al["since"] == "2026-11-18" and al["days"] == 3 and al["totals"]["requests"] == st2["totals"]["requests"], (al["since"], al["days"]))
+check("more than 366 days are allowed", St.stats(5000, now=NOON + 100)["totals"]["requests"] == st2["totals"]["requests"] and St.stats(5000, now=NOON + 100)["days"] == 5000)
+St.record_request(NOON - 400 * DAY, "old1" * 4, "oldv" * 4, "x", "/sample", "ok", model="m", n=2, run_s=1.0, completions=2, tokens=4, run_id="9" * 32)
+al2 = St.stats("all", now=NOON + 100)
+check("days=all reaches back more than a year", al2["days"] > 400 and len(al2["daily"]) == al2["days"] and al2["since"] == day_of(NOON - 400 * DAY), al2["days"])
 days = [r["day"] for r in st["daily"]]
 check("daily series is contiguous, ends today, starts at the first day with data", days == ["2026-11-18", "2026-11-19", "2026-11-20"], days)
 check("daily: gap day is zero", st["daily"][1] == {"day": "2026-11-19", "visitors": 0, "sessions": 0, "runs": 0, "completions": 0, "errors": 0})
@@ -124,7 +138,7 @@ se = St.session(S1)
 check("session detail: events then requests in order", [e["type"] for e in se["events"]] == ["load", "ui"] and se["events"][1]["name"] == "mode" and se["requests"][0]["runId"] == "a" * 32
       and se["requests"][0]["N"] == 30 and se["requests"][0]["outcome"] == "ok" and se["session"]["referrer"] == "news.example.org", se)
 check("unknown session", St.session("zz" * 6) is None)
-check("run_day finds the day of a run", St.run_day("b" * 32) == "2026-11-20" and St.run_day("e" * 32) is None)
+check("run_day finds the day of a run", St.run_day("b" * 32) == "2026-11-20" and St.run_day("7" * 32) is None)
 # events: allowlist, caps, heartbeats
 check("event allowlist: load and ui only", U.clean_event({"type": "drop table"}) is None and U.clean_event({}) is None and U.clean_event({"type": "visit"}) is None and U.clean_event({"type": "ui"}) is None
       and U.clean_event({"type": "ui", "name": "evil"}) is None)

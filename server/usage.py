@@ -30,7 +30,7 @@ MODE_VALUES = ("map", "sample")
 PRESET_RE = re.compile(r"[A-Za-z0-9_.:-]{1,32}")
 MAX_EVENTS_PER_SESSION = 500
 ROUTES = ("/sample", "/embed", "/describe")
-MAX_DAYS = 366
+MAX_DAYS = 100_000      # `days=all` and any larger value return the whole history
 SESSIONS_LIMIT = 200
 
 
@@ -146,7 +146,8 @@ class UsageStore:
     CREATE TABLE IF NOT EXISTS requests (
       id INTEGER PRIMARY KEY, t REAL NOT NULL, day TEXT NOT NULL, session TEXT NOT NULL, origin TEXT NOT NULL DEFAULT '',
       route TEXT NOT NULL, model TEXT, embedder TEXT, n INTEGER, tprime REAL, max_new INTEGER, outcome TEXT NOT NULL,
-      wait_s REAL, run_s REAL, gen_s REAL, embed_s REAL, tokens INTEGER, completions INTEGER, run_id TEXT);
+      wait_s REAL, run_s REAL, gen_s REAL, embed_s REAL, tokens INTEGER, completions INTEGER, run_id TEXT,
+      cached_n INTEGER, stream_offset INTEGER);
     CREATE INDEX IF NOT EXISTS requests_day ON requests(day);
     CREATE INDEX IF NOT EXISTS requests_session ON requests(session);
     CREATE INDEX IF NOT EXISTS requests_run ON requests(run_id);
@@ -173,6 +174,10 @@ class UsageStore:
                 self.db.execute("PRAGMA journal_mode=WAL")
                 self.db.execute("PRAGMA synchronous=NORMAL")
                 self.db.executescript(self.SCHEMA)
+                have = {r[1] for r in self.db.execute("PRAGMA table_info(requests)")}
+                for col in ("cached_n", "stream_offset"):   # databases made before the draw cache
+                    if col not in have:
+                        self.db.execute(f"ALTER TABLE requests ADD COLUMN {col} INTEGER")
             finally:
                 os.umask(old)
             os.chmod(self.path, 0o600)
@@ -204,13 +209,14 @@ class UsageStore:
                        "referrer=CASE WHEN referrer='' THEN ? ELSE referrer END WHERE id=?", (t, origin, referrer, session))
 
     def record_request(self, t, session, visitor, origin, route, outcome, model=None, embedder=None, n=None, tprime=None,
-                       max_new=None, wait_s=None, run_s=None, gen_s=None, embed_s=None, tokens=None, completions=None, run_id=None):
+                       max_new=None, wait_s=None, run_s=None, gen_s=None, embed_s=None, tokens=None, completions=None, run_id=None,
+                       cached=None, offset=None):
         def w(db):
             self._touch(db, session, visitor, t, origin)
             db.execute("INSERT INTO requests(t, day, session, origin, route, model, embedder, n, tprime, max_new, outcome, wait_s, run_s,"
-                       " gen_s, embed_s, tokens, completions, run_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                       " gen_s, embed_s, tokens, completions, run_id, cached_n, stream_offset) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (t, day_of(t), session, origin, route, model, embedder, n, tprime, max_new, outcome, wait_s, run_s, gen_s,
-                        embed_s, tokens, completions, run_id))
+                        embed_s, tokens, completions, run_id, cached, offset))
         return self._safe(w)
 
     def record_event(self, t, session, visitor, origin, etype, name="", value="", ref=""):
@@ -227,17 +233,19 @@ class UsageStore:
 
     # ---------------------------------------------------------------- reads
     def stats(self, days, now=None, sessions_limit=SESSIONS_LIMIT):
-        """The /stats body. Days are UTC days; the window is the last `days` days including today."""
+        """The /stats body. Days are UTC days; the window is the last `days` days including today. `days` "all" (or more than MAX_DAYS)
+        is the whole history: `since` is then the first day with data and `days` the number of days from it to today."""
         now = now if now is not None else time.time()
-        days = max(1, min(int(days), MAX_DAYS))
+        everything = days == "all" or int(days) > MAX_DAYS
+        days = MAX_DAYS if everything else max(1, int(days))
         today = day_of(now)
-        since = day_of(now - (days - 1) * 86400)
+        since = "0000-01-01" if everything else day_of(now - (days - 1) * 86400)
 
         def r(db):
             ses = db.execute("SELECT id, visitor, first_t, last_t, day, origin, referrer, events FROM sessions WHERE day>=? ORDER BY first_t",
                              (since,)).fetchall()
             req = db.execute("SELECT t, day, session, origin, route, model, embedder, n, tprime, max_new, outcome, wait_s, run_s, gen_s,"
-                             " embed_s, tokens, completions, run_id FROM requests WHERE day>=? ORDER BY t", (since,)).fetchall()
+                             " embed_s, tokens, completions, run_id, cached_n FROM requests WHERE day>=? ORDER BY t", (since,)).fetchall()
             return ses, req
         got = self._safe(r)
         ses, req = got if got is not None else ([], [])
@@ -262,6 +270,8 @@ class UsageStore:
             daily.append(day_row(d.isoformat()))
             d += datetime.timedelta(days=1)
         daily = daily[-days:]
+        if everything:
+            since, days = daily[0]["day"], len(daily)
         todayrow = day_row(today)
         hours = [0] * 24
         for q in req:
@@ -269,7 +279,7 @@ class UsageStore:
         errs = [q[10] for q in req if q[10] != "ok"]
         by_origin = {}
         for q in req:
-            o = by_origin.setdefault(q[3] or "(none)", {"key": q[3] or "(none)", "requests": 0, "runs": 0, "sessions": set()})
+            o = by_origin.setdefault(q[3] or "", {"key": q[3] or "", "requests": 0, "runs": 0, "sessions": set()})
             o["requests"] += 1
             o["runs"] += q[4] == "/sample" and q[10] == "ok"
             o["sessions"].add(q[2])
@@ -282,9 +292,10 @@ class UsageStore:
                 "visitors": len({s[1] for s in ses}), "sessions": len(ses), "sessionsWithRun": len(run_sessions),
                 "requests": len(req), "runs": len(ok_runs), "completions": sum(q[16] or 0 for q in ok_runs),
                 "tokens": sum(q[15] or 0 for q in ok_runs), "gpuSeconds": round(sum(q[12] or 0 for q in req), 1),
-                "errors": len(errs), "medianSessionS": round(_median(durations)), "meanSessionS": round(sum(durations) / len(durations)) if durations else 0,
+                "errors": len(errs), "cachedRequests": sum(1 for q in samples if q[18] is not None and q[7] and q[18] >= q[7] and q[10] == "ok"),
+                "cachedCompletions": sum(q[18] or 0 for q in samples if q[10] == "ok"), "medianSessionS": round(_median(durations)), "meanSessionS": round(sum(durations) / len(durations)) if durations else 0,
             },
-            "today": {k: v for k, v in todayrow.items()},
+            "today": dict(todayrow, requests=sum(1 for q in req if q[1] == today)),
             "daily": daily,
             "breakdowns": {
                 "byOrigin": sorted(({"key": o["key"], "requests": o["requests"], "runs": o["runs"], "sessions": len(o["sessions"])}
@@ -312,7 +323,7 @@ class UsageStore:
                 return None
             ev = db.execute("SELECT t, type, name, value FROM events WHERE session=? ORDER BY t, id", (sid,)).fetchall()
             rq = db.execute("SELECT t, route, model, embedder, n, tprime, max_new, outcome, wait_s, run_s, gen_s, embed_s, tokens,"
-                            " completions, run_id FROM requests WHERE session=? ORDER BY t, id", (sid,)).fetchall()
+                            " completions, run_id, cached_n, stream_offset FROM requests WHERE session=? ORDER BY t, id", (sid,)).fetchall()
             return s, ev, rq
         got = self._safe(r)
         if got is None:
@@ -324,7 +335,7 @@ class UsageStore:
             "events": [{"time": iso(e[0]), "type": e[1], "name": e[2] or "", "value": e[3] or ""} for e in ev],
             "requests": [{"time": iso(q[0]), "route": q[1], "model": q[2], "embedder": q[3], "N": q[4], "Tprime": q[5], "maxNewTokens": q[6],
                           "outcome": q[7], "queueWaitS": q[8], "runS": q[9], "generateS": q[10], "embedS": q[11], "tokens": q[12],
-                          "completions": q[13], "runId": q[14]} for q in rq],
+                          "completions": q[13], "runId": q[14], "cached": q[15], "offset": q[16]} for q in rq],
         }
 
     def run_day(self, run_id):

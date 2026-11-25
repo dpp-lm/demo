@@ -2,6 +2,7 @@ import * as d3 from 'd3';
 import { eigSym, kdpp, greedyMAPLog, quality, diversity, mulberry32 } from './dpp.js';
 import { Plot3D } from './plot3d.js';
 import { openCone } from './layout.js';   // expert:
+import { withOffset, offsetMismatch } from './draws-lib.js';   // expert: the server's shared draw cache
 import { usageBody, usageNotice, usageReady } from './usage.js';   // expert: usage ids and the research notice
 import { initExplainers } from './explain.js';
 import { authEnabled, getAuth, signIn, signOut, finishSignIn } from './hfauth.js';
@@ -893,17 +894,19 @@ async function callSpace(B, api, data, { signal, auth }) {
 }
 
 // Sample `n` new draws for cfg on backend B; returns { samples, G (n×n), timing }.
-async function sampleDraws(B, cfg, n, opts) {
+async function sampleDraws(B, cfg, n, opts, position = null) {
   const seed = Math.floor(Math.random() * 2 ** 31);
   let out;
   if (B.id === 'space') out = await callSpace(B, 'sample', [cfg.prompt, 'qwen3-14b', n, cfg.Tprime, cfg.maxNewTokens, seed], opts);
   else {
-    const body = { prompt: cfg.prompt, n, t_prime: cfg.Tprime, max_new_tokens: cfg.maxNewTokens, seed };
+    let body = { prompt: cfg.prompt, n, t_prime: cfg.Tprime, max_new_tokens: cfg.maxNewTokens, seed };
     if (isServer(B)) Object.assign(body, { model: B.modelKey ?? 'qwen3-14b', embedder: cfg.embedderId });   // expert: B.modelKey
+    body = withOffset(body, { on: !!B.drawCache, position });   // expert: draw cache, the answer holds stream positions [position, position + n)
     const watch = B.queue ? queueWatch(B, opts.signal) : null;   // expert: request id and queue position
     if (watch) body.request_id = watch.id;
     try { out = await callBackend(B, '/sample', body, opts); } finally { watch?.stop(); }
   }
+  if (offsetMismatch(out, { on: !!B.drawCache, position })) throw new RunError('mismatch', 'The server did not return the asked positions.');   // expert:
   if (out.N !== n || out.maxNewTokens !== cfg.maxNewTokens || (out.Tprime != null && Math.abs(out.Tprime - cfg.Tprime) > 1e-9) || !Array.isArray(out.samples) || out.samples.length !== n) throw new RunError('mismatch', 'The server did not run the requested settings.');
   return { samples: out.samples, G: gramOf(out, n), timing: out.timing };
 }
@@ -970,7 +973,7 @@ async function runLive({ k = drawK } = {}) {
     // Sample what is missing, at most LIMITS.maxN per request, appended in order.
     for (let left = need; left > 0;) {
       const n = Math.min(left, LIMITS.maxN);
-      const r = await sampleDraws(B, cfg, n, opts);
+      const r = await sampleDraws(B, cfg, n, opts, buf.samples.length);   // expert: the position in the buffer is the position in the server's stream
       buf.batches.push({ start: buf.samples.length, n, G: { [cfg.embedder]: r.G } });
       buf.samples.push(...r.samples);
       if (r.timing?.generate_s != null) { timing.generate_s += r.timing.generate_s; timing.embed_s += r.timing.embed_s ?? 0; timing.reported = true; }

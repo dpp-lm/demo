@@ -14,6 +14,7 @@
 
 import { EXPLAIN } from './explain.js';
 import { usageStatus, initUsage } from './usage.js';
+import { drawCacheOn } from './draws-lib.js';
 import { serverExtras, queueText, newRequestId } from './expert-lib.js';
 import { groupsSection, initGroups, groupColors, groupInfo } from './groups.js';
 import { principledSection, initUnprincipled, npState, npModeT } from './unprincipled.js';
@@ -52,6 +53,7 @@ export function noteStatus(B, body) {
   B.statusBody = body ?? null;
   B.queue = !!(body && typeof body.queue === 'object' && body.queue);
   usageStatus(B, body);   // usage ids, the load event and the research notice (js/usage.js)
+  B.drawCache = drawCacheOn(B.id, body);   // the server's shared draw cache: requests carry `offset` (js/draws-lib.js)
   if (on) applyServerExtras();
 }
 

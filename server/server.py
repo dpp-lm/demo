@@ -48,6 +48,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 import api_guard as G
 import usage as U
+import drawcache as D
 
 RESIDENT_KEY = "qwen3-14b"
 RESIDENT_UTIL = float(os.environ.get("DPP_RESIDENT_UTIL", "0.50"))  # fraction of the card for the 14B engine
@@ -254,6 +255,10 @@ _REVISION = {}
 USAGE = U.UsageStore.from_env(os.environ, os.path.join(os.path.dirname(os.path.abspath(__file__)), "usage"), on_error=log.error)
 SALT = U.DailySalt()   # random per UTC day, in memory only
 STATS_PASSWORD_FILE = os.environ.get("DPP_STATS_PASSWORD_FILE") or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".stats_password")
+# Draw cache (DPP_DRAW_CACHE=0 turns it off, DPP_DRAW_CACHE_DIR moves it, DPP_DRAW_CACHE_MAX_GB caps it): streams of i.i.d. draws, see README.md.
+DRAWS = D.DrawCache.from_env(os.environ, os.path.join(os.path.dirname(os.path.abspath(__file__)), "drawcache"), on_error=log.error)
+CACHED_READS_PER_MINUTE = 120   # per client, /sample requests served entirely from a stream
+_KEYLOCKS = {}
 MAX_BODY_EVENT = 4096
 EVENTS_PER_MINUTE = 120      # per client, POST /event
 STATS_FAILS = 10             # failed /stats password attempts per client in STATS_FAIL_WINDOW seconds before 429
@@ -460,6 +465,7 @@ async def lifespan(app):
     S["queue"] = G.JobQueue(("resident", "slot"), MAX_QUEUE_WAITING, QUEUE_MAX_WAIT)   # one running job per engine, FIFO
     S["qpoll"] = G.RateWindow(QUEUE_POLLS_PER_MINUTE, 60)
     S["evrate"] = G.RateWindow(EVENTS_PER_MINUTE, 60)
+    S["cacherate"] = G.RateWindow(CACHED_READS_PER_MINUTE, 60)
     S["authfail"] = G.RateWindow(STATS_FAILS, STATS_FAIL_WINDOW)
     S["dcache"] = G.LRU(DESCRIBE_CACHE_SIZE)
     S["limits"] = G.Limits(CLIENT_TOKENS_PER_HOUR, CLIENT_SWAPS_PER_HOUR, GLOBAL_RUNS_PER_HOUR, GLOBAL_TOKENS_PER_HOUR,
@@ -712,6 +718,222 @@ async def unhandled(request, exc):
     return JSONResponse({"code": "server", "detail": "Internal error."}, status_code=500, headers=headers)
 
 
+# ---------------------------------------------------------------- draw cache: /sample with `offset`
+
+def embedder_sig(k):
+    """Identity of an embedder's vectors: id, repo, local snapshot revision, dtype."""
+    cfg = EMBEDDERS[k]
+    try:
+        rev = os.path.basename(snapshot_download(cfg["repo"], local_files_only=True).rstrip("/"))
+    except Exception:
+        rev = ""
+    return f"{k}|{cfg['repo']}|{rev}|{str(cfg['dtype']).replace('torch.', '')}"
+
+
+@contextlib.asynccontextmanager
+async def key_lock(skey):
+    """One writer per stream: a second request for the same key waits, then reads what the first appended."""
+    lock = _KEYLOCKS.setdefault(skey, [asyncio.Lock(), 0])
+    lock[1] += 1
+    try:
+        async with lock[0]:
+            yield
+    finally:
+        lock[1] -= 1
+        if lock[1] == 0:
+            _KEYLOCKS.pop(skey, None)
+
+
+def _unit32(rows):
+    return rows / np.maximum(np.linalg.norm(rows, axis=1, keepdims=True), 1e-12)
+
+
+async def stream_vectors(skey, key, embedder, offset, draws, pool=None):
+    """Unit vectors (float32, N x D) of draws [offset, offset + N) of a stream under `embedder`. Text embedders: one cached vector per
+    (text, embedder id, revision), computed on the GPU only for texts not cached yet (the first vector of a text is its vector, so
+    identical texts have identical rows). `own`: the states stored at generation time, centered like live samples; HTTP 409 when those
+    draws have none (or were stored in another mode)."""
+    n = len(draws)
+    if embedder == OWN_KEY:
+        raws = await asyncio.to_thread(DRAWS.read_own, skey, offset, offset + n)
+        mu = own_mu(key)
+        if mu is None or any(r is None or len(r) != 4 * mu.shape[0] for r in raws):
+            raise HTTPException(409, "These draws have no stored own states (stored before own states were available, or in another mode). Use another embedder or other positions.")
+        v = np.frombuffer(b"".join(raws), dtype="<f4").reshape(n, -1).astype(np.float64) - mu
+        return _unit32(v).astype(np.float32)
+    sig = embedder_sig(embedder)
+    texts = [d["text"] if d["text"].strip() else "(empty)" for d in draws]
+    have = await asyncio.to_thread(DRAWS.get_embs, sig, texts)
+    missing = sorted({t for t in texts if t not in have})
+    if missing:
+        async with S["emb_lock"]:
+            def run():
+                e = get_embedder(embedder)(missing)
+                torch.cuda.empty_cache()
+                return e
+            e = await asyncio.to_thread(run)
+        stored = await asyncio.to_thread(DRAWS.put_embs, sig, {t: (int(e.shape[1]), np.ascontiguousarray(e[i], dtype="<f4").tobytes()) for i, t in enumerate(missing)})
+        have.update(stored)
+    return np.stack([np.frombuffer(have[t], dtype="<f4") for t in texts])
+
+
+async def stream_answer(skey, key, embedder, offset, n, t_prime, max_new, prompt, cached, stream_len, gen_s, t0, with_emb):
+    draws = await asyncio.to_thread(DRAWS.read, skey, offset, offset + n)
+    t1 = time.time()
+    emb = await stream_vectors(skey, key, embedder, offset, draws)
+    cfg = MODELS[key]
+    pool = {"prompt": prompt, "model": cfg["repo"], "modelName": cfg["name"], "modelKey": key,
+            "embedder": OWN_KEY if embedder == OWN_KEY else EMBEDDERS[embedder]["repo"], "embedderId": embedder,
+            "Tprime": t_prime, "maxNewTokens": max_new, "N": n, "D": int(emb.shape[1]), "seed": None,
+            "timing": {"generate_s": gen_s, "embed_s": round(time.time() - t1, 2)}, "samples": draws,
+            "G": G.gram_b64(emb, same=[d["text"] for d in draws]), "offset": offset, "streamLength": stream_len, "cached": cached}
+    if with_emb:
+        pool["emb"] = base64.b64encode(np.ascontiguousarray(emb, dtype="<f4").tobytes()).decode("ascii")
+    return pool
+
+
+async def extend_stream(skey, key, engine, prompt, t_prime, max_new, embedder, length, need):
+    """Generate `need` draws with a server-chosen seed and append them whole at position `length`. Returns (new length, pool, seed, run_id).
+    Nothing is appended unless generation, own-state recovery and embedding all succeeded."""
+    seed = await asyncio.to_thread(DRAWS.pick_seed, skey, need)
+    extra = (OWN_KEY,) if own_available(key) and embedder != OWN_KEY else ()
+    pool = await sample_pool(key, engine, prompt, need, t_prime, max_new, seed=seed, embedder=embedder, extra=extra, own_raw=True, with_emb=True)
+    n = len(pool["samples"])
+    own = [None] * n
+    if "ownRaw" in pool:
+        raw = base64.b64decode(pool["ownRaw"])
+        w = len(raw) // n
+        own = [raw[i * w:(i + 1) * w] for i in range(n)]
+    draws = [{k: s[k] for k in ("text", "logp", "logq", "nTokens", "ended")} for s in pool["samples"]]
+    run_id = uuid.uuid4().hex
+    meta = {"model_key": key, "repo": MODELS[key]["repo"], "revision": model_revision(key), "tprime": t_prime, "max_new": max_new}
+    new_len = await asyncio.to_thread(DRAWS.append, skey, meta, length, draws, own, seed, run_id)
+    if embedder != OWN_KEY:   # the vector of a text is the first one stored; later copies and requests use it
+        e = np.frombuffer(base64.b64decode(pool["emb"]), dtype="<f4").reshape(n, -1)
+        first = {}
+        for i, d in enumerate(draws):
+            first.setdefault(d["text"] if d["text"].strip() else "(empty)", i)
+        try:
+            await asyncio.to_thread(DRAWS.put_embs, embedder_sig(embedder), {t: (int(e.shape[1]), np.ascontiguousarray(e[i], dtype="<f4").tobytes()) for t, i in first.items()})
+        except Exception:
+            log.exception("draw cache: embeddings of the new draws were not stored")
+    return new_len, pool, seed, run_id
+
+
+async def stream_sample(req, body, owner, prompt, n, t_prime, max_new, key, embedder, offset, rid):
+    """POST /sample with an integer `offset`: draws [offset, offset + n) of the stream for (prompt, model, revision, T', max tokens)."""
+    if body.get("embedders") or body.get("own_raw") or body.get("return_ids"):
+        raise HTTPException(400, "The options embedders, own_raw and return_ids cannot be combined with offset.")
+    end = offset + n
+    if end > D.MAX_STREAM:
+        raise HTTPException(400, f"A stream holds at most {D.MAX_STREAM} draws: offset + n must be at most {D.MAX_STREAM}.")
+    repo, revision = MODELS[key]["repo"], model_revision(key)
+    skey = D.stream_key(prompt, key, repo, revision, t_prime, max_new)
+    length = await asyncio.to_thread(DRAWS.length, skey)
+    if end - length > MAX_N:
+        raise HTTPException(400, f"offset must be at most {length + MAX_N - n}: the stream has {length} draws and one request adds at most {MAX_N}.")
+    client, t0, with_emb = req_client(req), time.time(), bool(body.get("emb"))
+    rec = {"t": round(t0, 1), "model": key, "n": n, "t_prime": t_prime, "max_new": max_new, "embedder": embedder, "prompt_chars": len(prompt),
+           "client": G.short(client), "owner": owner, "offset": offset}
+    req.state.u.update(offset=offset)
+    try:
+        if end <= length:   # entirely from the stream: no queue, no GPU budget, a cheap rate limit
+            if not owner:
+                S["cacherate"].hit(client)
+            req.state.u.update(cached=n, completions=0)   # `completions` of the usage store counts draws generated, not read
+            with S["queue"].track(rid):
+                pool = await stream_answer(skey, key, embedder, offset, n, t_prime, max_new, prompt, n, length, 0.0, t0, with_emb)
+            rec.update(status="ok", cached=n, **pool["timing"])
+            return pool
+        # a shortfall: sampled like any other run (queue, one request per client, budgets for the shortfall only)
+        cost = (end - length) * max_new
+        now = t0
+        L, Q = S["limits"], S["queue"]
+        resident = MODELS[key]["slot"] == "resident"
+        rec["cost"] = cost
+        if not owner:
+            L.claim(client)
+        committed = started = False
+        try:
+            if not owner:
+                L.check_run(client, cost, needs_swap(key), now, check_gap=resident or not Q.busy("slot"))
+            async with Q.admit("resident" if resident else "slot", rid, req.is_disconnected):
+                rec["wait_s"] = round(time.time() - now, 2)
+                req.state.u["wait_s"] = rec["wait_s"]
+                if not owner:
+                    await wait_swap_gap(req, key)
+                    L.commit_run(client, cost, needs_swap(key), time.time())
+                    committed = True
+                engine, held = S["engine"], False
+                try:
+                    if not resident:
+                        try:
+                            engine = await acquire_slot(req, key)
+                            held = True
+                        except (HTTPException, asyncio.CancelledError):
+                            raise
+                        except BaseException:
+                            log.exception("model %s could not be started", key)
+                            raise HTTPException(500, "The model could not be started on the server. Please try again.")
+                    async with key_lock(skey):
+                        cur = await asyncio.to_thread(DRAWS.length, skey)   # another request may have extended the stream while this one waited
+                        need = end - cur
+                        gen_s, new_pool = 0.0, None
+                        if need > MAX_N:
+                            raise HTTPException(400, f"offset must be at most {cur + MAX_N - n}: the stream has {cur} draws and one request adds at most {MAX_N}.")
+                        if need > 0:
+                            started = True
+                            task = asyncio.create_task(extend_stream(skey, key, engine, prompt, t_prime, max_new, embedder, cur, need))
+                            try:   # whatever ends this request (disconnect, cancellation, an error) also ends the task: a batch is appended whole or not at all
+                                while not task.done():
+                                    await asyncio.wait({task}, timeout=1.0)
+                                    if not task.done() and await req.is_disconnected():
+                                        task.cancel()   # nothing is appended: the append is the last step of the task
+                                        rec["status"] = "aborted"
+                                        raise HTTPException(499, "Client closed the request.")
+                                new_len, new_pool, seed, run_id = task.result()
+                            except asyncio.CancelledError:
+                                task.cancel()
+                                raise
+                            except HTTPException:
+                                raise
+                            except D.Conflict:
+                                log.exception("draw cache conflict")
+                                raise HTTPException(503, "The draw cache changed while sampling. Please try again.", headers={"Retry-After": "5"})
+                            except Exception as e:
+                                log.exception("stream sample failed")
+                                rec["status"] = f"error: {type(e).__name__}"
+                                if engine_error(engine, e):
+                                    raise HTTPException(503, "The model server had a problem and is restarting. Please try again in a minute.", headers={"Retry-After": "60"})
+                                raise HTTPException(500, "Sampling failed on the server. Please try again.")
+                            gen_s = new_pool["timing"]["generate_s"]
+                            await asyncio.to_thread(RUNLOG.write, G.sample_record(
+                                new_pool, key, repo, revision, embedder, time.time(), run_id, stream={"key": skey, "start": cur, "end": new_len}))
+                            req.state.u.update(run_id=run_id, tokens=sum(x["nTokens"] for x in new_pool["samples"]))
+                        cached = max(0, min(n, cur - offset))
+                        req.state.u.update(cached=cached, completions=len(new_pool["samples"]) if new_pool else 0, gen_s=gen_s)
+                        pool = await stream_answer(skey, key, embedder, offset, n, t_prime, max_new, prompt, cached, max(cur, end), gen_s, t0, with_emb)
+                        if new_pool is not None:
+                            pool["timing"]["embed_s"] = round(pool["timing"]["embed_s"] + new_pool["timing"]["embed_s"], 2)
+                        req.state.u.update(embed_s=pool["timing"]["embed_s"])
+                        rec.update(status="ok", cached=cached, **pool["timing"])
+                        return pool
+                finally:
+                    if held:
+                        await slot_release()
+        finally:
+            if not owner:
+                L.unclaim(client)
+                if committed:
+                    L.end_run(client, 0 if started else cost)
+    finally:
+        rec["s"] = round(time.time() - t0, 2)
+        try:
+            _log_run(rec)
+        except OSError:
+            pass
+
+
 def note_ids(req, body):
     """Remember the page's optional `visitor` and `session` ids (malformed ones are ignored) for the usage record of this request."""
     req.state.u["visitor"], req.state.u["session"] = U.valid_id(body.get("visitor")), U.valid_id(body.get("session"))
@@ -754,7 +976,7 @@ def usage_logged(route):
                                              embedder=u.get("embedder"), n=u.get("n"), tprime=u.get("tprime"), max_new=u.get("max_new"),
                                              wait_s=wait, run_s=round(time.time() - t0 - (wait or 0), 2), gen_s=u.get("gen_s"),
                                              embed_s=u.get("embed_s"), tokens=u.get("tokens"), completions=u.get("completions"),
-                                             run_id=u.get("run_id"))
+                                             run_id=u.get("run_id"), cached=u.get("cached"), offset=u.get("offset"))
                 except Exception:
                     log.exception("usage record failed")
         return wrapper
@@ -792,7 +1014,7 @@ async def status():
             "embedders": {**{k: v["repo"] for k, v in EMBEDDERS.items()}, **({OWN_KEY: None} if OWN_ON else {})},
             "ownModels": [k for k in MODELS if own_available(k)],
             "defaultEmbedder": DEFAULT_EMBEDDER, "limits": {"maxN": MAX_N, "maxNewTokens": MAX_TOKENS}, "auth": False,
-            "maxN": MAX_N, "maxNewTokens": MAX_TOKENS, "maxTextChars": MAX_TEXT_CHARS, "logsRuns": RUNLOG.enabled, "usage": USAGE.enabled,
+            "maxN": MAX_N, "maxNewTokens": MAX_TOKENS, "maxTextChars": MAX_TEXT_CHARS, "logsRuns": RUNLOG.enabled, "usage": USAGE.enabled, "drawCache": DRAWS.enabled,
             "embed": True, "continuePool": True,
             "describe": True, "maxDescribeGroups": G.DESCRIBE_MAX_GROUPS, "maxDescribeTexts": G.DESCRIBE_MAX_TEXTS,
             "queue": q, "generating": q["running"], "waiting": q["waiting"],
@@ -828,6 +1050,13 @@ async def sample_endpoint(req: Request):
         raise HTTPException(400, f"The embedder 'own' (the LM's own states) is not available for model {key}.")
     rid = G.request_id(body.get("request_id"))
     req.state.u.update(model=key, embedder=embedder, n=n, tprime=t_prime, max_new=max_new)
+    if body.get("offset") is not None:   # opt in to the shared draw cache; without `offset` nothing below changes
+        off = body["offset"]
+        if isinstance(off, bool) or not isinstance(off, int) or off < 0:
+            raise HTTPException(400, "offset must be an integer, at least 0.")
+        if not DRAWS.enabled:
+            raise HTTPException(400, "The draw cache is off on this server; send the request without offset.")
+        return await stream_sample(req, body, owner, prompt, n, t_prime, max_new, key, embedder, off, rid)
     now = time.time()
     L, Q = S["limits"], S["queue"]
     client, cost = req_client(req), n * max_new
@@ -1201,12 +1430,14 @@ NO_STORE = {"Cache-Control": "no-store", "X-Robots-Tag": "noindex"}
 
 
 @app.get("/stats")
-async def stats_endpoint(req: Request, days: int = 30):
-    """Aggregated usage of the last `days` UTC days (1 to 366). Header X-Stats-Password (or X-Own-Secret). Shapes: server/API.md."""
+async def stats_endpoint(req: Request, days: str = "30"):
+    """Aggregated usage of the last `days` UTC days, or `days=all` for the whole history. Header X-Stats-Password (or X-Own-Secret). Shapes: server/API.md."""
     stats_gate(req)
     if not USAGE.enabled:
         raise G.bad("The usage store is off (DPP_USAGE=0).", 503, None, "server")
-    return JSONResponse(await asyncio.to_thread(USAGE.stats, days), headers=NO_STORE)
+    if days != "all" and not (days.isdigit() and int(days) >= 1):
+        raise G.bad('days must be a positive integer or "all".')
+    return JSONResponse(await asyncio.to_thread(USAGE.stats, days if days == "all" else int(days)), headers=NO_STORE)
 
 
 @app.get("/stats/session")

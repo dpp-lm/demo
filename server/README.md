@@ -77,6 +77,10 @@ Measured on Qwen3 14B AWQ (`tests/check_own_exact.py`): the logits the hook sees
 and G differs by at most 7.7e-6.
 Models whose final logits are soft-capped (Gemma 2) are handled by inverting the cap in the plugin.
 
+## Draw cache
+
+`POST /sample` with an integer `offset` returns draws `[offset, offset + n)` of a stream of i.i.d. draws for (prompt, model, repo and weights revision, T′, max tokens), sampling only the shortfall. Details in `API.md`, "Draw cache". `drawcache.py` is the store (SQLite in `drawcache/`, directory 700; `DPP_DRAW_CACHE=0` off, `DPP_DRAW_CACHE_DIR`, `DPP_DRAW_CACHE_MAX_GB`, default 4), `server.py` (`stream_sample`, `extend_stream`) the route. Rules that keep the stream i.i.d.: only server-chosen seeds (ranges never reused within a stream), a batch is appended whole and in order at the current end or not at all, requests with their own `seed` never touch it, one writer per stream. Cached text embeddings are keyed by (text, embedder, revision); the own state of every draw is stored at generation time (uncentered, float32), because it cannot be recomputed exactly afterwards. A request served entirely from a stream skips the queue and the GPU budgets (120 per minute per client). The page sends `offset` only when `/status.drawCache` is true (`js/draws-lib.js`).
+
 ## Run log
 
 Every successful `/sample` run is appended to `runlog/runs-YYYY-MM-DD.jsonl` (one UTC day per file; directory mode 700, files 600; under the server directory, never under the
@@ -93,6 +97,8 @@ A second store, `usage/usage.sqlite3` (SQLite, directory mode 700, file 600, `DP
 run log; a row of a successful sample points to the run log line by `run_id`. The page sends `visitor` (random, kept in its localStorage) and `session` (random per page load),
 and `POST /event` for the page load and a few UI events. A request without ids is grouped per UTC day under a keyed hash of the client address; the key is random, kept in
 memory and replaced every day. `GET /stats`, `/stats/session`, `/stats/run` serve the dashboard and need `X-Stats-Password`.
+
+`/stats?days=all` returns the whole history. `totals.cachedRequests` and `cachedCompletions` count reads from the draw cache.
 
 **Setting the stats password (owner).** The server never creates one. Choose a password and write it to `~/dpp-sampler/.stats_password` as the only line
 (`umask 077; printf '%s\n' 'your password' > ~/dpp-sampler/.stats_password`; mode 600), or set `DPP_STATS_PASSWORD_FILE` to another path or `DPP_STATS_PASSWORD` in the unit.
@@ -243,7 +249,7 @@ All scripts take the layout root from `DPP_ROOT` (default: the current directory
 
 ## Tests
 
-No GPU: `tests/test_api_guard.py`, `test_queue.py`, `test_exit_paths.py`, `test_usage.py` (run log and usage store), and `test_routes.py` (imports `server.py`, starts no engine, calls the cheap routes
+No GPU: `tests/test_api_guard.py`, `test_queue.py`, `test_exit_paths.py`, `test_usage.py` (run log and usage store), `test_drawcache.py` (the store), `test_draws.py` (`/sample` with `offset`, fake generation), and `test_routes.py` (imports `server.py`, starts no engine, calls the cheap routes
 through starlette's TestClient; needs vllm and torch to import). Run each as `.venv/bin/python tests/<file>`; they print one `PASS` or `FAIL` line per check.
 Against the running service: `tests/http_checks.py basic|limits`, and `node scripts/conformance.mjs <base url>` from the page's repository. GPU, with the service stopped:
 `tests/check_plugin_exact.py` (log q) and `tests/check_own_exact.py` (what the sampler hook sees, and the recovery of the hidden states).
