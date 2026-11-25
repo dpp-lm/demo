@@ -277,15 +277,18 @@ function recompute({ newDraw = true } = {}) {
   const m = Math.max(...lk);
   S.c = lk.map((s) => Math.exp(0.5 * (s - m)));
   // The axes are set once per pool (and per 1-D/2-D/3-D choice), when the points are first drawn, and
-  // then left alone: the selection, the mode, T and K never turn them.
-  if (!S.proj || S.proj.pool !== S.pool) S.proj = project();
+  // otherwise left alone, with one exception: when the selection fits in the drawn dimensions
+  // (2 ≤ K ≤ dims), they turn to contain it, so the box drawn is exactly the volume being scored.
+  // The turn is aligned to the previous view (kabsch), so points move as little as possible.
+  const k = S.sel.length, fits = k >= 2 && k <= Math.min(3, S.dims) && k === S.K;
+  const stale = fits && !(S.proj?.fitted && S.proj.sel.length === k && S.proj.sel.every((i, j) => i === S.sel[j]));
+  if (!S.proj || S.proj.pool !== S.pool || stale) S.proj = project();
   render();
 }
 
-// Axes, computed once when the points are first drawn. For K ≤ 3 (and K ≤ the drawn dimensions) the
-// first K axes span the completions selected at that moment, so the drawn parallelepiped is exactly the
-// volume being scored for that selection (for later selections it is the volume's shadow on these
-// axes); the remaining axes are the main directions of what is left. Otherwise plain uncentred PCA.
+// Axes. For K ≤ 3 (and K ≤ the drawn dimensions) the first K axes span the selected completions, so
+// the drawn parallelepiped is exactly the volume being scored; the remaining axes are the main
+// directions of what is left. Otherwise plain uncentred PCA.
 // Computed from G alone.
 function project() {
   const N = S.logp.length, G = S.G, sel = S.sel, k = sel.length;
@@ -326,7 +329,7 @@ function project() {
   // Align to the previous view of the same pool with a proper rotation of the drawn dimensions.
   const prev = S.proj?.pool === S.pool ? S.proj.coords : null;
   if (prev) coords = kabsch(coords, prev, S.dims);
-  return { coords, frac, fitted, k, pool: S.pool };
+  return { coords, frac, fitted, k, sel: [...sel], pool: S.pool };
 }
 function kabsch(P, Q, d) {
   // Rotation R (d×d, det +1) minimising Σ‖R p_i − q_i‖² over the first d coordinates.
@@ -374,7 +377,7 @@ function renderSpectrum() {
   el.innerHTML = `<p class="sp-head"><span class="fn">Spectrum<button type="button" class="xbtn" data-x="pca" aria-label="About the spectrum">?</button></span></p>` +
     f.map((v, k) => `<div class="bar"><span>${k + 1}</span><span class="fill" style="width:${(100 * v) / max}%"></span><span class="pv">${(100 * v).toFixed(1)}%</span></div>`).join('') +
     `<p class="sp-dims"><span class="lab">Drawn in</span><span class="pick" role="group" aria-label="Dimensions">${[1, 2, 3].map((d) => `<button type="button" class="pick-btn" data-dims="${d}" aria-pressed="${S.dims === d}">${d}-D</button>`).join('')}</span></p>` +
-    `<p class="sp-note">${S.proj.fitted ? 'Axes 1–' + S.proj.k + ' of the plot span the completions selected when it was drawn; the rest show the main remaining directions.' : 'The plot shows the first principal axes.'}</p>`;
+    `<p class="sp-note">${S.proj.fitted ? 'Axes 1–' + S.proj.k + ' of the plot span the selected completions; the rest show the main remaining directions.' : 'The plot shows the first principal axes.'}</p>`;
   el.querySelectorAll('[data-dims]').forEach((b) => (b.onclick = () => setDims(+b.dataset.dims)));
 }
 function setDims(k) { S.dims = k; S.proj = null; plot.reset(); S.proj = project(); render(); }
