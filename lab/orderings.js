@@ -45,7 +45,7 @@ function bestPivotStep(c, i, upto) {
 
 /**
  * Flat blocks: the first K pivots (greedy MAP for M), each followed by the items it explains the most of,
- * sorted by how much it explains. blocks[k] = [start row, end row) for pivot k.
+ * sorted by how much it explains. Returns { order, blocks } with blocks[k] = [start row, end row) for pivot k.
  */
 export function flatPivotOrder(M, n, K) {
   const pc = pivotedCholesky(M, n), k = Math.min(K, pc.piv.length);
@@ -62,7 +62,7 @@ export function flatPivotOrder(M, n, K) {
     order.push(pc.piv[s], ...members[s].sort((a, b) => b[1] - a[1]).map((x) => x[0]));
     blocks.push([start, order.length]);
   }
-  return { order, blocks, pivots: pc.piv.slice(0, k), height: pc.height, pc };
+  return { order, blocks };
 }
 
 /**
@@ -70,6 +70,7 @@ export function flatPivotOrder(M, n, K) {
  * of it; parent of an item never taken (leftover ~0, e.g. an exact copy) = the pivot that explains the most of it.
  * Height = the leftover length when taken (non-increasing along the pivot order, so a child is never above its
  * parent). Rows: depth-first, children in pivot order (items never taken last, most explained first).
+ * Returns { order, parent, height } (parent[i] = -1 for the root).
  */
 export function nestedPivotOrder(M, n) {
   const pc = pivotedCholesky(M, n), r = pc.piv.length;
@@ -88,7 +89,7 @@ export function nestedPivotOrder(M, n) {
     const ch = children[v];
     for (let j = ch.length - 1; j >= 0; j--) stack.push(ch[j][0]);
   }
-  return { order, parent, height: pc.height, pivots: pc.piv, pc };
+  return { order, parent, height: pc.height };
 }
 
 /**
