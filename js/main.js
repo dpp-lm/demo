@@ -404,7 +404,9 @@ function renderReadout() {
 
 function renderVolHint() {
   const el = $('#vol-hint');
-  if (S.sel.length > 3 || S.sel.length < 2) { el.innerHTML = S.sel.length > 3 ? '<span class="muted">volume drawn for K ≤ 3</span>' : ''; return; }
+  // The box is exact only when the plot's axes contain every selected vector: K ≤ 2 in 2-D, K ≤ 3 in 3-D.
+  if (S.sel.length < 2) { el.innerHTML = ''; return; }
+  if (S.sel.length > S.dims) { el.innerHTML = `<span class="muted">${S.dims === 1 ? 'volume drawn in 2-D and 3-D' : `volume drawn for K ≤ ${S.dims}`}</span>`; return; }
   el.innerHTML = S.proj.fitted
     ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg><span class="fn">spanned volume<button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button></span>`
     : `<span class="muted">volume needs ${S.sel.length}-D</span>`;
