@@ -52,7 +52,8 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
     that is never stored);
   - an opt-in shared draw cache: send an integer `offset` and `/sample` returns stream positions
     [offset, offset + n), sampling only the shortfall (server/API.md, "Draw cache").
-- His server logs runs, including runs from our page. Decided (Tim): no notice on our page.
+- His server logs runs, including runs from our page. Decided (Tim): only a minimal note, in the message shown
+  while a run on the GPU server is in progress ("Runs here are logged for research.").
 - Our page does not send `offset` yet. Decide whether "Draw new ones" should read the stream (this answers the
   run-log item's open question).
 - His page features are his own exploration, not proposals for this page. This page's experience is
