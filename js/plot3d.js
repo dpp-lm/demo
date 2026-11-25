@@ -191,7 +191,9 @@ export class Plot3D {
     // Points.
     // Radius tied to the zoom: about 1.5 px on a 600-px-tall plot, the same as the 2-D dots.
     const sphere = new THREE.SphereGeometry(0.0055 * (this.frameH ?? this.camera.top), 10, 8);
-    this.mesh = new THREE.InstancedMesh(sphere, new THREE.MeshLambertMaterial(), N);
+    // expert: o.flat draws the points unlit, so a color scale (inclusion probability, groups) shows its true colors
+    this.mesh = new THREE.InstancedMesh(sphere, o.flat ? new THREE.MeshBasicMaterial() : new THREE.MeshLambertMaterial(), N);
+    this.flat = !!o.flat;
     const sel = new Set(o.sel);
     // Base colours; shadeDepth() fades each toward the background by its distance from the viewer.
     this.base = Array.from({ length: N }, (_, i) => new THREE.Color(sel.has(i) ? o.selColor(i) : o.color(i)));
@@ -219,7 +221,7 @@ export class Plot3D {
     this.laidH = this.view.h;
     for (const hd of this.heads ?? []) hd.scale.setScalar(sc);
     this.current.forEach((p, i) => {
-      const r = sc * (o.rs ? o.rs[i] : 1);   // expert: o.rs, radius from quality; otherwise all points the same size
+      const r = sc * (o.big ?? 1) * (o.rs ? o.rs[i] : 1);   // expert: o.rs, radius from quality; otherwise all points the same size
       m.makeScale(r, r, r).setPosition(p);
       this.mesh.setMatrixAt(i, m);
     });
@@ -287,7 +289,7 @@ export class Plot3D {
     const span = Math.max(hi - lo, 1e-6), c = new THREE.Color();
     ds.forEach((d, i) => {
       const t = (d - lo) / span;   // 0 nearest, 1 farthest
-      c.copy(this.base[i]).lerp(this.bgCol, (this.isSel[i] ? 0.35 : 0.6) * t);
+      c.copy(this.base[i]).lerp(this.bgCol, (this.flat ? 0.15 : this.isSel[i] ? 0.35 : 0.6) * t);   // expert: a color scale is faded much less
       this.mesh.setColorAt(i, c);
     });
     this.mesh.instanceColor.needsUpdate = true;

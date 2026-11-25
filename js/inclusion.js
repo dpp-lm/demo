@@ -14,20 +14,20 @@ const turnedOn = [];
 
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const hex = (c) => `#${c.map((x) => x.toString(16).padStart(2, '0')).join('')}`;
-// Color scales, each a map from a scale position in [0, 1] to [r, g, b]. Unlikely completions are pale, so they recede on
-// the light page, and likely ones are saturated and dark, so they stand out. None is red (red marks the selection).
+// Color scales, each a map from a scale position in [0, 1] to [r, g, b]: saturated all the way, light for unlikely
+// completions and dark for likely ones. None is red (red marks the selection).
 const through = (...stops) => (t) => {
   const x = Math.min(1, Math.max(0, t)) * (stops.length - 1), k = Math.min(stops.length - 2, Math.floor(x)), f = x - k;
   return stops[k].map((a, c) => Math.round(a + f * (stops[k + 1][c] - a)));
 };
 const gray = () => { const f = rampBetween(parseHex(css('--ramp-lo')) ?? [195, 189, 179], parseHex(css('--ramp-hi')) ?? [42, 42, 42]); return (t) => f(inclusionShade(t)); };
 const PALETTES = {
-  blue: { label: 'Blue', make: () => through([201, 208, 216], [120, 176, 240], [30, 112, 235], [12, 40, 130]) },
-  viridis: { label: 'Viridis', make: () => { const v = (t) => viridis(0.95 * (1 - t)); return (t) => (t < 0.15 ? through([214, 214, 190], v(0.15))(t / 0.15) : v(t)); } },
-  purple: { label: 'Purple', make: () => through([212, 205, 214], [196, 140, 232], [140, 50, 210], [66, 10, 110]) },
+  viridis: { label: 'Viridis', make: () => (t) => viridis(0.9 * (1 - t)) },
+  blue: { label: 'Blue', make: () => through([120, 200, 255], [40, 130, 245], [20, 70, 200], [8, 20, 100]) },
+  purple: { label: 'Purple', make: () => through([228, 170, 252], [168, 84, 238], [110, 30, 190], [50, 5, 95]) },
   gray: { label: 'Gray', make: gray },
 };
-let palette = 'blue', steps = false;
+let palette = 'viridis', steps = false;
 const ramp = () => { const f = PALETTES[palette].make(); return steps ? (t) => f(inclusionSteps(t)) : f; };
 
 export const inclusionOn = () => on;

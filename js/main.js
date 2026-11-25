@@ -657,7 +657,7 @@ class Plot2D {
     go(this.gDot.selectAll('circle').data(idx).join('circle')
       .attr('fill', (i) => (xc ? (sel.has(i) ? xc.selColor(i) : xc.color(i)) : sel.has(i) ? css('--accent') : css('--ink')))
       .attr('stroke', (i) => (xc && sel.has(i) ? css('--text') : css('--surface'))).attr('stroke-width', (i) => (xc && sel.has(i) ? 1.4 : 0.75))
-      .attr('r', (i) => (xc && sel.has(i) ? 3.2 : 1.6) * (S.rs ? S.rs[i] : 1))   // expert: S.rs, point size shows quality
+      .attr('r', (i) => (xc ? (sel.has(i) ? 3.6 : 2.6) : 1.6) * (S.rs ? S.rs[i] : 1))   // expert: S.rs, point size shows quality
       .sort((a, b) => sel.has(a) - sel.has(b)))
       .attr('cx', (i) => this.pos[i][0]).attr('cy', (i) => this.pos[i][1]);
     if (!animate) renderLabels(false);   // at once while panning or zooming, never trailing
@@ -689,7 +689,7 @@ class Plot2D {
 // Point colors for the 3-D plot: his ink and red, or (expert: Groups) the group colors with the selected points outlined and the red rods kept.
 const colorHooks = () => {
   const xc = pointColors();
-  return xc ? { color: xc.color, selColor: xc.selColor, rodColor: () => css('--accent'), selRing: css('--text') } : { color: () => css('--ink'), selColor: () => css('--accent') };
+  return xc ? { color: xc.color, selColor: xc.selColor, rodColor: () => css('--accent'), selRing: css('--text'), flat: true, big: 1.7 } : { color: () => css('--ink'), selColor: () => css('--accent') };
 };
 const plot = {
   p2: new Plot2D($('#plot')),
