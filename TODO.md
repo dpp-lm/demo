@@ -36,8 +36,6 @@ routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = Tâ€
 - The exact own-states PR (see "The LM's own states" below).
 - The server to follow docs/BACKEND.md (scripts/conformance.mjs): refuse n > 200 with 400
   bad_request instead of capping; send G instead of emb; version and limits in /status; /embed.
-- Qwen3-Embedding-4B is now on the server (qwen3-emb-4b): decide whether to add it to the page and
-  re-embed the precomputed pools (Modal and the Space would need it too).
 
 ## The LM's own states as an embedding
 - Decided: exact own states, no random projection. The sampler sums each sequence's raw logits; the
