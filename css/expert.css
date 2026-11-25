@@ -148,7 +148,10 @@ input:disabled + span, .btn:disabled { opacity: .45; cursor: default; }
 .mp-ls thead td { border: 0; }
 
 /* Refresh icon in the Sample button, shown while Sample is on: pressing it again draws another subset. */
-.pick-btn .again { display: none; width: 11px; height: 11px; margin-left: 5px; vertical-align: -1px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+/* The pill keeps its width: the buttons give up 3px of side padding each, which pays for the icon. */
+.step-2 .pick .pick-btn { padding-left: 7px; padding-right: 7px; }
+.step-2 .pick .pick-btn[data-mode="sample"][aria-pressed="true"] { padding-left: 5px; padding-right: 4px; }
+.pick-btn .again { display: none; width: 10px; height: 10px; margin-left: 3px; vertical-align: -1px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .pick-btn[aria-pressed="true"] .again { display: inline-block; }
 
 /* ---------- color by inclusion probability: the legend shares the Groups legend's place ---------- */
