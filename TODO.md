@@ -22,6 +22,7 @@ multi-model rail and morphing, his extra data files, in-browser models, Gemma, m
 routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T′ marker.
 
 ## Next: the matrix views (in discussion)
+Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / PCA relationships, open questions).
 - A, high priority: the pool's similarity matrix, reordered so similar completions form blocks (VAT,
   Bezdek & Hathaway 2002; Manuel's "pairs of completions" panel is the start). Details under discussion.
   A dendrogram only if its ordering is coherent with the DPP's geometry (no arbitrary linkage rule).
