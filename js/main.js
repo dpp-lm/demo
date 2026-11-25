@@ -1031,7 +1031,7 @@ function syncFieldNotes() {
 // ---------------------------------------------------------------- wiring
 function setMode(m) {
   S.mode = m;
-  document.querySelectorAll('.step-2 .pick-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
+  document.querySelectorAll('.step-2 .pick-btn[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
   recompute({ newDraw: true });
 }
 function setK(v) {
@@ -1071,7 +1071,7 @@ function wire() {
     $('#hf-signout')?.addEventListener('click', (e) => { e.stopPropagation(); signOut(); modelNote(); });
   };
   refreshNote = modelNote;
-  const advSum = () => ($('#adv-sum').textContent = `${backend().short} · ${TARGETS[S.target].short} · ${readConfig().N} samples`);
+  const advSum = () => ($('#adv-sum').textContent = `${backend().short} · ${readConfig().N} samples`);
   const onSettings = () => { fillEmbedders(); advSum(); modelNote(); configChanged(); };
   window.__settingsChanged = onSettings;
   window.__fillEmbedders = fillEmbedders;
@@ -1079,8 +1079,13 @@ function wire() {
   $('#model').addEventListener('change', onSettings);
   $('#embedder').addEventListener('change', onSettings);
   ['#live-N', '#live-Tp', '#live-max'].forEach((id) => $(id).addEventListener('change', onSettings));
-  $('#target').innerHTML = Object.entries(TARGETS).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join('');
-  $('#target').addEventListener('change', () => { S.target = $('#target').value; advSum(); recompute({ newDraw: true }); });
+  // The target quality is part of κ, like T: it reweights the same completions, so it sits with T and K.
+  $('#target').innerHTML = Object.entries(TARGETS).map(([k, t]) => `<button type="button" class="pick-btn" data-target="${k}" aria-pressed="${k === S.target}">${t.short}</button>`).join('');
+  $('#target').querySelectorAll('.pick-btn').forEach((b) => (b.onclick = () => {
+    S.target = b.dataset.target;
+    $('#target').querySelectorAll('.pick-btn').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    recompute({ newDraw: true });
+  }));
   let pt = 0;
   $('#prompt').addEventListener('input', () => { clearTimeout(pt); pt = setTimeout(configChanged, 250); });
   fillEmbedders(); advSum(); modelNote(); syncFieldNotes();
@@ -1101,7 +1106,7 @@ function wire() {
     raf = requestAnimationFrame(() => recompute({ newDraw: true }));
   });
   // "Most likely" shows the greedy MAP subset; "Sample" draws a new subset every time it is pressed.
-  document.querySelectorAll('.step-2 .pick-btn').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
+  document.querySelectorAll('.step-2 .pick-btn[data-mode]').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
   $('#K').onchange = () => setK($('#K').value);
   $('#K-minus').onclick = () => setK(S.K - 1);
   $('#K-plus').onclick = () => setK(S.K + 1);
