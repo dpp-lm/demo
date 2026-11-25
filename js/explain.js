@@ -9,7 +9,7 @@ export const EXPLAIN = {
         <li><b>Small $T$</b> exaggerates differences in likelihood, so the most likely completions win (quality).</li>
         <li><b>Large $T$</b> flattens them; at the right end, $T = \\infty$, they count equally and only how different the completions are matters (diversity).</li>
       </ul>
-      <p>One $T$ serves both <b>Most likely</b> and <b>Sample</b>. Sample is only reliable near $T = T'$; the <b>pool fit</b> under the plot says when it is not.</p>`,
+      <p>One $T$ serves both <b>Most likely</b> and <b>Sample</b>. Sample is reliable only when the completions represent the target well; the <b>pool fit</b> under the plot says how well. $T$ is unrelated to the sampling temperature $T'$ ($T'$ tempers each token as it is drawn, $T$ the probability of the whole completion), so matching them means nothing. With the default target the fit is good only near $T = 1$, and only for completions drawn at $T' = 1$.</p>`,
   },
   subset: {
     title: 'How the subset is chosen',
