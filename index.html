@@ -83,7 +83,6 @@
               <label class="field"><span class="lab">Temp. T′<button type="button" class="xbtn" data-x="Tprime" aria-label="What is T′?">?</button></span><input id="live-Tp" type="number" min="0.2" max="2" step="0.1" value="1.0" inputmode="decimal"></label>
               <label class="field"><span class="lab">Max tokens<button type="button" class="xbtn" data-x="maxtok" aria-label="What is max tokens?">?</button></span><input id="live-max" type="number" min="8" max="256" step="8" value="128" inputmode="numeric"></label>
               <p class="menu-note limits" id="limits-note"></p>
-              <label class="field model-field"><span class="lab">Target quality<button type="button" class="xbtn" data-x="target" aria-label="What is the target quality?">?</button></span><select id="target"></select></label>
             </div>
           </details>
           <span class="grow"></span>
@@ -114,6 +113,11 @@
           <button type="button" class="pick-btn" data-mode="map" aria-pressed="true">Most likely</button>
           <button type="button" class="pick-btn" data-mode="sample" aria-pressed="false">Sample</button>
         </span><button type="button" class="xbtn" data-x="subset" aria-label="How is the subset chosen?">?</button></span>
+      </div>
+      <div class="mode-row">
+        <span class="lab tgt-lab" id="target-lab">Target</span>
+        <span class="grow"></span>
+        <span class="fn"><span class="pick" id="target" role="group" aria-labelledby="target-lab"></span><button type="button" class="xbtn" data-x="target" aria-label="What is the target quality?">?</button></span>
       </div>
     </section>
   </div>

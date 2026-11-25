@@ -3,14 +3,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-function rod(a, b, r, color) {
-  const d = new THREE.Vector3().subVectors(b, a);
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 8), new THREE.MeshBasicMaterial({ color }));
-  m.position.copy(a).addScaledVector(d, 0.5);
-  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
-  return m;
-}
-
 // The x, y, z axes through the origin, from −1 to 1 (the length of every embedding). Coloured per
 // vertex so the near end is darker than the far end (see shadeDepth).
 function axesLines(scale) {
@@ -218,18 +210,16 @@ export class Plot3D {
     for (const ch of [...this.dyn.children]) { this.dyn.remove(ch); ch.geometry?.dispose(); ch.material?.dispose?.(); }
     const few = o.sel.length <= 3;
     const O = new THREE.Vector3();
-    // Edges from the origin to each selected point: arrows for large K, plain coloured
-    // rods (one colour per item) for K ≤ 3, as in the paper's Fig. 1.
+    // An arrow from the origin to each selected point, whatever K (one colour per item).
     for (const i of o.sel) {
       const p = this.current[i];
       const len = p.length();
       if (len < 1e-4) continue;
       const color = new THREE.Color(o.selColor(i));
       const z = this.view?.h ?? this.frameH ?? 1;   // widths follow the zoom, so they look the same at any frame
-      if (few) this.dyn.add(rod(O, p, 0.0055 * z, color));
-      else this.dyn.add(new THREE.ArrowHelper(p.clone().normalize(), O, len, color, Math.min(0.06 * z, len * 0.3), Math.min(0.03 * z, len * 0.15)));
+      this.dyn.add(new THREE.ArrowHelper(p.clone().normalize(), O, len, color, Math.min(0.06 * z, len * 0.3), Math.min(0.03 * z, len * 0.15)));
     }
-    if (o.sel.length >= 2 && few) {
+    if (o.sel.length >= 2 && few && o.exact !== false) {   // main page: only when the axes contain the selection (the scored volume)
       const v = o.sel.map((i) => this.current[i]);
       const n = v.length;
       const corner = (mask) => v.reduce((c, x, k) => (mask & (1 << k) ? c.add(x) : c), new THREE.Vector3());
