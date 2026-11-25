@@ -41,9 +41,9 @@ if sys.argv[1] == "basic":
     t("model unknown", call("/sample", dict(base, model="nope")), 400)
     t("embedder number", call("/sample", dict(base, embedder=3)), 400)
     t("embedder unknown", call("/sample", dict(base, embedder="nope")), 400)
-    t("embedders without owner key", call("/sample", dict(base, embedders=["minilm"])), 403)
-    t("own_raw without owner key", call("/sample", dict(base, own_raw=True)), 403)
-    t("return_ids without owner key", call("/sample", dict(base, return_ids=True)), 403)
+    t("embedders without owner key", call("/sample", dict(base, embedders=["minilm"])), 401)
+    t("own_raw without owner key", call("/sample", dict(base, own_raw=True)), 401)
+    t("return_ids without owner key", call("/sample", dict(base, return_ids=True)), 401)
     t("oversize body (content-length)", call("/sample", raw=b'{"prompt":"' + b"a" * 70000 + b'"}'), 413)
     t("embed oversize body", call("/embed", raw=b'{"texts":["' + b"a" * (1536 * 1024 + 10) + b'"]}'), 413)
     t("embed texts missing", call("/embed", {"embedder": "minilm"}), 400)
@@ -60,9 +60,26 @@ if sys.argv[1] == "basic":
     t("owner: duplicates deduped", call("/sample", dict(base, embedders=["minilm", "minilm", "minilm"]), headers=o), 200)
     t("owner: 4 distinct embedders", call("/sample", dict(base, embedders=["minilm", "qwen3-emb", "mpnet", "own"]), headers=o), 400)
     t("owner: embedders 100 duplicates", call("/sample", dict(base, embedders=["minilm"] * 100), headers=o), 200)
-    t("wrong owner key", call("/sample", dict(base, own_raw=True), headers={"X-Own-Secret": "x" * 40}), 403)
-    t("embed_own without key", call("/embed_own", {"model": "qwen3-14b"}), 403)
+    t("wrong owner key", call("/sample", dict(base, own_raw=True), headers={"X-Own-Secret": "x" * 40}), 401)
+    t("embed_own without key", call("/embed_own", {"model": "qwen3-14b"}), 401)
     t("normal sample ok", call("/sample", base, ip="203.0.113.1"), 200)
+    # docs/BACKEND.md: limits refuse with 400 {code: bad_request, detail}; errors are JSON {code, detail}
+    def body_of(path, b, **k):
+        c = http.client.HTTPConnection(H, 8040, timeout=60); c.request("POST", path, body=json.dumps(b).encode(), headers={"Content-Type": "application/json", **k.get("headers", {})})
+        r = c.getresponse(); return r.status, json.loads(r.read()), dict(r.getheaders())
+    for name, b in [("n 201", dict(base, n=201)), ("n 1", dict(base, n=1)), ("max_new_tokens 300", dict(base, max_new_tokens=300)), ("max_new_tokens 7", dict(base, max_new_tokens=7)),
+                    ("t_prime 2.5", dict(base, t_prime=2.5)), ("t_prime 0.1", dict(base, t_prime=0.1)), ("prompt 2001 chars", dict(base, prompt="a" * 2001)), ("prompt empty", dict(base, prompt=""))]:
+        st, js, _ = body_of("/sample", b)
+        ok &= st == 400 and js.get("code") == "bad_request" and isinstance(js.get("detail"), str)
+        print(("PASS " if st == 400 and js.get("code") == "bad_request" else "FAIL ") + f"limit refused: {name}: {st} {js}")
+    st, js, hd = body_of("/sample", dict(base, embedder="nope"), headers={"Origin": "https://timvieira.github.io"})
+    ok &= hd.get("access-control-allow-origin") == "https://timvieira.github.io"; print("CORS origin on an error:", hd.get("access-control-allow-origin"))
+    st, js, hd = body_of("/sample", dict(base, embedder="nope"), headers={"Origin": "http://localhost:5173"})
+    ok &= hd.get("access-control-allow-origin") == "http://localhost:5173"; print("CORS localhost:", hd.get("access-control-allow-origin"))
+    st, js, hd = body_of("/sample", dict(base, embedder="nope"), headers={"Origin": "https://example.org"})
+    ok &= "access-control-allow-origin" not in hd; print("CORS other origin:", hd.get("access-control-allow-origin"))
+    st, js, _ = body_of("/sample", dict(base, embedders=["minilm"]))
+    ok &= st == 401 and js.get("code") == "auth"; print("owner-only option:", st, js)
     print("ALL PASS" if ok else "SOME FAILED")
 if sys.argv[1] == "limits":
     quick = {"prompt": "Say hi.", "n": 200, "max_new_tokens": 256}   # costs 51,200 tokens, answers in a few tokens

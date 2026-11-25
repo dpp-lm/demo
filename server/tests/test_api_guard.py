@@ -21,7 +21,7 @@ for v in bad_values:
     for integer in (False, True):
         r = status(G.number, v, "x", integer, 0.2, 2.0)
         check(f"number({v!r}, integer={integer}) rejected with 400", r[0] == 400, r)
-check("number clamps high", G.number(10, "x", False, 0.2, 2.0) == 2.0)
+check("number clamps high (default)", G.number(10, "x", False, 0.2, 2.0) == 2.0)
 check("number clamps low", G.number(-5, "x", False, 0.2, 2.0) == 0.2)
 check("integer from float", G.number(30.9, "n", True, 2, 200) == 30)
 check("integer from string", G.number("30", "n", True, 2, 200) == 30)
@@ -148,4 +148,50 @@ for bad_allow in ("a", "qwen3-14b,zzz"):
     except ValueError as e:
         r = str(e)
     check(f"allowlist {bad_allow!r} rejected", r is not None, r)
+# contract (docs/BACKEND.md): limits refuse instead of capping, error codes, G
+check("number clamp=False refuses high", status(G.number, 201, "n", True, 2, 200, False)[0] == 400)
+check("number clamp=False refuses low", status(G.number, 1, "n", True, 2, 200, False)[0] == 400)
+check("number clamp=False refuses t_prime 2.01", status(G.number, 2.01, "t_prime", False, 0.2, 2.0, False)[0] == 400)
+check("number clamp=False refuses t_prime 0.19", status(G.number, 0.19, "t_prime", False, 0.2, 2.0, False)[0] == 400)
+check("number clamp=False accepts the bounds", (G.number(2, "n", True, 2, 200, False), G.number(200, "n", True, 2, 200, False), G.number(8, "m", True, 8, 256, False), G.number(256, "m", True, 8, 256, False), G.number(0.2, "t", False, 0.2, 2.0, False), G.number(2, "t", False, 0.2, 2.0, False)) == (2, 200, 8, 256, 0.2, 2.0))
+check("max_new_tokens 300 refused", status(G.number, 300, "max_new_tokens", True, 8, 256, False)[0] == 400)
+check("text over the limit refused when truncate=False", status(G.text, "a" * 2001, "prompt", 2000, True, True, False)[0] == 400)
+check("text at the limit accepted", len(G.text("a" * 2000, "prompt", 2000, truncate=False)) == 2000)
+check("empty prompt refused", status(G.text, "", "prompt", 2000, True, True, False)[0] == 400)
+def code_of(e): return G.error_code(e)
+check("code: 400 bad_request", code_of(G.bad("x")) == "bad_request")
+check("code: 401 auth", code_of(HTTPException(401, "x")) == "auth")
+check("code: 404 bad_request", code_of(HTTPException(404, "x")) == "bad_request")
+check("code: 415 bad_request", code_of(G.bad("x", 415)) == "bad_request")
+check("code: 429 default busy", code_of(HTTPException(429, "x")) == "busy")
+check("code: 500 server", code_of(HTTPException(500, "x")) == "server")
+check("code: 503 starting", code_of(HTTPException(503, "x")) == "starting")
+L = G.Limits(1000, 3, 300, 10**9, 240, 1200, 30)
+L.claim("c")
+def raised(f, *a):
+    try:
+        f(*a)
+    except HTTPException as e:
+        return e
+check("per-client in-flight cap is busy", code_of(raised(L.claim, "c")) == "busy")
+check("per-client token budget is rate_limit", code_of(raised(L.check_run, "c", 5000, False)) == "rate_limit")
+L2 = G.Limits(10**9, 3, 300, 100, 240, 1200, 30)
+check("global token budget is busy", code_of(raised(L2.check_run, "c", 5000, False)) == "busy")
+L3 = G.Limits(10**9, 3, 300, 10**9, 2, 1200, 30)
+for _ in range(2): L3.commit_embed("c")
+check("per-client embed budget is rate_limit", code_of(raised(L3.check_embed, "c")) == "rate_limit")
+rw = G.RateWindow(1, 60); rw.hit("c")
+check("RateWindow is rate_limit", code_of(raised(rw.hit, "c")) == "rate_limit" and rw.count("c") == 1 and rw.count("d") == 0)
+# G (base64 float32 N x N, symmetric, diagonal 1)
+import base64 as _b64, numpy as _np
+_e = _np.random.default_rng(0).standard_normal((7, 33)).astype(_np.float32)
+_e /= _np.linalg.norm(_e, axis=1, keepdims=True)
+_g = _np.frombuffer(_b64.b64decode(G.gram_b64(_e)), dtype="<f4").reshape(7, 7)
+_ref = _e.astype(_np.float64) @ _e.astype(_np.float64).T
+check("gram_b64 is N x N little-endian float32", _g.shape == (7, 7) and _g.dtype == _np.dtype("<f4"))
+check("gram_b64 symmetric exactly, diagonal exactly 1", (_g == _g.T).all() and (_np.diag(_g) == 1).all())
+check("gram_b64 matches float64 inner products to float32 rounding", _np.abs(_g - _ref).max() < 1e-6, _np.abs(_g - _ref).max())
+_d = _np.vstack([_e[:1], _e[:1]])
+check("gram_b64 of identical rows is 1", _np.frombuffer(_b64.b64decode(G.gram_b64(_d)), dtype="<f4")[1] == 1.0)
+
 print("ALL PASS" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

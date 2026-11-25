@@ -15,14 +15,17 @@ import asyncio
 import base64
 import collections
 import contextlib
+import functools
 import datetime
 import gc
+import hashlib
 import hmac
 import json
 import logging
 import math
 import os
 import random
+import re
 import threading
 import time
 import uuid
@@ -30,7 +33,9 @@ import uuid
 import numpy as np
 import torch
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from huggingface_hub import snapshot_download
 from transformers import AutoModel, AutoTokenizer, GenerationConfig
 from vllm import SamplingParams
@@ -39,9 +44,10 @@ from vllm.inputs import TokensPrompt
 from vllm.sampling_params import RequestOutputKind
 from vllm.v1.engine.async_llm import AsyncLLM
 from vllm.v1.engine.exceptions import EngineDeadError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 import api_guard as G
+import usage as U
 
 RESIDENT_KEY = "qwen3-14b"
 RESIDENT_UTIL = float(os.environ.get("DPP_RESIDENT_UTIL", "0.50"))  # fraction of the card for the 14B engine
@@ -91,6 +97,7 @@ OWN_KEY = "own"
 OWN_ON = os.environ.get("DPP_OWN_EMB") == "1"
 OWN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "own_emb")
 OWN_SECRET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".own_secret")
+OWN_EXACT_MAX_SEQS = 400  # plugin CAP_EXACT is 448 slots; leaves room for slots of a just-cancelled request
 OWN_LMAX = 258  # longest teacher-forced token list (plugin table has 260 entries)
 _OWN_MU = {}
 
@@ -123,7 +130,10 @@ def own_recover(key, lbar):
         _OWN_REC[key] = (np.ascontiguousarray(W, dtype=np.float32), np.load(os.path.join(OWN_DIR, key, "M.npy")))
     W, M = _OWN_REC[key]
     V, d = W.shape
-    lbar = np.asarray(lbar, dtype=np.float64)[:, :V]
+    lbar = np.asarray(lbar, dtype=np.float64)
+    if lbar.shape[1] != V:   # the plugin of this engine still holds P (projected sums): it switches to exact mode only when it reloads
+        raise RuntimeError(f"own states: the plugin returned {lbar.shape[1]}-d sums, expected {V}-d logit sums (M.npy exists): restart the service")
+    lbar = lbar[:, :V]
     ya = np.zeros((lbar.shape[0], d + 1))
     for a in range(0, V, 16384):
         ya[:, :d] += lbar[:, a:a + 16384] @ W[a:a + 16384].astype(np.float64)
@@ -135,15 +145,9 @@ def own_mean(sums, counts, key):
     """Per-sequence mean of what the plugin accumulated: projected states (projected mode) or full hidden states (exact)."""
     n = len(counts)
     mean = np.frombuffer(sums, dtype="<f4").reshape(n, -1) / np.maximum(np.asarray(counts, np.float32), 1)[:, None]
-    return own_recover(key, mean) if own_exact(key) else mean
-
-
-def own_gram(unit):
-    """G as BACKEND.md says: float64 inner products of the unit vectors, diagonal exactly 1, float32 base64."""
-    u = np.asarray(unit, dtype=np.float64)
-    G = u @ u.T
-    np.fill_diagonal(G, 1.0)
-    return base64.b64encode(np.ascontiguousarray(G, dtype="<f4").tobytes()).decode("ascii")
+    if own_exact(key):
+        return own_recover(key, mean)
+    return mean
 
 
 def own_mu(key):
@@ -169,11 +173,28 @@ def own_unit(sums, counts, key):
     return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-12)
 
 
+def model_revision(key):
+    """Commit hash of the local Hugging Face snapshot of the model's weights ('' when unknown)."""
+    if key not in _REVISION:
+        try:
+            _REVISION[key] = os.path.basename(snapshot_download(MODELS[key]["repo"], local_files_only=True).rstrip("/"))
+        except Exception:
+            _REVISION[key] = ""
+    return _REVISION[key]
+
+
 async def own_take(engine, items):
     res = await engine.collective_rpc("dpp_own_take", args=(items,))
     if not res or res[0] is None:
         raise RuntimeError("the sampler returned no own states; is P loaded (DPP_OWN_EMB=1)?")
     return res[0]
+
+
+def own_vectors(sums, counts, key, raw=False):
+    """(unit own vectors in float64, uncentered mean states in float32 or None); blocking, run it in a thread."""
+    mean = own_mean(sums, counts, key)
+    v = mean - own_mu(key)
+    return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-12), (mean.astype("<f4") if raw else None)
 
 
 def eos_first(key):
@@ -220,9 +241,23 @@ SLOT_DEATH_WINDOW = 600
 LOG_MAX_BYTES = 20 * 1024 * 1024         # logs/server.log is rotated (copy-truncate, 4 old files) above this size
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 GIB = 2**30
+CONTRACT_VERSION = 1                     # docs/BACKEND.md
+CORS_ORIGINS = ["https://timvieira.github.io", "https://zueri-monstro.rufous-hamlet.ts.net"]   # Tim's copy and this server's own page
+CORS_ORIGIN_REGEX = r"^http://localhost(:\d+)?$"   # development pages
 
 log = logging.getLogger("dpp-sampler")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+# Run log (DPP_RUNLOG=0 turns it off, DPP_RUNLOG_DIR moves it): one JSON line per successful /sample, see README.md "Run log".
+RUNLOG = G.RunLog.from_env(os.environ, os.path.join(os.path.dirname(os.path.abspath(__file__)), "runlog"), on_error=log.error)
+_REVISION = {}
+# Usage store (sessions, events, one row per request; no text): DPP_USAGE=0 turns it off, DPP_USAGE_DIR moves it. See README.md "Usage stats".
+USAGE = U.UsageStore.from_env(os.environ, os.path.join(os.path.dirname(os.path.abspath(__file__)), "usage"), on_error=log.error)
+SALT = U.DailySalt()   # random per UTC day, in memory only
+STATS_PASSWORD_FILE = os.environ.get("DPP_STATS_PASSWORD_FILE") or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".stats_password")
+MAX_BODY_EVENT = 4096
+EVENTS_PER_MINUTE = 120      # per client, POST /event
+STATS_FAILS = 10             # failed /stats password attempts per client in STATS_FAIL_WINDOW seconds before 429
+STATS_FAIL_WINDOW = 300
 S = {}  # resident engine, embedders, queue counters
 SLOT = {"key": None, "engine": None, "inflight": 0, "loading": None, "pending": None, "cond": None}
 TOKS = {}  # key -> (tokenizer, eos ids)
@@ -424,6 +459,8 @@ async def lifespan(app):
     S["emb_lock"] = asyncio.Lock()
     S["queue"] = G.JobQueue(("resident", "slot"), MAX_QUEUE_WAITING, QUEUE_MAX_WAIT)   # one running job per engine, FIFO
     S["qpoll"] = G.RateWindow(QUEUE_POLLS_PER_MINUTE, 60)
+    S["evrate"] = G.RateWindow(EVENTS_PER_MINUTE, 60)
+    S["authfail"] = G.RateWindow(STATS_FAILS, STATS_FAIL_WINDOW)
     S["dcache"] = G.LRU(DESCRIBE_CACHE_SIZE)
     S["limits"] = G.Limits(CLIENT_TOKENS_PER_HOUR, CLIENT_SWAPS_PER_HOUR, GLOBAL_RUNS_PER_HOUR, GLOBAL_TOKENS_PER_HOUR,
                            CLIENT_EMBEDS_PER_HOUR, EMBEDS_PER_HOUR, SWAP_MIN_INTERVAL,
@@ -446,8 +483,8 @@ async def lifespan(app):
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 # Browser pages on GitHub Pages call this API cross-origin. Same-origin requests carry no Origin header and are untouched;
 # preflights (OPTIONS with Access-Control-Request-Method) are answered here, before routing, limits and the 415 check.
-app.add_middleware(CORSMiddleware, allow_origins=["https://timvieira.github.io"], allow_methods=["GET", "POST"],
-                   allow_headers=["content-type"])
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_origin_regex=CORS_ORIGIN_REGEX, allow_methods=["GET", "POST"],
+                   allow_headers=["Authorization", "Content-Type"], expose_headers=["Retry-After"])
 
 
 def die(reason):
@@ -576,7 +613,7 @@ async def acquire_slot(req, key):
         raise HTTPException(499, "Client closed the request.")
 
 
-async def sample_pool(key, engine, prompt, n, t_prime, max_new_tokens, seed, embedder, extra=(), own_raw=False, return_ids=False):
+async def sample_pool(key, engine, prompt, n, t_prime, max_new_tokens, seed, embedder, extra=(), own_raw=False, return_ids=False, with_emb=False):
     """Exact ancestral sampling from p°_{T'} with per-string log p and log q."""
     cfg = MODELS[key]
     tok, eos = model_tok(key)
@@ -619,9 +656,9 @@ async def sample_pool(key, engine, prompt, n, t_prime, max_new_tokens, seed, emb
         r = (await own_take(engine, [[own_tag, len(samples)]]))[0]
         if min(r["count"]) < 1:
             raise RuntimeError("own states missing for some samples")
-        own64 = own_unit(r["sum"], r["count"], key)
+        # the recovery is a 200 x 152k x 5k float64 product: off the event loop, so /health and /status keep answering
+        own64, own_means = await asyncio.to_thread(own_vectors, r["sum"], r["count"], key, own_raw)
         own = own64.astype(np.float32)
-        own_means = own_mean(r["sum"], r["count"], key).astype("<f4") if own_raw else None
     async with S["emb_lock"]:
         def embed_all():
             e = own if embedder == OWN_KEY else get_embedder(embedder)(texts)
@@ -633,13 +670,13 @@ async def sample_pool(key, engine, prompt, n, t_prime, max_new_tokens, seed, emb
     timing = {"generate_s": round(gen_s, 2), "embed_s": round(time.time() - t1, 2)}
     pool = {
         "prompt": prompt, "model": cfg["repo"], "modelName": cfg["name"], "modelKey": key,
-        "embedder": OWN_KEY if embedder == OWN_KEY else EMBEDDERS[embedder]["repo"],
+        "embedder": OWN_KEY if embedder == OWN_KEY else EMBEDDERS[embedder]["repo"], "embedderId": embedder,
         "Tprime": t_prime, "maxNewTokens": max_new_tokens, "N": len(samples), "D": int(emb.shape[1]),
         "seed": seed, "timing": timing, "samples": samples,
-        "emb": base64.b64encode(emb.tobytes()).decode("ascii"),
+        "G": G.gram_b64(emb),   # docs/BACKEND.md: float64 inner products of the float32 unit vectors
     }
-    if embedder == OWN_KEY:  # G from the float64 unit vectors (in exact mode, the full d-dim states)
-        pool["G"] = own_gram(own64)
+    if with_emb:
+        pool["emb"] = base64.b64encode(np.ascontiguousarray(emb, dtype="<f4").tobytes()).decode("ascii")
     if embs:  # the same pool under other embedders (for comparing them; not used by the page)
         pool["embs"] = embs
     if own_raw and want_own:  # uncentered mean states, projected or full (for building mu / mu_full from live generations)
@@ -654,10 +691,74 @@ def _log_run(rec):
         f.write(json.dumps(rec) + "\n")
 
 
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request, exc):
+    """Every error is JSON {code, detail} (docs/BACKEND.md); `detail` stays the readable message FastAPI always sent."""
+    return JSONResponse({"code": G.error_code(exc), "detail": exc.detail}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request, exc):
+    return JSONResponse({"code": "bad_request", "detail": "The request is malformed."}, status_code=400)
+
+
 @app.exception_handler(Exception)
 async def unhandled(request, exc):
     log.error("unhandled %s on %s", type(exc).__name__, request.url.path)
-    return JSONResponse({"detail": "Internal error."}, status_code=500)
+    headers = {}
+    origin = request.headers.get("origin", "")
+    if origin in CORS_ORIGINS or re.fullmatch(CORS_ORIGIN_REGEX, origin):   # ServerErrorMiddleware answers outside CORSMiddleware
+        headers = {"access-control-allow-origin": origin, "vary": "Origin"}
+    return JSONResponse({"code": "server", "detail": "Internal error."}, status_code=500, headers=headers)
+
+
+def note_ids(req, body):
+    """Remember the page's optional `visitor` and `session` ids (malformed ones are ignored) for the usage record of this request."""
+    req.state.u["visitor"], req.state.u["session"] = U.valid_id(body.get("visitor")), U.valid_id(body.get("session"))
+
+
+def identity(req, visitor, session, t):
+    """(session, visitor) to store: the page's ids, else the keyed hash of the client address of the day (never the address)."""
+    anon, day = SALT.anon_id(req_client(req))
+    visitor = visitor or anon
+    session = session or "d-" + hashlib.sha256(f"{visitor}|{day}".encode()).hexdigest()[:16]
+    return session, visitor
+
+
+def usage_logged(route):
+    """Record one usage row per call of the route: time, session, origin, settings (filled in by the handler through req.state.u),
+    outcome ('ok' or the error code) and timing. A failure of the store never touches the request."""
+    def deco(fn):
+        @functools.wraps(fn)
+        async def wrapper(req: Request):
+            t0 = time.time()
+            u = req.state.u = {}
+            outcome = "ok"
+            try:
+                return await fn(req)
+            except HTTPException as e:
+                outcome = "aborted" if e.status_code == 499 else G.error_code(e)
+                raise
+            except asyncio.CancelledError:
+                outcome = "aborted"
+                raise
+            except BaseException:
+                outcome = "server"
+                raise
+            finally:
+                try:
+                    if USAGE.enabled:
+                        session, visitor = identity(req, u.get("visitor"), u.get("session"), t0)
+                        wait = u.get("wait_s")
+                        USAGE.record_request(t0, session, visitor, U.request_origin(req.headers), route, outcome, model=u.get("model"),
+                                             embedder=u.get("embedder"), n=u.get("n"), tprime=u.get("tprime"), max_new=u.get("max_new"),
+                                             wait_s=wait, run_s=round(time.time() - t0 - (wait or 0), 2), gen_s=u.get("gen_s"),
+                                             embed_s=u.get("embed_s"), tokens=u.get("tokens"), completions=u.get("completions"),
+                                             run_id=u.get("run_id"))
+                except Exception:
+                    log.exception("usage record failed")
+        return wrapper
+    return deco
 
 
 @app.get("/health")
@@ -686,10 +787,12 @@ async def status():
     q = S["queue"].counts() if "queue" in S else {"running": 0, "waiting": 0, "max": MAX_QUEUE_WAITING}
     models = [{"key": k, "name": m["name"], "params": m["params"], "repo": m["repo"], "slot": m["slot"],
                "state": model_state(k)} for k, m in sorted(MODELS.items(), key=lambda kv: kv[1]["params"])]
-    return {"model": res["repo"], "modelName": res["name"], "defaultModel": DEFAULT_MODEL, "models": models,
+    return {"version": CONTRACT_VERSION, "model": res["repo"], "modelKey": RESIDENT_KEY, "modelName": res["name"],
+            "defaultModel": DEFAULT_MODEL, "models": models,
             "embedders": {**{k: v["repo"] for k, v in EMBEDDERS.items()}, **({OWN_KEY: None} if OWN_ON else {})},
             "ownModels": [k for k in MODELS if own_available(k)],
-            "defaultEmbedder": DEFAULT_EMBEDDER, "maxN": MAX_N, "maxNewTokens": MAX_TOKENS, "maxTextChars": MAX_TEXT_CHARS,
+            "defaultEmbedder": DEFAULT_EMBEDDER, "limits": {"maxN": MAX_N, "maxNewTokens": MAX_TOKENS}, "auth": False,
+            "maxN": MAX_N, "maxNewTokens": MAX_TOKENS, "maxTextChars": MAX_TEXT_CHARS, "logsRuns": RUNLOG.enabled, "usage": USAGE.enabled,
             "embed": True, "continuePool": True,
             "describe": True, "maxDescribeGroups": G.DESCRIBE_MAX_GROUPS, "maxDescribeTexts": G.DESCRIBE_MAX_TEXTS,
             "queue": q, "generating": q["running"], "waiting": q["waiting"],
@@ -697,13 +800,16 @@ async def status():
 
 
 @app.post("/sample")
+@usage_logged("/sample")
 async def sample_endpoint(req: Request):
     owner = G.is_owner(req.headers, OWN_SECRET_FILE)
     body = await G.read_json(req, MAX_BODY_OWNER if owner else MAX_BODY_SAMPLE)
-    prompt = G.text(body.get("prompt"), "prompt", MAX_PROMPT_CHARS)
-    n = G.number(body.get("n", 30), "n", True, 2, MAX_N)
-    t_prime = G.number(body.get("t_prime", 1.0), "t_prime", False, 0.2, 2.0)
-    max_new = G.number(body.get("max_new_tokens", 128), "max_new_tokens", True, 8, MAX_TOKENS)
+    note_ids(req, body)
+    # docs/BACKEND.md: a value outside the limits is refused with 400 bad_request, never capped
+    prompt = G.text(body.get("prompt"), "prompt", MAX_PROMPT_CHARS, truncate=False)
+    n = G.number(body.get("n", 30), "n", True, 2, MAX_N, clamp=False)
+    t_prime = G.number(body.get("t_prime", 1.0), "t_prime", False, 0.2, 2.0, clamp=False)
+    max_new = G.number(body.get("max_new_tokens", 128), "max_new_tokens", True, 8, MAX_TOKENS, clamp=False)
     seed = G.number(body.get("seed", random.randrange(2**31)), "seed", True) % 2**31
     key = body.get("model") or DEFAULT_MODEL
     if not isinstance(key, str) or key not in MODELS:
@@ -717,10 +823,11 @@ async def sample_endpoint(req: Request):
     extra = G.embedder_list(body.get("embedders"), ok_emb, MAX_EMBEDDERS)
     own_raw, return_ids = bool(body.get("own_raw")), bool(body.get("return_ids"))
     if (extra or own_raw or return_ids) and not owner:
-        raise HTTPException(403, "The options embedders, own_raw and return_ids are for the owner's scripts.")
+        raise HTTPException(401, "The options embedders, own_raw and return_ids are for the owner's scripts.")
     if (embedder == OWN_KEY or OWN_KEY in extra) and not own_available(key):
         raise HTTPException(400, f"The embedder 'own' (the LM's own states) is not available for model {key}.")
     rid = G.request_id(body.get("request_id"))
+    req.state.u.update(model=key, embedder=embedder, n=n, tprime=t_prime, max_new=max_new)
     now = time.time()
     L, Q = S["limits"], S["queue"]
     client, cost = req_client(req), n * max_new
@@ -736,6 +843,7 @@ async def sample_endpoint(req: Request):
             L.check_run(client, cost, needs_swap(key), now, check_gap=resident or not Q.busy("slot"))
         async with Q.admit("resident" if resident else "slot", rid, req.is_disconnected):
             rec["wait_s"] = round(time.time() - now, 2)
+            req.state.u["wait_s"] = rec["wait_s"]
             if not owner:
                 await wait_swap_gap(req, key)
                 L.commit_run(client, cost, needs_swap(key), time.time())
@@ -755,7 +863,8 @@ async def sample_endpoint(req: Request):
                         raise HTTPException(500, "The model could not be started on the server. Please try again.")
                 started = True
                 task = asyncio.create_task(sample_pool(key, engine, prompt, n, t_prime, max_new_tokens=max_new, seed=seed, embedder=embedder,
-                                                       extra=extra, own_raw=own_raw, return_ids=return_ids))
+                                                       extra=extra, own_raw=own_raw, return_ids=return_ids,
+                                                       with_emb=bool(body.get("emb"))))
                 try:
                     # Stop generating if the visitor leaves (Stop button, closed tab).
                     while not task.done():
@@ -765,6 +874,10 @@ async def sample_endpoint(req: Request):
                             rec["status"] = "aborted"
                             raise HTTPException(499, "Client closed the request.")
                     pool = task.result()
+                    run_id = uuid.uuid4().hex   # random; the run log record and the usage row share it, nothing else does
+                    await asyncio.to_thread(RUNLOG.write, G.sample_record(pool, key, MODELS[key]["repo"], model_revision(key), embedder, time.time(), run_id))
+                    req.state.u.update(run_id=run_id, tokens=sum(s["nTokens"] for s in pool["samples"]), completions=len(pool["samples"]),
+                                       gen_s=pool["timing"]["generate_s"], embed_s=pool["timing"]["embed_s"])
                     rec.update(status="ok", **pool["timing"], ended=sum(s["ended"] for s in pool["samples"]),
                                tokens=sum(s["nTokens"] for s in pool["samples"]))
                     return pool
@@ -813,6 +926,8 @@ async def forced_own(key, prompt, texts, ended, eos_id=None, tail="", req=None):
         if len(seq) > OWN_LMAX:
             raise HTTPException(400, f"Completion {i} has {len(seq)} tokens (limit {OWN_LMAX}).")
         seqs.append(seq)
+    if own_exact(key) and len(seqs) > OWN_EXACT_MAX_SEQS:   # the plugin's exact mode has 448 slots (a V-long logit sum each); the rest would silently get no states
+        raise HTTPException(400, f"At most {OWN_EXACT_MAX_SEQS} texts per own-state pass.")
     resident = cfg["slot"] == "resident"
     engine, held = S["engine"], False
     try:
@@ -864,7 +979,7 @@ async def embed_own(req: Request):
     if not os.path.exists(OWN_SECRET_FILE):
         raise HTTPException(404, "Not found.")
     if not G.is_owner(req.headers, OWN_SECRET_FILE):
-        raise HTTPException(403, "Forbidden.")
+        raise HTTPException(401, "Forbidden.")
     body = await G.read_json(req, MAX_BODY_OWNER)
     key = body.get("model") or DEFAULT_MODEL
     texts, ended = body.get("texts"), body.get("ended")
@@ -878,13 +993,14 @@ async def embed_own(req: Request):
     async with S["queue"].admit(engine_name(key), rid, req.is_disconnected):
         r = await forced_own(key, prompt, texts, [bool(e) for e in ended], eos_id, req=req)
     counts = r["count"]
-    mean = own_mean(r["sum"], counts, key)
+    mean = await asyncio.to_thread(own_mean, r["sum"], counts, key)
     return {"D": int(mean.shape[1]), "vec": base64.b64encode(mean.astype("<f4").tobytes()).decode("ascii"), "count": counts,
             "logp": r["logp"], "forcedOk": r["forcedOk"], "nTokens": r["nTokens"],
             "empty": r["empty"], "promptTokens": r["promptTokens"], "eos0": r["eos0"]}
 
 
 @app.post("/embed")
+@usage_logged("/embed")
 async def embed_endpoint(req: Request):
     """Public: embed existing completions after the fact, in the encoding /sample uses (float32 little endian, base64, N x D).
 
@@ -896,6 +1012,7 @@ async def embed_endpoint(req: Request):
     from the generation itself."""
     owner = G.is_owner(req.headers, OWN_SECRET_FILE)
     body = await G.read_json(req, MAX_BODY_OWNER if owner else MAX_BODY_EMBED)
+    note_ids(req, body)
     texts = body.get("texts")
     if not isinstance(texts, list) or not 1 <= len(texts) <= MAX_N or not all(isinstance(t, str) for t in texts):
         raise HTTPException(400, f"texts must be a list of 1 to {MAX_N} strings.")
@@ -906,12 +1023,14 @@ async def embed_endpoint(req: Request):
     if not isinstance(embedder, str) or embedder not in ok_emb:
         raise HTTPException(400, f"Unknown embedder; use one of {sorted(ok_emb)}.")
     rid = G.request_id(body.get("request_id"))
+    req.state.u.update(embedder=embedder, n=len(texts), model=body.get("model") if isinstance(body.get("model"), str) and embedder == OWN_KEY else None)
     L, Q = S["limits"], S["queue"]
     client, now = req_client(req), time.time()
     if not owner:
         L.check_embed(client, now)
     t0 = time.time()
-    out = {"N": len(texts), "embedder": embedder if embedder == OWN_KEY else EMBEDDERS[embedder]["repo"], "approximate": False}
+    out = {"N": len(texts), "embedder": embedder if embedder == OWN_KEY else EMBEDDERS[embedder]["repo"], "embedderId": embedder,
+           "approximate": False}
     if embedder != OWN_KEY:
         if not owner:
             L.commit_embed(client, now)
@@ -941,6 +1060,7 @@ async def embed_endpoint(req: Request):
             L.check_run(client, cost, needs_swap(key), now, check_gap=engine_name(key) == "resident" or not Q.busy("slot"))
             L.check_embed(client, now)
         async with Q.admit(engine_name(key), rid, req.is_disconnected):
+            req.state.u["wait_s"] = round(time.time() - now, 2)
             if not owner:
                 await wait_swap_gap(req, key)
                 L.commit_run(client, cost, needs_swap(key), time.time())
@@ -948,14 +1068,14 @@ async def embed_endpoint(req: Request):
             r = await forced_own(key, prompt, texts, [bool(e) for e in ended], tail=MODELS[key].get("ended_tail", ""), req=req)
         if min(r["count"]) < 1:
             raise HTTPException(500, "The embedding pass returned no states for some texts.")
-        emb64 = own_unit(r["sum"], r["count"], key)
+        emb64, _ = await asyncio.to_thread(own_vectors, r["sum"], r["count"], key)
         emb = emb64.astype(np.float32)
-        out["G"] = own_gram(emb64)
         out.update(model=key, approximate=True,
                    note="Teacher-forced from the text, so close to but not identical to the vectors /sample returns for the same completions "
                         "(cosine about 0.9999 for Gemma 3 and Qwen3, about 0.99 for Gemma 2 9B, whose stored text loses trailing whitespace tokens).")
-    out.update(D=int(emb.shape[1]), emb=base64.b64encode(np.ascontiguousarray(emb, dtype="<f4").tobytes()).decode("ascii"),
-               timing={"embed_s": round(time.time() - t0, 2)})
+    out.update(D=int(emb.shape[1]), G=G.gram_b64(emb), timing={"embed_s": round(time.time() - t0, 2)})
+    if body.get("emb"):   # the raw unit vectors (N x D float32) only on request; G is what the page uses
+        out["emb"] = base64.b64encode(np.ascontiguousarray(emb, dtype="<f4").tobytes()).decode("ascii")
     return out
 
 
@@ -998,6 +1118,7 @@ async def run_describe(prompts):
 
 
 @app.post("/describe")
+@usage_logged("/describe")
 async def describe_endpoint(req: Request):
     """Public: name each group of completions in a few words with the resident model.
 
@@ -1005,9 +1126,11 @@ async def describe_endpoint(req: Request):
     240 characters), request_id?}. Returns {names: [str, ...], model, ms}; a name is "" when the model gave nothing usable."""
     owner = G.is_owner(req.headers, OWN_SECRET_FILE)
     body = await G.read_json(req, MAX_BODY_DESCRIBE)
+    note_ids(req, body)
     rid = G.request_id(body.get("request_id"))
     prompt = G.text(body.get("prompt"), "prompt", MAX_TEXT_CHARS)
     groups = G.describe_groups(body.get("groups"))
+    req.state.u.update(model=RESIDENT_KEY, n=len(groups))
     template = describe_template()
     try:
         prompts = G.describe_prompts(prompt, groups, template)
@@ -1025,6 +1148,7 @@ async def describe_endpoint(req: Request):
     if not owner:
         L.check_describe(client, t0)
     async with Q.admit("resident", rid, req.is_disconnected):
+        req.state.u["wait_s"] = round(time.time() - t0, 2)
         if not owner:
             L.commit_describe(client, time.time())
         try:
@@ -1037,3 +1161,103 @@ async def describe_endpoint(req: Request):
     names = [G.clean_label(r) for r in raw]
     S["dcache"].put(ck, names)
     return {"names": names, "model": RESIDENT_KEY, "ms": int((time.time() - t0) * 1000)}
+
+
+# ---------------------------------------------------------------- usage events, stats, run log export
+
+@app.post("/event")
+async def event_endpoint(req: Request):
+    """The page's own events: `load` once per page load ({referrer, expert}) and `ui` events named from U.UI_NAMES. Cheap: one small
+    SQLite insert, never the GPU queue. Answers 204. Body (at most 4 KB): {visitor?, session, type, ...}; unknown fields are ignored."""
+    body = await G.read_json(req, MAX_BODY_EVENT)
+    S["evrate"].hit(req_client(req))
+    sid = U.valid_id(body.get("session"))
+    if sid is None:
+        raise G.bad("session must be 8 to 64 characters of A-Za-z0-9_-.")
+    ev = U.clean_event(body)
+    if ev is None:
+        raise G.bad(f'type must be "load" or "ui" (name one of {list(U.UI_NAMES)}).')
+    if USAGE.enabled:
+        now = time.time()
+        _, visitor = identity(req, U.valid_id(body.get("visitor")), sid, now)
+        USAGE.record_event(now, sid, visitor, U.request_origin(req.headers), ev[0], ev[1], ev[2], ev[3])
+    return Response(status_code=204)
+
+
+def stats_gate(req):
+    """401 without the stats password (or the owner key), 503 when the owner has not set one, 429 after repeated failures."""
+    client = req_client(req)
+    if S["authfail"].count(client) >= STATS_FAILS:
+        raise G.bad("Too many failed attempts. Try again in a few minutes.", 429, {"Retry-After": str(STATS_FAIL_WINDOW)}, "rate_limit")
+    r = U.check_password(req.headers, OWN_SECRET_FILE, STATS_PASSWORD_FILE, os.environ)
+    if r == "unconfigured":
+        raise G.bad("Usage stats are off: the owner has not set a stats password (see README.md, \"Usage stats\").", 503, None, "server")
+    if r == "bad":
+        S["authfail"].hit(client)
+        raise G.bad("Wrong or missing stats password.", 401, None, "auth")
+
+
+NO_STORE = {"Cache-Control": "no-store", "X-Robots-Tag": "noindex"}
+
+
+@app.get("/stats")
+async def stats_endpoint(req: Request, days: int = 30):
+    """Aggregated usage of the last `days` UTC days (1 to 366). Header X-Stats-Password (or X-Own-Secret). Shapes: server/API.md."""
+    stats_gate(req)
+    if not USAGE.enabled:
+        raise G.bad("The usage store is off (DPP_USAGE=0).", 503, None, "server")
+    return JSONResponse(await asyncio.to_thread(USAGE.stats, days), headers=NO_STORE)
+
+
+@app.get("/stats/session")
+async def stats_session(req: Request, id: str = ""):
+    stats_gate(req)
+    if U.valid_id(id) is None:
+        raise G.bad("id must be a session id.")
+    out = await asyncio.to_thread(USAGE.session, id)
+    if out is None:
+        raise G.bad("Unknown session.", 404)
+    days = {}
+    for q in out["requests"]:
+        if q["runId"]:
+            days.setdefault(q["time"][:10], []).append(q)
+    for day, qs in days.items():   # prompt and settings of each run come from the run log, by run_id
+        for q in qs:
+            rec = await asyncio.to_thread(RUNLOG.find, q["runId"], await asyncio.to_thread(USAGE.run_day, q["runId"]))
+            q["prompt"] = rec["prompt"] if rec else None
+    return JSONResponse(out, headers=NO_STORE)
+
+
+@app.get("/stats/run")
+async def stats_run(req: Request, id: str = ""):
+    """The full run-log record of a run (completions, logp, logq)."""
+    stats_gate(req)
+    if not RUNLOG.enabled:
+        raise G.bad("The run log is off (DPP_RUNLOG=0).", 404)
+    rec = await asyncio.to_thread(RUNLOG.find, id, await asyncio.to_thread(USAGE.run_day, id))
+    if rec is None:
+        raise G.bad("Unknown run.", 404)
+    return JSONResponse(rec, headers=NO_STORE)
+
+
+@app.get("/runlog")
+async def runlog_export(req: Request, day: str = ""):
+    """Owner only (header X-Own-Secret, as /embed_own): without `day` the list of days with line counts, else that day's file streamed."""
+    if not G.is_owner(req.headers, OWN_SECRET_FILE):
+        raise HTTPException(401, "The run log is for the owner.")
+    if not day:
+        return JSONResponse({"enabled": RUNLOG.enabled, "days": await asyncio.to_thread(RUNLOG.days)}, headers=NO_STORE)
+    path = RUNLOG.path(day)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "No run log for this day.")
+    return FileResponse(path, media_type="application/x-ndjson", headers=NO_STORE)
+
+
+@app.get("/own_stats")
+async def own_stats(req: Request):
+    """Owner only: the plugin's own-state statistics in the resident engine (mode exact or projected, slots in use, allocated MiB), or null
+    while the state is unloaded (it loads on the first own request and unloads after 60 s without one)."""
+    if not G.is_owner(req.headers, OWN_SECRET_FILE):
+        raise HTTPException(401, "For the owner.")
+    res = await S["engine"].collective_rpc("dpp_own_stats")
+    return JSONResponse({"resident": res[0] if res else None}, headers=NO_STORE)
