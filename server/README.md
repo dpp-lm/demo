@@ -9,22 +9,31 @@ proxy under `/dpp_api/`. It runs on one 24 GB GPU: a resident Qwen3 14B AWQ engi
 | Route | Use |
 |---|---|
 | `GET /health` | `{"status":"ok"}`; 503 when an engine fails `check_health()`; `starting` during start-up |
-| `GET /status` | models and their state (`ready`, `loading`, `cold`, `unavailable`), embedders, limits the page needs |
+| `GET /status` | contract fields (`version`, `modelKey`, `embedders`, `limits`, `auth`), models and their state (`ready`, `loading`, `cold`, `unavailable`), `logsRuns`, `usage` |
 | `POST /sample` | draw `n` completions from the annealed proposal q = p_{T'} and return log p, log q, embeddings |
 | `POST /embed` | embed existing completions after the fact (`minilm`, `qwen3-emb`, `qwen3-emb-4b`, `mpnet`, or the LM's own states `own`) |
 | `POST /embed_own` | owner only: teacher-force completions and return uncentered own states |
 | `POST /describe` | name 2 to 8 groups of completions in a few words each, with the resident model |
 | `GET /queue?id=<request_id>` | `{"state": "waiting"\|"running"\|"unknown", "ahead": int}` for a request that carried a `request_id` |
+| `POST /event` | the page's load and UI events for the usage store (204; never touches the GPU queue) |
+| `GET /stats?days=N`, `/stats/session?id=`, `/stats/run?id=` | usage dashboard data; need `X-Stats-Password` (or the owner key) |
+| `GET /runlog[?day=YYYY-MM-DD]` | owner only: list the run log's days, or stream one day's file |
+| `GET /own_stats` | owner only: mode and memory of the own-state plugin |
 
-Requests are JSON (`Content-Type: application/json`). Embeddings are base64 of little-endian float32, N x D.
+Requests are JSON (`Content-Type: application/json`). The exact shapes are in `API.md`, which follows `docs/BACKEND.md` (contract version 1).
 
-`POST /sample` body: `prompt` (up to 2000 characters), `n` (2 to 200, default 30), `t_prime` (0.2 to 2, default 1),
-`max_new_tokens` (8 to 256, default 128), `seed` (integer, default random), `model` (a key of `/status`), `embedder`.
+`POST /sample` body: `prompt` (1 to 2000 characters), `n` (2 to 200, default 30), `t_prime` (0.2 to 2, default 1),
+`max_new_tokens` (8 to 256, default 128), `seed` (integer, default random), `model` (a key of `/status`), `embedder`, optional `emb`,
+`visitor`, `session`. A value outside these limits is refused with 400 `bad_request`; nothing is capped.
 The completions of one request use the seeds `seed + i`: choose seeds at least `n` apart to append independent draws to a pool.
-Response: `samples[{text, logp, logq, nTokens, ended}]`, `emb`, `D`, `N`, `embedder`, `Tprime`, `seed`, `timing`.
+Response: `samples[{text, logp, logq, nTokens, ended}]`, `G`, `D`, `N`, `embedder`, `embedderId`, `Tprime`, `maxNewTokens`, `seed`, `timing`.
+`G` is the N x N matrix of inner products of the unit embeddings (float64 products of the float32 vectors, symmetric, diagonal exactly 1, little-endian
+float32 row-major, base64) for every embedder. The vectors themselves (`emb`, N x D float32 base64) are sent only when the request has `"emb": true`.
+
+**Errors** are JSON `{"code", "detail"}` with the codes `bad_request`, `auth`, `rate_limit`, `busy`, `server` of the contract (and `starting` for a 503 while an engine restarts); `detail` is the readable message.
 
 `POST /embed` body: `texts` (1 to 200 strings of at most 2000 characters), `embedder`, and for `own` also `model`, `prompt` and optionally
-`ended` (one boolean per text). The own states are recomputed by teacher forcing the text, so they are close to, not equal to, the
+`ended` (one boolean per text). The response has `G` (and `emb` only with `"emb": true`). The own states are recomputed by teacher forcing the text, so they are close to, not equal to, the
 vectors `/sample` returns from the generation itself (cosine about 0.9999 for Gemma 3 and Qwen3, about 0.99 for Gemma 2 9B, whose stored
 text loses trailing whitespace tokens).
 
@@ -52,10 +61,43 @@ Identical requests are answered from a 256-entry in-memory cache without cost. T
 
 ## The LM's own states ("own" embedder)
 
-For a completion, the vector is the mean over generation steps of the model's final hidden state, recovered from the logits the
-sampler sees (`plugin/dpp_vllm_plugin/own.py`), projected to 256 dimensions with a fixed random matrix, centered by a per-model mean
-and normalized. `search/build_own_P.py` builds the logit-to-projection matrix P from the model's unembedding matrix.
-Enable it with `DPP_OWN_EMB=1`. Models whose final logits are soft-capped (Gemma 2) are handled by inverting the cap in the plugin.
+For a completion, the vector is the mean over generation steps of the model's final-norm hidden state, including the step that samples the end-of-sequence
+token. The plugin (`plugin/dpp_vllm_plugin/own.py`, `DPP_OWN_EMB=1`) works in one of two modes per model, chosen by the files in `own_emb/<key>/`:
+
+- **Exact** (`M.npy` present). The plugin sums the raw logits of each sequence (V floats, 448 slots, 260 MiB for Qwen3). The sampler's logits are l = W h + c·1
+  (W: the unembedding matrix, c: a per-step shift). With A = [W | 1] and M = (AᵀA)⁻¹, the first d entries of M Aᵀ l are h, and the map is linear, so
+  the server recovers the mean state from the mean logits, h̄ = [M Aᵀ l̄]₁..d, subtracts `mu_full.npy` (the mean over the model's demo pools) and normalizes.
+  `G` comes from the full d-dimensional vectors (d = 5120 for Qwen3 14B). Build: `DPP_ROOT=. python search/build_own_M.py <key>` (CPU, about 35 s),
+  then `search/precompute_own.py` writes `mu_full.npy` and the pools' `<id>.G.bin`. A pass takes at most 400 texts.
+- **Projected** (no `M.npy`). The 256-d random projection of `search/build_own_P.py`.
+
+The plugin chooses its mode when it loads (at the first own request, and again after 60 s without one), so changing the files needs a restart of the service.
+Measured on Qwen3 14B AWQ (`tests/check_own_exact.py`): the logits the hook sees are float16 with no NaN or inf, the least-squares residual of l on A is
+2.1e-4 of |l| (float16 rounding of the logits), the recovered h differs from the hidden state of the same forward pass by 1.7e-4 per step (relative) and 5e-5 for the mean,
+and G differs by at most 7.7e-6.
+Models whose final logits are soft-capped (Gemma 2) are handled by inverting the cap in the plugin.
+
+## Run log
+
+Every successful `/sample` run is appended to `runlog/runs-YYYY-MM-DD.jsonl` (one UTC day per file; directory mode 700, files 600; under the server directory, never under the
+static site). A line has the configuration (prompt, model key, repo and weights revision, embedder id, N, T′, max new tokens, seed), the completions with
+exact `logp`, `logq`, `nTokens`, `ended`, the timing, the UTC time and a random `run_id`. It has no visitor field (no address, client id, user agent, `request_id`,
+`visitor`, `session`) and no embeddings or `G`. One writer lock, one full line per write; a failed write is logged to `logs/server.log` and the request still succeeds.
+`DPP_RUNLOG=0` turns it off (`/status.logsRuns` is then false), `DPP_RUNLOG_DIR` moves it. `GET /runlog` (owner key) lists days and streams a day. Copy the files over SSH otherwise.
+`/embed` and `/describe` are not logged.
+
+## Usage stats
+
+A second store, `usage/usage.sqlite3` (SQLite, directory mode 700, file 600, `DPP_USAGE=0` to turn off, `DPP_USAGE_DIR` to move), holds sessions, UI events and one row per request to
+`/sample`, `/embed`, `/describe` (time, session, origin host, route, settings, outcome, queue wait, run time, tokens, `run_id`). It has no text and no address. It is kept apart from the
+run log; a row of a successful sample points to the run log line by `run_id`. The page sends `visitor` (random, kept in its localStorage) and `session` (random per page load),
+and `POST /event` for the page load and a few UI events. A request without ids is grouped per UTC day under a keyed hash of the client address; the key is random, kept in
+memory and replaced every day. `GET /stats`, `/stats/session`, `/stats/run` serve the dashboard and need `X-Stats-Password`.
+
+**Setting the stats password (owner).** The server never creates one. Choose a password and write it to `~/dpp-sampler/.stats_password` as the only line
+(`umask 077; printf '%s\n' 'your password' > ~/dpp-sampler/.stats_password`; mode 600), or set `DPP_STATS_PASSWORD_FILE` to another path or `DPP_STATS_PASSWORD` in the unit.
+The file is read on every request, so no restart is needed. The owner key (`X-Own-Secret`) also works for the stats routes. While neither is configured, the routes answer 503.
+After 10 failed attempts within 5 minutes a client gets 429. The stats page runs on the server's own origin (no CORS involved); `X-Stats-Password` is not in the CORS allow list.
 
 ## Install and run
 
@@ -101,7 +143,7 @@ WantedBy=default.target
 
 ## Cross-origin use
 
-`server.py` adds `CORSMiddleware` for the origin `https://timvieira.github.io` (methods GET and POST, header `content-type`). Same-origin requests carry no Origin header and are unaffected. To allow another origin, change `allow_origins` in `server.py` and restart.
+`server.py` adds `CORSMiddleware` for the origins `https://timvieira.github.io`, the server's own page and `http://localhost` with any port (methods GET and POST, headers `Authorization` and `Content-Type`; `Retry-After` is exposed). Error answers carry the headers too. To allow another origin, change `CORS_ORIGINS` or `CORS_ORIGIN_REGEX` in `server.py` and restart.
 
 ## Embedders
 
@@ -116,6 +158,9 @@ WantedBy=default.target
 | `DPP_RESIDENT_UTIL` / `DPP_SLOT_UTIL` | 0.50 / 0.36 | GPU fraction of the resident and the default slot engine |
 | `DPP_OWN_EMB` | off | `1` enables own states (plugin, `own_emb/<key>/`, `/embed` with `own`) |
 | `DPP_OWN_DIR` | `./own_emb` | where the plugin reads `P.safetensors`, `meta.json`, `mu.npy` per model |
+| `DPP_RUNLOG` / `DPP_RUNLOG_DIR` | on / `./runlog` | `0` turns the run log off; the directory of the daily files |
+| `DPP_USAGE` / `DPP_USAGE_DIR` | on / `./usage` | `0` turns the usage store off; the directory of `usage.sqlite3` |
+| `DPP_STATS_PASSWORD_FILE` / `DPP_STATS_PASSWORD` | `./.stats_password` / unset | where the owner sets the stats password (file first, then the variable) |
 | `DPP_PRELOAD` | `qwen3-emb` | embedders loaded at start-up (comma list, empty for none) |
 | `DPP_MODELS` | all | comma list of model keys to serve. It must include the resident `qwen3-14b` and only known keys, or start-up fails. Other keys get 400 "Unknown model" and no slot engine loads. Unset serves every model. |
 | `DPP_EMBEDDER` | `minilm` | embedder used when a request names none |
@@ -195,3 +240,10 @@ All scripts take the layout root from `DPP_ROOT` (default: the current directory
 2. `search/embed_pools.py [--only <model>]` writes the Qwen3-Embedding vectors and their bases.
 3. `search/build_own_P.py <model>`, then `search/precompute_own.py` (teacher forcing) or `search/regen_pools_own.py` plus
    `search/own_from_pools.py` (own states from the generation itself), then `search/own_sanity.py`.
+
+## Tests
+
+No GPU: `tests/test_api_guard.py`, `test_queue.py`, `test_exit_paths.py`, `test_usage.py` (run log and usage store), and `test_routes.py` (imports `server.py`, starts no engine, calls the cheap routes
+through starlette's TestClient; needs vllm and torch to import). Run each as `.venv/bin/python tests/<file>`; they print one `PASS` or `FAIL` line per check.
+Against the running service: `tests/http_checks.py basic|limits`, and `node scripts/conformance.mjs <base url>` from the page's repository. GPU, with the service stopped:
+`tests/check_plugin_exact.py` (log q) and `tests/check_own_exact.py` (what the sampler hook sees, and the recovery of the hidden states).

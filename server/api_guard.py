@@ -14,15 +14,43 @@ import math
 import os
 import re
 import shutil
+import threading
 import time
 
+import numpy as np
 from fastapi import HTTPException
 
 LOOPBACK = ("127.0.0.1", "::1")
 
 
-def bad(msg, status=400, headers=None):
-    return HTTPException(status, msg, headers=headers)
+class ApiError(HTTPException):
+    """HTTPException that carries the machine-readable `code` of docs/BACKEND.md (bad_request, auth, rate_limit, budget,
+    busy, server; `starting` for a 503 while an engine restarts). Without an explicit code `error_code` derives it from the status."""
+
+    def __init__(self, status, detail, code=None, headers=None):
+        super().__init__(status, detail, headers=headers)
+        self.code = code
+
+
+def error_code(exc):
+    """The `code` of an error body: the explicit one, else by HTTP status."""
+    c = getattr(exc, "code", None)
+    if c:
+        return c
+    st = exc.status_code
+    if st in (401, 403):
+        return "auth"
+    if st == 429:
+        return "busy"
+    if st == 503:
+        return "starting"
+    if 400 <= st < 500:
+        return "bad_request"
+    return "server"
+
+
+def bad(msg, status=400, headers=None, code=None):
+    return ApiError(status, msg, code=code, headers=headers)
 
 
 # ---------------------------------------------------------------- body
@@ -90,7 +118,8 @@ def number(v, name, integer=False, lo=None, hi=None, clamp=True):
     return f
 
 
-def text(v, name, maxlen, required=True, strip=True):
+def text(v, name, maxlen, required=True, strip=True, truncate=True):
+    """A string, stripped. Longer than `maxlen`: cut (truncate=True) or 400 (truncate=False, the contract's limits never cap silently)."""
     if v is None:
         v = ""
     if not isinstance(v, str):
@@ -99,7 +128,21 @@ def text(v, name, maxlen, required=True, strip=True):
         v = v.strip()
     if required and not v:
         raise bad(f"{name} is empty.")
+    if maxlen and len(v) > maxlen and not truncate:
+        raise bad(f"{name} is limited to {maxlen} characters (got {len(v)}).")
     return v[:maxlen] if maxlen else v
+
+
+def gram_b64(emb):
+    """G of docs/BACKEND.md: inner products in float64 of the unit vectors `emb` (N x D, float32), symmetrized, entries clipped to
+    [-1, 1], diagonal exactly 1, returned as base64 of little-endian float32, row-major."""
+    import base64
+    u = np.asarray(emb, dtype=np.float32).astype(np.float64)
+    g = u @ u.T
+    g = (g + g.T) / 2
+    np.clip(g, -1.0, 1.0, out=g)
+    np.fill_diagonal(g, 1.0)
+    return base64.b64encode(np.ascontiguousarray(g, dtype="<f4").tobytes()).decode("ascii")
 
 
 def embedder_list(v, known, max_len):
@@ -236,15 +279,16 @@ class Limits:
         return b
 
     @staticmethod
-    def _429(msg, wait):
+    def _429(msg, wait, code="rate_limit"):
+        """429 with Retry-After. `rate_limit`: this visitor's share is used up. `busy`: the server as a whole is occupied."""
         w = max(1, int(math.ceil(wait)))
         m = max(1, round(w / 60))
-        return HTTPException(429, msg.format(w=w, mm="a minute" if m == 1 else f"{m} minutes"), headers={"Retry-After": str(w)})
+        return ApiError(429, msg.format(w=w, mm="a minute" if m == 1 else f"{m} minutes"), code=code, headers={"Retry-After": str(w)})
 
     def claim(self, client):
         """Reserve the client's one sample request (queued or running); 429 when it already holds one. Release with `unclaim`."""
         if client in self.inflight:
-            raise self._429("You already have a request waiting or running. Wait for it to finish, then try again.", 5)
+            raise self._429("You already have a request waiting or running. Wait for it to finish, then try again.", 5, "busy")
         self.inflight.add(client)
 
     def unclaim(self, client):
@@ -260,17 +304,17 @@ class Limits:
         now = now or time.time()
         self._trim(self.runs, now)
         if len(self.runs) >= self.rph_g:
-            raise self._429("The server is busy this hour. Please try again in about {mm}.", 300)
+            raise self._429("The server is busy this hour. Please try again in about {mm}.", 300, "busy")
         w = self.gbucket.wait_for(cost, now)
         if w > 0:
-            raise self._429("The server has produced a lot of text this hour. Please try again in about {mm}.", w)
+            raise self._429("The server has produced a lot of text this hour. Please try again in about {mm}.", w, "busy")
         w = self._bucket(client).wait_for(cost, now)
         if w > 0:
             raise self._429("You have used your share of generation for this hour. Please try again in about {mm}, or use fewer or shorter completions.", w)
         if needs_swap:
             gap = self.last_swap + self.swap_gap - now if check_gap else 0
             if gap > 0:
-                raise self._429("The server just switched models for someone else. Please try again in {w} seconds.", gap)
+                raise self._429("The server just switched models for someone else. Please try again in {w} seconds.", gap, "busy")
             dq = self.swaps[client]
             self._trim(dq, now)
             if len(dq) >= self.sph:
@@ -295,7 +339,7 @@ class Limits:
         now = now or time.time()
         self._trim(self.eruns, now)
         if len(self.eruns) >= self.eph_g:
-            raise self._429("The server is busy this hour. Please try again later.", 300)
+            raise self._429("The server is busy this hour. Please try again later.", 300, "busy")
         dq = self.embeds[client]
         self._trim(dq, now)
         if len(dq) >= self.eph_c:
@@ -310,7 +354,7 @@ class Limits:
         now = now or time.time()
         self._trim(self.druns, now)
         if len(self.druns) >= self.dph_g:
-            raise self._429("The server is busy this hour. Please try again later.", 300)
+            raise self._429("The server is busy this hour. Please try again later.", 300, "busy")
         dq = self.describes[client]
         self._trim(dq, now)
         if len(dq) >= self.dph_c:
@@ -382,6 +426,12 @@ class RateWindow:
         self.limit, self.period, self.max_clients = limit, period, max_clients
         self.ev = {}
 
+    def count(self, client, now=None):
+        """Events of `client` within the window (without adding one)."""
+        now = now or time.time()
+        dq = self.ev.get(client)
+        return 0 if dq is None else sum(1 for t in dq if now - t <= self.period)
+
     def hit(self, client, now=None):
         now = now or time.time()
         dq = self.ev.get(client)
@@ -392,7 +442,7 @@ class RateWindow:
         while dq and now - dq[0] > self.period:
             dq.popleft()
         if len(dq) >= self.limit:
-            raise bad("Too many requests. Please slow down.", 429, {"Retry-After": "5"})
+            raise bad("Too many requests. Please slow down.", 429, {"Retry-After": "5"}, "rate_limit")
         dq.append(now)
 
 
@@ -466,7 +516,7 @@ class JobQueue:
         job = _Job(rid, engine, asyncio.get_running_loop())
         idle = self.cur[engine] is None and not self.q[engine]
         if not idle and self.counts()["waiting"] >= self.max_waiting:
-            raise bad("Many people are using the server right now. Please try again in a minute.", 429, {"Retry-After": "30"})
+            raise bad("Many people are using the server right now. Please try again in a minute.", 429, {"Retry-After": "30"}, "busy")
         self.q[engine].append(job)
         if rid is not None:
             self.ids[rid] = job
@@ -492,10 +542,10 @@ class JobQueue:
         while job.state != "running":
             left = deadline - time.monotonic()
             if left <= 0:
-                raise bad("The request waited too long in the queue. Please try again in a minute.", 503, {"Retry-After": "60"})
+                raise bad("The request waited too long in the queue. Please try again in a minute.", 503, {"Retry-After": "60"}, "busy")
             await asyncio.wait({job.fut}, timeout=min(self.poll, left))
             if job.state != "running" and gone is not None and await gone():
-                raise bad("Client closed the request.", 499)
+                raise bad("Client closed the request.", 499, None, "bad_request")
 
     @contextlib.asynccontextmanager
     async def admit(self, engine, rid=None, gone=None):
@@ -590,3 +640,112 @@ class LRU:
         self.d.move_to_end(k)
         while len(self.d) > self.size:
             self.d.popitem(last=False)
+
+
+# ---------------------------------------------------------------- run log
+
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+RUNLOG_SCHEMA = 1
+
+
+def utc_iso(t):
+    """Seconds since the epoch as 'YYYY-MM-DDTHH:MM:SSZ' (UTC)."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+
+def sample_record(pool, key, repo, revision, embedder_id, t, run_id=None):
+    """The run-log record of a successful /sample: configuration, seed, completions with exact logp and logq, timing, UTC time.
+    Nothing about the visitor (address, client id, user agent, request_id, token) and no embeddings or G (recomputable from the texts)."""
+    return {
+        "schema": RUNLOG_SCHEMA, "kind": "sample", "run_id": run_id, "time": utc_iso(t),
+        "prompt": pool["prompt"], "modelKey": key, "model": repo, "revision": revision,
+        "embedderId": embedder_id, "embedder": pool.get("embedder"),
+        "N": pool["N"], "Tprime": pool["Tprime"], "maxNewTokens": pool["maxNewTokens"], "seed": pool["seed"],
+        "samples": [{"text": s["text"], "logp": s["logp"], "logq": s["logq"], "nTokens": s["nTokens"], "ended": s["ended"]}
+                    for s in pool["samples"]],
+        "timing": pool.get("timing", {}),
+    }
+
+
+class RunLog:
+    """Append-only JSON-lines log of runs, one file per UTC day (`runs-YYYY-MM-DD.jsonl`) in a directory of mode 700 (files 600).
+
+    `write` is safe to call from several threads (one lock, one `os.write` of a full line to an O_APPEND descriptor) and never raises:
+    a failed write is reported to `on_error` (the service log) and returns False. Disabled (`enabled=False`) it does nothing."""
+
+    def __init__(self, directory, enabled=True, on_error=None):
+        self.dir, self.enabled, self.on_error = directory, bool(enabled), on_error or (lambda msg: None)
+        self.lock = threading.Lock()
+
+    @classmethod
+    def from_env(cls, env, default_dir, on_error=None):
+        """DPP_RUNLOG=0 (or false, off, no) turns the log off; DPP_RUNLOG_DIR sets the directory. On by default."""
+        off = str(env.get("DPP_RUNLOG", "1")).strip().lower() in ("0", "false", "off", "no")
+        return cls(env.get("DPP_RUNLOG_DIR") or default_dir, enabled=not off, on_error=on_error)
+
+    def _ensure_dir(self):
+        os.makedirs(self.dir, mode=0o700, exist_ok=True)
+        os.chmod(self.dir, 0o700)
+
+    def path(self, day):
+        if not isinstance(day, str) or not _DAY.fullmatch(day):
+            raise bad("day must be YYYY-MM-DD.")
+        return os.path.join(self.dir, f"runs-{day}.jsonl")
+
+    def write(self, record, now=None):
+        if not self.enabled:
+            return False
+        try:
+            now = now if now is not None else time.time()
+            line = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+            day = time.strftime("%Y-%m-%d", time.gmtime(now))
+            with self.lock:
+                self._ensure_dir()
+                fd = os.open(self.path(day), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+                try:
+                    os.fchmod(fd, 0o600)
+                    n = os.write(fd, line)
+                    while n < len(line):   # a short write: finish the line before another writer can interleave
+                        n += os.write(fd, line[n:])
+                finally:
+                    os.close(fd)
+            return True
+        except Exception as e:   # a log failure must not fail the request
+            try:
+                self.on_error(f"run log write failed: {type(e).__name__}: {e}")
+            except Exception:
+                pass
+            return False
+
+    def find(self, run_id, day=None):
+        """The record with this `run_id` (a dict) or None. Looks in the file of `day` when given, else in every file, newest first."""
+        if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
+            return None
+        names = [f"runs-{day}.jsonl"] if day else [f"runs-{d['day']}.jsonl" for d in reversed(self.days())]
+        needle = f'"run_id":"{run_id}"'.encode()
+        for name in names:
+            try:
+                with open(os.path.join(self.dir, name), "rb") as f:
+                    for line in f:
+                        if needle in line:
+                            return json.loads(line)
+            except (OSError, ValueError):
+                continue
+        return None
+
+    def days(self):
+        """[{day, lines, bytes}] of the files in the directory, oldest first."""
+        out = []
+        try:
+            names = sorted(os.listdir(self.dir))
+        except OSError:
+            return out
+        for name in names:
+            m = re.fullmatch(r"runs-(\d{4}-\d{2}-\d{2})\.jsonl", name)
+            if not m:
+                continue
+            p = os.path.join(self.dir, name)
+            with open(p, "rb") as f:
+                data = f.read()
+            out.append({"day": m.group(1), "lines": data.count(b"\n"), "bytes": len(data)})
+        return out
