@@ -56,7 +56,8 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
   one-line notice ("Prompts and completions are saved and may be used for research."). His page does.
 - Our page does not send `offset` yet. Decide whether "Draw new ones" should read the stream (this answers the
   run-log item's open question).
-- His page features, not taken (Tim is not sure he wants them yet):
+- His page features are his own exploration, not proposals for this page. This page's experience is
+  curated, so nothing from his fork comes in unless Tim picks it. For the record:
   - "Sample again" as a refresh icon on the Sample button;
   - "Color by inclusion probability" in the View menu.
 
