@@ -59,7 +59,6 @@ routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = Tâ€
 
 ## Untested
 - Hugging Face sign-in end to end, now that the page is back at the main address.
-- The Space's /embed end to end (the anonymous ZeroGPU quota ran out during testing).
 - Two-finger panning on a real touch screen.
 
 ## Later: pool fit and the default T (see docs/figures/pool-fit-vs-T.png)
