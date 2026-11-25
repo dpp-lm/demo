@@ -329,25 +329,20 @@ export function maxShift(A, B) {
 
 // ---------------------------------------------------------------- color by inclusion probability
 /**
- * The top of the color scale for the inclusion probabilities `values`: the smallest of 0.1%, 0.2%, 0.5%, 1%, 2%, 5%, ... 100%
- * that is at least their largest finite value. Rounding up keeps the legend readable and makes a color change in steps, not
- * with every small change of the largest value. Returns 1 when there is no positive finite value.
+ * The range of the scale of "Color by inclusion probability": the smallest and the largest finite value, so the colors use
+ * the whole ramp whatever the size of the probabilities (all under 2%, or up to 100%). Null when there is no finite value.
  */
-export function inclusionTop(values) {
-  let m = 0;
-  for (const v of values) if (Number.isFinite(v) && v > m) m = v;
-  if (!(m > 0)) return 1;
-  for (let e = -3; e <= 0; e++) for (const k of [1, 2, 5]) {
-    const top = k * 10 ** e;
-    if (top >= m * (1 - 1e-12)) return Math.min(1, top);
-  }
-  return 1;
+export function inclusionRange(values) {
+  let lo = Infinity, hi = -Infinity;
+  for (const v of values) if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  return hi >= lo ? [lo, hi] : null;
 }
 
-/** Position in [0, 1] on the ramp of probability p when the scale tops out at `top`: the square root of p / top (null when p is not a number). */
-export function inclusionRamp(p, top) {
-  if (!Number.isFinite(p) || !(top > 0)) return null;
-  return Math.sqrt(Math.min(1, Math.max(0, p / top)));
+/** Position in [0, 1] on the ramp of probability p on a linear scale from lo to hi (0.5 when all values are equal, null when p is not a number). */
+export function inclusionRamp(p, lo, hi) {
+  if (!Number.isFinite(p) || !Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+  if (!(hi > lo)) return 0.5;
+  return Math.min(1, Math.max(0, (p - lo) / (hi - lo)));
 }
 
 /** Where on the page's grey ramp (lightest to darkest) the scale starts: the lightest grey is the paper-like color of unlikely completions, too faint for a small dot, so 0 starts a fifth of the way in. */
@@ -368,7 +363,7 @@ export function pctLabel(p) {
   return `${s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s}%`;
 }
 
-/** Labeled marks of the ramp bar: 0, the probability at the middle of the bar (top / 4 on a square-root scale) and the top. */
-export function inclusionTicks(top) {
-  return [0, 0.5, 1].map((t) => ({ t, p: top * t * t, label: pctLabel(top * t * t) }));
+/** Labeled marks of the ramp bar: the smallest value, the middle of the range and the largest value. */
+export function inclusionTicks(lo, hi) {
+  return [0, 0.5, 1].map((t) => { const p = lo + t * (hi - lo); return { t, p, label: pctLabel(p) }; });
 }

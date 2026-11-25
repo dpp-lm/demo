@@ -112,7 +112,7 @@ Our fork adds a switch, "Expert tools", in the bottom bar. With it off the page 
 - Extra models and embeddings: the expert switch adds what the GPU server offers to the Settings selects (`js/expert.js`); there is no panel section for them.
 - Groups: color the completions by cluster, with names and a legend over the plot (`js/groups.js`).
 - Not super principled: the options listed above under "Cut (not doing)" that have no principled justification, kept here and marked as such (`js/unprincipled.js`): paper settings and paper T values, one T per picking mode, an override of the DPP weight, the vector length (quality, importance or unit), point size for quality, unit positions, opening the cone, and the axes (fitted at first draw, which is upstream's choice, or principal axes).
-- Color by inclusion probability: a toggle in the View menu for every visitor (off at load, not stored) colors the points and card dots by S.pi on a square-root scale, with a legend over the plot and Groups excluded while it is on (`js/inclusion.js`, scale in `js/expert-lib.js`).
+- Color by inclusion probability: a toggle in the View menu for every visitor (off at load, not stored) colors the points and card dots by S.pi on a linear scale from the smallest to the largest value (color scales Blue, Viridis, Purple, Gray, optionally in 5 steps), with a legend over the plot and Groups excluded while it is on (`js/inclusion.js`, scale in `js/expert-lib.js`).
 
 Also in the fork:
 - The similarity matrices (primal L and dual C) have a Matrices button in the default view (`js/matrix-panel.js`). With the switch on they get color, order, axes and printed-submatrix options.

@@ -2,28 +2,32 @@
 // completion is in a subset drawn from the K-DPP at the current T and K (S.pi, the value the cards print as "inclusion").
 // A view option in the View menu for every visitor, off by default and not stored. It uses the same color hooks as Groups
 // (expert.js pointColors), so the 2-D plot, the 3-D plot and the card dots follow, and the two colorings exclude each other.
-// The scale (square root of p / top, top rounded up from the largest value) lives in expert-lib.js.
+// The scale (linear from the smallest to the largest value among the completions) lives in expert-lib.js.
 
 import { EXPLAIN } from './explain.js';
-import { inclusionTop, inclusionRamp, inclusionShade, inclusionSteps, INCLUSION_STEPS, inclusionTicks } from './expert-lib.js';
+import { inclusionRange, inclusionRamp, inclusionShade, inclusionSteps, INCLUSION_STEPS, inclusionTicks } from './expert-lib.js';
 import { rampBetween, parseHex, viridis } from './matrices.js';
 
 let on = false, H = null, legend = null, opts = null, box = null, lastSig = '';
-let cache = null;   // { pool, pi, n, undef, top, colors } for the pool and probabilities on screen
+let cache = null;   // { pool, pi, n, undef, lo, hi, colors } for the pool and probabilities on screen
 const turnedOn = [];
 
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const hex = (c) => `#${c.map((x) => x.toString(16).padStart(2, '0')).join('')}`;
-// Color scales, each a map from a scale position in [0, 1] to [r, g, b], light for unlikely and dark for likely, none red
-// (red marks the selection). Viridis runs from yellow-green to dark purple so that likely points are the dark ones on the
-// light page.
+// Color scales, each a map from a scale position in [0, 1] to [r, g, b]. Unlikely completions are pale, so they recede on
+// the light page, and likely ones are saturated and dark, so they stand out. None is red (red marks the selection).
+const through = (...stops) => (t) => {
+  const x = Math.min(1, Math.max(0, t)) * (stops.length - 1), k = Math.min(stops.length - 2, Math.floor(x)), f = x - k;
+  return stops[k].map((a, c) => Math.round(a + f * (stops[k + 1][c] - a)));
+};
 const gray = () => { const f = rampBetween(parseHex(css('--ramp-lo')) ?? [195, 189, 179], parseHex(css('--ramp-hi')) ?? [42, 42, 42]); return (t) => f(inclusionShade(t)); };
 const PALETTES = {
-  viridis: { label: 'Viridis', make: () => (t) => viridis(0.92 * (1 - t)) },
-  blue: { label: 'Blue', make: () => rampBetween([166, 206, 240], [8, 36, 92]) },
+  blue: { label: 'Blue', make: () => through([201, 208, 216], [120, 176, 240], [30, 112, 235], [12, 40, 130]) },
+  viridis: { label: 'Viridis', make: () => { const v = (t) => viridis(0.95 * (1 - t)); return (t) => (t < 0.15 ? through([214, 214, 190], v(0.15))(t / 0.15) : v(t)); } },
+  purple: { label: 'Purple', make: () => through([212, 205, 214], [196, 140, 232], [140, 50, 210], [66, 10, 110]) },
   gray: { label: 'Gray', make: gray },
 };
-let palette = 'viridis', steps = false;
+let palette = 'blue', steps = false;
 const ramp = () => { const f = PALETTES[palette].make(); return steps ? (t) => f(inclusionSteps(t)) : f; };
 
 export const inclusionOn = () => on;
@@ -37,9 +41,11 @@ function state() {
   const n = info.pool.samples.length;
   if (cache && cache.pool === info.pool && cache.pi === info.pi && cache.n === n) return cache;
   if (!info.pi) return (cache = { pool: info.pool, pi: info.pi, n, undef: true });
-  const values = info.values(), top = inclusionTop(values), rgb = ramp();
-  const colors = values.map((p) => { const t = inclusionRamp(p, top); return t === null ? null : hex(rgb(t)); });
-  return (cache = { pool: info.pool, pi: info.pi, n, top, colors });
+  const values = info.values(), range = inclusionRange(values), rgb = ramp();
+  if (!range) return (cache = { pool: info.pool, pi: info.pi, n, undef: true });
+  const [lo, hi] = range;
+  const colors = values.map((p) => { const t = inclusionRamp(p, lo, hi); return t === null ? null : hex(rgb(t)); });
+  return (cache = { pool: info.pool, pi: info.pi, n, lo, hi, colors });
 }
 
 /** For main.js through expert.js: the point and card-dot colors, or null (default colors) when off or when there is no K-DPP. */
@@ -61,15 +67,15 @@ function renderLegend() {
     ? Array.from({ length: n }, (_, k) => `${hex(rgb((k + 0.5) / n))} ${100 * k / n}% ${100 * (k + 1) / n}%`)
     : Array.from({ length: n + 1 }, (_, k) => hex(rgb(k / n)));
   legend.innerHTML = `<span class="x-il-title">Inclusion probability</span>
-    <span class="x-il-bar"><span class="x-il-grad" style="background:linear-gradient(90deg,${stops.join(',')})"></span><span class="x-il-ticks">${inclusionTicks(s.top).map((k) => `<span style="left:${100 * k.t}%">${k.label}</span>`).join('')}</span></span>
-    <span class="x-chip-note">square-root scale${steps ? `, ${INCLUSION_STEPS} steps` : ''}, selected points are outlined</span>`;
+    <span class="x-il-bar"><span class="x-il-grad" style="background:linear-gradient(90deg,${stops.join(',')})"></span><span class="x-il-ticks">${inclusionTicks(s.lo, s.hi).map((k) => `<span style="left:${100 * k.t}%">${k.label}</span>`).join('')}</span></span>
+    <span class="x-chip-note">linear from the smallest to the largest value${steps ? `, ${INCLUSION_STEPS} steps` : ''}, selected points are outlined</span>`;
 }
 
 /** After every render: redraw the legend when what it shows has changed. */
 export function inclusionRefresh() {
   if (!legend) return;
   const s = state();
-  const sig = !s ? '' : s.undef ? 'undef' : `${s.top}|${palette}|${steps}`;
+  const sig = !s ? '' : s.undef ? 'undef' : `${s.lo}|${s.hi}|${palette}|${steps}`;
   if (sig === lastSig && legend.hidden === !s) return;
   lastSig = sig;
   renderLegend();
@@ -95,7 +101,7 @@ export function initInclusion(hooks) {
     title: 'Color by inclusion probability',
     body: `<p>The inclusion probability of a completion is the chance that a subset drawn from the K-DPP over the completions, at the current $T$ and $K$, contains it. The color of a point is that probability, and the selected points keep their marker.</p>
       <p>In Most likely mode the subset is the greedy pick, while the color still shows the K-DPP's inclusion probability.</p>
-      <p>The color follows the square root of the probability, so that small probabilities stay apart. The legend gives the top of the scale. Under the toggle you can change the colors, or show them in ${INCLUSION_STEPS} steps, which are easier to tell apart.</p>`,
+      <p>The scale runs linearly from the smallest to the largest probability among the completions, so the colors use their whole range whether the probabilities are all small or reach 100%. The legend gives both ends. Pale points are unlikely and dark, saturated points are likely. Under the toggle you can change the colors, or show them in ${INCLUSION_STEPS} steps, which are easier to tell apart.</p>`,
   };
   legend = document.createElement('div');
   legend.id = 'incl-legend';

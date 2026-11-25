@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { gram, columnLogScale, mulberry32 } from '../js/dpp.js';
-import { displayScale, matchPreset, PRESETS, presetDiff, weightLogScale, resolveWeight, paperWeight, weightEss, readoutNotes, effectiveK, normText, distinctCount, gramToVectors, newRequestId, queueText, decodeDescribe, serverExtras, repoLabel, inclusionTop, inclusionRamp, pctLabel, inclusionTicks, inclusionShade, INCLUSION_FLOOR } from '../js/expert-lib.js';
+import { displayScale, matchPreset, PRESETS, presetDiff, weightLogScale, resolveWeight, paperWeight, weightEss, readoutNotes, effectiveK, normText, distinctCount, gramToVectors, newRequestId, queueText, decodeDescribe, serverExtras, repoLabel, inclusionRange, inclusionRamp, pctLabel, inclusionTicks, inclusionShade, INCLUSION_FLOOR } from '../js/expert-lib.js';
 
 test('displayScale: quality is the same in both modes, importance divides by q, paper follows the mode, unit is 1', () => {
   const logp = [-3, -5, -1, -9, -4], logq = [-3.2, -4.1, -1.5, -8, -4.4];
@@ -305,29 +305,22 @@ test('maxShift, npIsDefault, NP_NOTE', () => {
   assert.ok(!NP_NOTE.includes('—'));
 });
 
-test('inclusionTop rounds the largest probability up to 1, 2 or 5 times a power of ten', () => {
-  assert.equal(inclusionTop([0.0027, 0.086, 0.02]), 0.1);
-  assert.equal(inclusionTop([0.137]), 0.2);
-  assert.equal(inclusionTop([0.439, 0.01]), 0.5);
-  assert.equal(inclusionTop([0.5]), 0.5);
-  assert.equal(inclusionTop([0.978, 0.1]), 1);
-  assert.equal(inclusionTop([0.034, NaN]), 0.05);
-  assert.equal(inclusionTop([0.00004]), 0.001);
-  assert.equal(inclusionTop([]), 1);
-  assert.equal(inclusionTop([NaN, 0]), 1);
+test('inclusionRange is the smallest and largest finite value', () => {
+  assert.deepEqual(inclusionRange([0.0027, 0.086, 0.02]), [0.0027, 0.086]);
+  assert.deepEqual(inclusionRange([0.012, NaN, 0.004]), [0.004, 0.012]);
+  assert.deepEqual(inclusionRange([0.5]), [0.5, 0.5]);
+  assert.equal(inclusionRange([]), null);
+  assert.equal(inclusionRange([NaN]), null);
 });
 
-test('inclusionRamp is the square root of p / top, clamped, and null for no number', () => {
-  assert.equal(inclusionRamp(0, 0.2), 0);
-  assert.equal(inclusionRamp(0.2, 0.2), 1);
-  assert.equal(inclusionRamp(0.05, 0.2), 0.5);
-  assert.equal(inclusionRamp(0.5, 0.2), 1);
-  assert.equal(inclusionRamp(-1, 0.2), 0);
-  assert.equal(inclusionRamp(NaN, 0.2), null);
-  assert.equal(inclusionRamp(0.1, 0), null);
-  // monotone
-  let prev = -1;
-  for (let k = 0; k <= 20; k++) { const t = inclusionRamp(k / 100, 0.2); assert.ok(t >= prev); prev = t; }
+test('inclusionRamp is linear from lo to hi, clamped, and null for no number', () => {
+  assert.equal(inclusionRamp(0.004, 0.004, 0.02), 0);
+  assert.equal(inclusionRamp(0.02, 0.004, 0.02), 1);
+  assert.ok(Math.abs(inclusionRamp(0.012, 0.004, 0.02) - 0.5) < 1e-12);
+  assert.equal(inclusionRamp(0.5, 0.004, 0.02), 1);
+  assert.equal(inclusionRamp(0, 0.004, 0.02), 0);
+  assert.equal(inclusionRamp(0.3, 0.3, 0.3), 0.5);
+  assert.equal(inclusionRamp(NaN, 0, 1), null);
 });
 
 test('pctLabel and inclusionTicks', () => {
@@ -338,9 +331,9 @@ test('pctLabel and inclusionTicks', () => {
   assert.equal(pctLabel(0.0025), '0.25%');
   assert.equal(pctLabel(0.5), '50%');
   assert.equal(pctLabel(0.123), '12%');
-  assert.deepEqual(inclusionTicks(0.2).map((x) => x.label), ['0', '5%', '20%']);
-  assert.deepEqual(inclusionTicks(0.1).map((x) => x.label), ['0', '2.5%', '10%']);
-  for (const x of inclusionTicks(0.37)) assert.ok(Math.abs(inclusionRamp(x.p, 0.37) - x.t) < 1e-12);
+  assert.deepEqual(inclusionTicks(0, 0.2).map((x) => x.label), ['0', '10%', '20%']);
+  assert.deepEqual(inclusionTicks(0.002, 0.018).map((x) => x.label), ['0.2%', '1%', '1.8%']);
+  for (const x of inclusionTicks(0.01, 0.37)) assert.ok(Math.abs(inclusionRamp(x.p, 0.01, 0.37) - x.t) < 1e-12);
 });
 
 test('inclusionShade starts at the floor of the ramp and ends at its dark end', () => {
