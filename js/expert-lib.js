@@ -355,6 +355,11 @@ export const INCLUSION_FLOOR = 0.2;
 /** Position on the page's ramp for a scale position t in [0, 1]. */
 export const inclusionShade = (t) => INCLUSION_FLOOR + (1 - INCLUSION_FLOOR) * t;
 
+/** Number of steps of the stepped scale. */
+export const INCLUSION_STEPS = 5;
+/** Scale position t in [0, 1] snapped to one of INCLUSION_STEPS evenly spaced positions from 0 to 1 (null stays null). */
+export const inclusionSteps = (t) => (t == null ? null : Math.min(INCLUSION_STEPS - 1, Math.floor(Math.max(0, t) * INCLUSION_STEPS)) / (INCLUSION_STEPS - 1));
+
 /** A probability as a percentage with two significant figures at most: "0", "0.25%", "1.3%", "12%", "100%". */
 export function pctLabel(p) {
   if (!(p > 0)) return '0';

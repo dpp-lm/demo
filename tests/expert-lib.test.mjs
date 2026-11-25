@@ -348,3 +348,10 @@ test('inclusionShade starts at the floor of the ramp and ends at its dark end', 
   assert.equal(inclusionShade(1), 1);
   assert.ok(inclusionShade(0.5) > inclusionShade(0.25));
 });
+
+test('inclusionSteps snaps to five evenly spaced positions', async () => {
+  const { inclusionSteps, INCLUSION_STEPS } = await import('../js/expert-lib.js');
+  assert.equal(INCLUSION_STEPS, 5);
+  assert.deepEqual([0, 0.19, 0.2, 0.5, 0.79, 0.8, 1].map(inclusionSteps), [0, 0, 0.25, 0.5, 0.75, 1, 1]);
+  assert.equal(inclusionSteps(null), null);
+});
