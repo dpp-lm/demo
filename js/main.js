@@ -529,6 +529,10 @@ class Plot2D {
     this.gOrigin = svg.append('g');
     this.gOrigin.append('path').attr('stroke', css('--muted')).attr('stroke-width', 1);
     this.gPara = svg.append('g');
+    // Arrowhead for the selected vectors, drawn at the tip in the line's own colour.
+    defs.append('marker').attr('id', 'arrowhead').attr('viewBox', '0 0 10 10').attr('refX', 9).attr('refY', 5)
+      .attr('markerWidth', 4).attr('markerHeight', 4).attr('orient', 'auto-start-reverse')
+      .append('path').attr('d', 'M0,0L10,5L0,10Z').attr('fill', css('--accent'));
     this.gArrow = svg.append('g');
     this.gDot = svg.append('g');
     this.svg = svg;
@@ -600,9 +604,10 @@ class Plot2D {
     go(this.gOrigin.select('path').attr('stroke-dasharray', dims === 1 ? '3 3' : null))
       .attr('d', dims === 1 ? `M${ox},16V${H - 16}` : `M${ox - 6},${oy}H${ox + 6}M${ox},${oy - 6}V${oy + 6}`);
     const y0 = (i) => (dims === 1 ? this.pos[i][1] : oy);
-    this.gArrow.selectAll('line').data(S.sel.length <= 3 ? S.sel : [], (i) => i).join(
+    // Every selected completion is an arrow from the origin, whatever K (only the volume box needs K ≤ 2).
+    this.gArrow.selectAll('line').data(S.sel, (i) => i).join(
       (enter) => enter.append('line').attr('x1', ox).attr('y1', y0).attr('x2', ox).attr('y2', y0),
-    ).attr('stroke', css('--accent')).attr('stroke-width', 2);
+    ).attr('stroke', css('--accent')).attr('stroke-width', 2).attr('marker-end', 'url(#arrowhead)');
     go(this.gArrow.selectAll('line')).attr('x1', ox).attr('y1', y0)
       .attr('x2', (i) => this.pos[i][0]).attr('y2', (i) => this.pos[i][1]);
     const face = (f) => 'M' + f.map((q) => px(q).join(',')).join('L') + 'Z';
