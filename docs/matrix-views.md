@@ -272,6 +272,26 @@ theme".
   block's ends, a heuristic (spectral seriation along one eigenvector). Its guarantees (Atkins, Boman &
   Hendrickson 1998) are for the Laplacian's Fiedler vector, not for raw kernel eigenvectors.
 
+**Block strength: each completion's profile over the themes.** r_i(a) = p_a u_a(i)² / π_i is a distribution over
+themes (it sums to 1): through which themes the DPP would include completion i. A theme block is the argmax of
+that profile, so a block is only as strong as its members' profiles are peaked. At T = 20 and K = 3:
+
+| Preset | First block | Its theme's share of each member's π | Mean cosine within |
+|---|---|---|---|
+| Joke | 125 members | 71% on average | 0.99 |
+| City | 121 members | 42% | 0.93 |
+| Story | 130 members | 30% (min 14%) | 0.62 |
+
+So the story's first block is a "no dominant theme" bucket, not a cluster: story openings vary along many
+directions at once, the same fact the effective dimension measures.
+
+**Decided (Tim): show block strength honestly.** No forcing blocks where the pool has none. The lab draws, beside
+each row, the share of π_i carried by its own theme, and gives the pool's mean share in the panel caption (joke
+66%, story 33%).
+
+**Open:** order inside a block by the rest of the profile (second theme, then third) instead of the signed
+loading. That replaces the one remaining heuristic with the same exact quantity, and nests the blocks.
+
 **Status in the lab:** themes now use this rule on L. They give clean blocks on the joke preset; on the story
 preset the first theme (p ≈ 0.9) is a large, noisier block.
 

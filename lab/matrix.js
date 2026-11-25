@@ -132,10 +132,24 @@ function drawPanel(P) {
   } else {
     for (const [a, b] of blocks) ls += `<path d="M64 ${a + 0.3}H58V${b - 0.3}H64" fill="none" stroke="${muted}" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
   }
+  // Block strength (themes): for each row, the share of the completion's inclusion probability carried by its own
+  // theme, r_i = p_a u_a(i)^2 / π_i (a full bar at the dashed line = 100%). Short bars: the block is a weak assignment.
+  let strength = '';
+  if (P.id === 'theme') {
+    const { theme, part, pi } = P.res;
+    let sum = 0;
+    ls += `<line x1="4" x2="4" y1="0" y2="${n}" stroke="${muted}" stroke-width="1" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>`;
+    for (let r = 0; r < n; r++) {
+      const i = order[r], sh = part(i, theme[i]) / pi[i];
+      sum += sh;
+      ls += `<rect x="${56 - 52 * sh}" y="${r + 0.12}" width="${52 * sh}" height="0.76" fill="${ink}" opacity="0.55"/>`;
+    }
+    strength = `mean share ${(100 * sum / n).toFixed(0)}% · `;
+  }
   for (const i of S.picks) ls += `<rect x="66" y="${pos[i]}" width="4" height="1" fill="${accent}"/>`;
   left.innerHTML = ls;
   const o = S.opts, nb = blocks.length ? `${blocks.length} blocks · ` : '';
-  $('.note', P.el).textContent = `${nb}T = ${fmtT(o.T)} · ${o.mode === 'map' ? 'κ' : 'κ/q'} · ${ms.toFixed(0)} ms`;
+  $('.note', P.el).textContent = `${nb}${strength}T = ${fmtT(o.T)} · ${o.mode === 'map' ? 'κ' : 'κ/q'} · ${ms.toFixed(0)} ms`;
 }
 
 function showPair(i, j) {

@@ -72,7 +72,9 @@
     <b>Pivots, flat</b>: the first K pivots of pivoted Cholesky (greedy volume: the Most likely picks), each followed by the completions it
     explains the most of. <b>Pivots, nested</b>: the whole factorisation as a tree; parent = the earlier pivot that explains the most of a
     completion. <b>Themes</b>: the K-DPP chooses K eigenvectors of L, theme a with probability p_a, and every inclusion probability splits
-    exactly over them, π_i = Σ_a p_a u_a(i)²; each completion joins the theme carrying the largest part. Red ticks: the greedy (Most likely) picks.
+    exactly over them, π_i = Σ_a p_a u_a(i)²; each completion joins the theme carrying the largest part. The bars beside the theme blocks show that part's share of
+    π_i (full width at the dashed line = 100%): long bars mean a completion belongs to its block cleanly, short ones that its
+    chance of being sampled is spread over many themes; "mean share" averages it over the pool. Red ticks: the greedy (Most likely) picks.
   </p>
 </main>
 <script type="module" src="matrix.js"></script>

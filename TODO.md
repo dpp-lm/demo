@@ -38,7 +38,11 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
     puts outliers first at T = ∞ (with no quality, greedy volume favours them).
   - Themes, by the exact split π_i = Σ_a p_a u_a(i)²: clean blocks on the joke preset; on the story preset
     the first theme is a large, noisier block.
-- Open: which ordering to use; the order inside a block; whether conditioning (a "what if" pin) earns a place.
+- Decided (Tim): show block strength honestly. Each completion's exact profile over the themes,
+  r_i(a) = p_a u_a(i)² / π_i, says how cleanly it belongs to its block; the lab shows its own theme's share
+  beside each row and the pool's mean (joke 66%, story 33%: story openings have no clean blocks).
+- Open: which ordering to use (themes are the principled candidate); the order inside a block (proposal: by
+  the rest of the profile); whether conditioning (a "what if" pin) earns a place.
 
 ## Run log and shared cache (for us, not a visitor feature)
 - Done on Manuel's server (25 Nov): every run is logged (nothing about the visitor), and the shared draw
