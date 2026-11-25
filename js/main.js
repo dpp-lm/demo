@@ -277,12 +277,9 @@ function recompute({ newDraw = true } = {}) {
   const m = Math.max(...lk);
   S.c = lk.map((s) => Math.exp(0.5 * (s - m)));
   // The axes are set once per pool (and per 1-D/2-D/3-D choice), when the points are first drawn, and
-  // otherwise left alone, with one exception: when the selection fits in the drawn dimensions
-  // (2 ≤ K ≤ dims), they turn to contain it, so the box drawn is exactly the volume being scored.
-  // The turn is aligned to the previous view (kabsch), so points move as little as possible.
-  const k = S.sel.length, fits = k >= 2 && k <= Math.min(3, S.dims) && k === S.K;
-  const stale = fits && !(S.proj?.fitted && S.proj.sel.length === k && S.proj.sel.every((i, j) => i === S.sel[j]));
-  if (!S.proj || S.proj.pool !== S.pool || stale) S.proj = project();
+  // then left alone: the selection, the mode, T and K never turn them. Only the visitor does, with
+  // "Fit axes to selection" (fitAxes).
+  if (!S.proj || S.proj.pool !== S.pool) S.proj = project();
   render();
 }
 
@@ -380,6 +377,13 @@ function renderSpectrum() {
     `<p class="sp-note">${S.proj.fitted ? 'Axes 1–' + S.proj.k + ' of the plot span the selected completions; the rest show the main remaining directions.' : 'The plot shows the first principal axes.'}</p>`;
   el.querySelectorAll('[data-dims]').forEach((b) => (b.onclick = () => setDims(+b.dataset.dims)));
 }
+// Whether the axes were fitted to exactly the current selection, so the drawn box is the scored volume.
+function axesFitSel() {
+  const p = S.proj;
+  return !!p?.fitted && p.sel.length === S.sel.length && S.sel.every((i) => p.sel.includes(i));
+}
+// Turn the axes to contain the current selection (aligned to the current view, so points move little).
+function fitAxes() { S.proj = project(); render(); }
 function setDims(k) { S.dims = k; S.proj = null; plot.reset(); S.proj = project(); render(); }
 
 function renderReadout() {
@@ -410,9 +414,15 @@ function renderVolHint() {
   // The box is exact only when the plot's axes contain every selected vector: K ≤ 2 in 2-D, K ≤ 3 in 3-D.
   if (S.sel.length < 2) { el.innerHTML = ''; return; }
   if (S.sel.length > S.dims) { el.innerHTML = `<span class="muted">${S.dims === 1 ? 'volume drawn in 2-D and 3-D' : `volume drawn for K ≤ ${S.dims}`}</span>`; return; }
-  el.innerHTML = S.proj.fitted
-    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg><span class="fn">spanned volume<button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button></span>`
-    : `<span class="muted">volume needs ${S.sel.length}-D</span>`;
+  const tried = S.proj.sel.length === S.sel.length && S.sel.every((i) => S.proj.sel.includes(i));
+  if (!axesFitSel()) {
+    // Fitting fails only when the selected vectors are linearly dependent: the volume is then zero.
+    el.innerHTML = tried ? '<span class="muted">zero volume</span>'
+      : '<button type="button" class="link vol-fit" title="Turn the axes to contain the selected completions, so the box drawn is the volume being scored">Fit axes to selection</button>';
+    el.querySelector('.vol-fit')?.addEventListener('click', fitAxes);
+    return;
+  }
+  el.innerHTML = `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg><span class="fn">spanned volume<button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button></span>`;
 }
 
 // A completion that hit the max-token limit, rather than ending with the end-of-text token: said in words.
@@ -590,7 +600,7 @@ class Plot2D {
     const sel = new Set(S.sel);
     const idx = d3.range(N);
     const posD = idx.map((i) => (dims === 1 ? [this.dataXY(i, S.c[i])[0], this.dataXY(i, 1)[1]] : this.dataXY(i, S.c[i])));
-    const vol = dims === 2 && S.sel.length === 2 && S.proj.fitted;
+    const vol = dims === 2 && S.sel.length === 2 && axesFitSel();
     const volD = vol ? parallelotope([0, 0], S.sel.map((i) => posD[i])) : { faces: [], corners: [] };
     if (!this.bx) this.fit([...posD, ...volD.corners.map((c) => c.p)]);   // framed once, when first drawn
     Object.assign(this, { posD, volD, sel });
@@ -668,7 +678,7 @@ const plot = {
         });
       }
       this.p3.update({
-        coords: S.proj.coords, c: S.c, sel: S.sel, fitted: S.proj.fitted,
+        coords: S.proj.coords, c: S.c, sel: S.sel, fitted: S.proj.fitted, exact: axesFitSel(),
         color: () => css('--ink'), selColor: () => css('--accent'), accent: css('--accent'), text: css('--text-2'), muted: css('--muted'), bg: css('--surface'),
       });
     } else this.p2.update();

@@ -22,7 +22,7 @@ export const EXPLAIN = {
   volume: {
     title: 'Spanned volume',
     body: `<p>The grey box is spanned by the selected arrows. Its squared volume is $\\det \\mathbf L_S$, the subset's score: long arrows (likely completions) pointing in different directions (different meanings) make a big box; near-duplicates flatten it.</p>
-      <p>For $K \\le 3$ the plot's first axes are chosen to contain the selected arrows, so the box drawn is exactly the volume being scored, not a projection of it.</p>`,
+      <p>The box is drawn only when the plot's axes contain the selected arrows ($K \\le 2$ in 2-D, $K \\le 3$ in 3-D), so it is exactly the volume being scored, not a projection of it. The axes stay put as the selection changes; <i>Fit axes to selection</i> turns them to the current one.</p>`,
   },
   logp: {
     title: 'log P(S)',
@@ -90,7 +90,7 @@ export const EXPLAIN = {
   pca: {
     title: 'Spectrum',
     body: `<p>The completions' embeddings have hundreds of dimensions. The bars show how much of their spread lies along each of the first principal axes (uncentred, so arrows start at the origin, where volume is measured from). A pool whose spread sits in very few axes has little room for diverse subsets.</p>
-      <p>For $K \\le 3$ the plot's axes are fitted to the selected completions instead; otherwise it shows the first principal axes.</p>`,
+      <p>If the plot was first drawn with $K$ no more than its dimensions, or after <i>Fit axes to selection</i>, its first axes are fitted to the selected completions instead; otherwise it shows the first principal axes.</p>`,
   },
 };
 
