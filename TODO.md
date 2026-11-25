@@ -44,6 +44,11 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
 - Open: which ordering to use (themes are the principled candidate); the order inside a block (proposal: by
   the rest of the profile); whether conditioning earns a place on the main page (built in the lab: click up to K rows; the
   matrix shows the conditioned kernel, and hover shows π before and after).
+- Prototype "Building a set" (https://timvieira.github.io/dpp-lm-demo/lab/set.html, lab/set.html), kept separate from
+  the main page for now: the matrix and the main page's 3-D plot, linked. The set builds in a rail of cards (×
+  removes, Ctrl/⌘+Z undoes); its members are the red vectors in the plot, live; hovering a cell draws the pair of
+  vectors it compares (with the angle); hovering a row shows it as a candidate card (volume factor, π before and
+  after). Open: what to do when the set already has K (today: the candidate card says to remove one first).
 
 ## Run log and shared cache (for us, not a visitor feature)
 - Done on Manuel's server (25 Nov): every run is logged (nothing about the visitor), and the shared draw
