@@ -677,11 +677,10 @@ const plot = {
 };
 
 // ---------------------------------------------------------------- labels
-const MAX_LABELS = 6;
 function labelText(s) { const w = s.text.replace(/\s+/g, ' ').trim().split(' '); return w.length > 5 ? w.slice(0, 5).join(' ') + '…' : w.join(' '); }
 function renderLabels(animate = true) {
   const layer = $('#labels');
-  const show = $('#label-toggle').checked && S.sel.length && S.sel.length <= MAX_LABELS;
+  const show = $('#label-toggle').checked && S.sel.length;   // every selected point, whatever K; the checkbox turns them off
   if (!show) { layer.innerHTML = ''; return; }
   const want = new Set(S.sel.map(String));
   layer.querySelectorAll('.lbl').forEach((el) => { if (!want.has(el.dataset.i)) el.remove(); });
