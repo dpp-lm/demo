@@ -16,7 +16,8 @@ import { EXPLAIN } from './explain.js';
 import { usageStatus, initUsage } from './usage.js';
 import { drawCacheOn } from './draws-lib.js';
 import { serverExtras, queueText, newRequestId } from './expert-lib.js';
-import { groupsSection, initGroups, groupColors, groupInfo } from './groups.js';
+import { groupsSection, initGroups, groupColors, groupInfo, groupsOff } from './groups.js';
+import { initInclusion, inclusionColors, inclusionRefresh, onInclusionOn } from './inclusion.js';
 import { principledSection, initUnprincipled, npState, npModeT } from './unprincipled.js';
 import { initMatrices, matricesRefresh, matricesReset, panelBottom as matPanelBottom } from './matrix-panel.js';
 
@@ -34,9 +35,9 @@ export const onPool = (fn) => listeners.pool.push(fn);
 export const onSelection = (fn) => listeners.selection.push(fn);
 export const onOff = (fn) => listeners.off.push(fn);
 export const poolChanged = () => { if (on) listeners.pool.forEach((f) => f()); };
-export const selectionChanged = () => { matricesRefresh(); if (on) listeners.selection.forEach((f) => f()); };   // the matrices panel is in the default view too
-/** Group colors for the points and card dots, or null (his colors) with the switch off or Groups off. */
-export const pointColors = () => (on ? groupColors() : null);
+export const selectionChanged = () => { matricesRefresh(); inclusionRefresh(); if (on) listeners.selection.forEach((f) => f()); };   // the matrices panel is in the default view too
+/** Colors for the points and card dots: by inclusion probability (View menu, every visitor), else by group (expert switch on and Groups on), else null (his colors). */
+export const pointColors = () => inclusionColors() ?? (on ? groupColors() : null);
 /** The "Not super principled" options while the switch is on, else null (the default page). */
 export const xopt = () => (on ? npState() : null);
 /** T of the picking mode `to` after leaving `from`: one T unless the switch is on and each mode keeps its own. */
@@ -189,6 +190,8 @@ export function initExpert(hooks) {
   // The tools: the page's own bits of state they read, and how they redraw.
   const ctx = { H, isExpert, rerender: renderPanel, onPool, onSelection, onOff, groups: groupInfo };
   initGroups(ctx);
+  onInclusionOn(groupsOff);   // one coloring at a time
+  initInclusion(H);
   initUnprincipled(ctx);
   initMatrices(ctx);
   for (const type of ['change', 'click']) $('#expert-body').addEventListener(type, (e) => SECTIONS.forEach((s) => s.on?.(e)));

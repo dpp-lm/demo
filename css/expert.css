@@ -146,3 +146,15 @@ input:disabled + span, .btn:disabled { opacity: .45; cursor: default; }
 .mp-ls td { padding: 2px 5px; text-align: right; border: 1px solid var(--border); }
 .mp-ls td.diag { background: var(--surface-2); }
 .mp-ls thead td { border: 0; }
+
+/* Refresh icon in the Sample button, shown while Sample is on: pressing it again draws another subset. */
+.pick-btn .again { display: none; width: 11px; height: 11px; margin-left: 5px; vertical-align: -1px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.pick-btn[aria-pressed="true"] .again { display: inline-block; }
+
+/* ---------- color by inclusion probability: the legend shares the Groups legend's place ---------- */
+.x-il-title { color: var(--text); }
+.x-il-bar { position: relative; display: inline-block; width: 150px; height: 26px; flex: none; }
+.x-il-grad { position: absolute; left: 0; right: 0; top: 2px; height: 9px; border-radius: 3px; border: 1px solid var(--border); }
+.x-il-ticks > span { position: absolute; top: 12px; transform: translateX(-50%); font-size: 11.5px; line-height: 1.3; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.x-il-ticks > span:first-child { transform: none; }
+.x-il-ticks > span:last-child { transform: translateX(-100%); }

@@ -116,7 +116,7 @@
         <span class="grow"></span>
         <span class="fn"><span class="pick" role="group" aria-label="How to choose the subset">
           <button type="button" class="pick-btn" data-mode="map" aria-pressed="true">Most likely</button>
-          <button type="button" class="pick-btn" data-mode="sample" aria-pressed="false">Sample</button>
+          <button type="button" class="pick-btn" data-mode="sample" aria-pressed="false">Sample<svg class="again" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3h-3"/></svg></button>
         </span><button type="button" class="xbtn" data-x="subset" aria-label="How is the subset chosen?">?</button></span>
       </div>
     </section>
@@ -148,6 +148,7 @@
           <summary>View</summary>
           <div class="menu">
             <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Label selected points</span></label>
+            <label class="toggle"><input type="checkbox" id="incl-toggle"><span>Color by inclusion probability<button type="button" class="xbtn" data-x="inclcolor" aria-label="What does the color show?">?</button></span></label><!-- expert: colors the points by S.pi (js/inclusion.js) -->
           </div>
         </details>
       </div>

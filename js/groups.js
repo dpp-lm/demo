@@ -7,6 +7,7 @@ import { EXPLAIN } from './explain.js';
 import { GROUP_METHODS, groupLabels, groupNames, groupCounts, groupSlot, gramToVectors, decodeDescribe, newRequestId, treeOf } from './expert-lib.js';
 import { groupTexts } from './matrices.js';
 import { usageBody } from './usage.js';
+import { setInclusion } from './inclusion.js';
 
 const DEFAULTS = { on: false, method: 'tree', k: 6, naming: 'num', llm: false };
 const NAMINGS = [{ id: 'num', label: 'Numbers' }, { id: 'kw', label: 'Keywords' }, { id: 'medoid', label: 'Typical member' }];
@@ -156,8 +157,18 @@ function render() {
     ${describeInfo() ? `<label class="toggle"><input type="checkbox" data-f="g-llm"${st.llm ? ' checked' : ''}${dis}><span>Described by the language model${q('describe', 'What does describing groups do?')}</span></label>` : ''}`;
 }
 
+/** Turn Groups off (the inclusion-probability coloring was turned on). */
+export function groupsOff() {
+  if (!ctx || !st.on) return;
+  st = { ...st, on: false };
+  lastSig = '';
+  ctx.rerender();
+  renderLegend();
+}
+
 function setState(patch) {
   st = { ...st, ...patch };
+  if (patch.on) setInclusion(false);   // one coloring at a time
   st.k = Math.min(K_MAX, Math.max(K_MIN, Math.round(+st.k || DEFAULTS.k)));
   ctx.rerender();
   ctx.H.redraw();

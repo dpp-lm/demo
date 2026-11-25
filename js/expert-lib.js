@@ -326,3 +326,44 @@ export function maxShift(A, B) {
   for (let i = 0; i < A.length; i++) for (let d = 0; d < A[i].length; d++) m = Math.max(m, Math.abs(A[i][d] - B[i][d]));
   return m;
 }
+
+// ---------------------------------------------------------------- color by inclusion probability
+/**
+ * The top of the color scale for the inclusion probabilities `values`: the smallest of 0.1%, 0.2%, 0.5%, 1%, 2%, 5%, ... 100%
+ * that is at least their largest finite value. Rounding up keeps the legend readable and makes a color change in steps, not
+ * with every small change of the largest value. Returns 1 when there is no positive finite value.
+ */
+export function inclusionTop(values) {
+  let m = 0;
+  for (const v of values) if (Number.isFinite(v) && v > m) m = v;
+  if (!(m > 0)) return 1;
+  for (let e = -3; e <= 0; e++) for (const k of [1, 2, 5]) {
+    const top = k * 10 ** e;
+    if (top >= m * (1 - 1e-12)) return Math.min(1, top);
+  }
+  return 1;
+}
+
+/** Position in [0, 1] on the ramp of probability p when the scale tops out at `top`: the square root of p / top (null when p is not a number). */
+export function inclusionRamp(p, top) {
+  if (!Number.isFinite(p) || !(top > 0)) return null;
+  return Math.sqrt(Math.min(1, Math.max(0, p / top)));
+}
+
+/** Where on the page's grey ramp (lightest to darkest) the scale starts: the lightest grey is the paper-like color of unlikely completions, too faint for a small dot, so 0 starts a fifth of the way in. */
+export const INCLUSION_FLOOR = 0.2;
+/** Position on the page's ramp for a scale position t in [0, 1]. */
+export const inclusionShade = (t) => INCLUSION_FLOOR + (1 - INCLUSION_FLOOR) * t;
+
+/** A probability as a percentage with two significant figures at most: "0", "0.25%", "1.3%", "12%", "100%". */
+export function pctLabel(p) {
+  if (!(p > 0)) return '0';
+  const v = 100 * p;
+  const s = v >= 9.995 ? v.toFixed(0) : v >= 0.995 ? v.toFixed(1) : v.toFixed(2);
+  return `${s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s}%`;
+}
+
+/** Labeled marks of the ramp bar: 0, the probability at the middle of the bar (top / 4 on a square-root scale) and the top. */
+export function inclusionTicks(top) {
+  return [0, 0.5, 1].map((t) => ({ t, p: top * t * t, label: pctLabel(top * t * t) }));
+}

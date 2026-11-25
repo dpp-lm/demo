@@ -384,13 +384,6 @@ function render() {
   const N = S.pool.samples.length;
   $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate · ' : ''}${matchMedia('(pointer: coarse)').matches ? 'two fingers to move' : 'Shift-drag to move'} · tap a point to read it`;
   $('#subset-meta').textContent = `K = ${S.sel.length} · ${S.mode === 'map' ? 'most likely (greedy)' : 'sampled'} at T = ${fmtT(S.T)} · target ${TARGETS[S.target].short}`;
-  if (S.mode === 'sample') {   // expert: say that pressing Sample again draws another subset
-    const again = document.createElement('button');
-    again.type = 'button'; again.className = 'link'; again.textContent = 'Sample again';
-    again.title = 'Draw another subset from the same completions (the Sample button does the same)';
-    again.onclick = () => setMode('sample');
-    $('#subset-meta').append(' · ', again);
-  }
   $('#T-out').textContent = fmtT(S.T);
   plot.update();
   renderSpectrum();
@@ -1084,7 +1077,7 @@ function setMode(m, { recompute: go = true } = {}) {
   if (S.T !== T0) { $('#T-slider').value = tToSlider(S.T); $('#T-out').textContent = fmtT(S.T); }
   S.mode = m;
   document.querySelectorAll('.step-2 .pick-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
-  document.querySelectorAll('.step-2 .pick-btn[data-mode="sample"]').forEach((b) => (b.title = m === 'sample' ? 'Press again for another draw' : ''));   // expert:
+  document.querySelectorAll('.step-2 .pick-btn[data-mode="sample"]').forEach((b) => { b.title = m === 'sample' ? 'Draw another subset' : ''; b.setAttribute('aria-label', m === 'sample' ? 'Sample again' : 'Sample'); });   // expert: the refresh icon in the button shows while Sample is on
   if (go) recompute({ newDraw: true });
 }
 function setK(v) {
@@ -1227,6 +1220,7 @@ function wire() {
     backends: BACKENDS, setStatus, openSettings: () => { $('#adv').open = true; },
     refresh: () => { const keep = $('#model').value; fillModels(); $('#model').value = BACKENDS.some((b) => b.id === keep) ? keep : 'server'; onSettings(); },
     pool: () => S.pool, G: () => S.G, selection: () => S.sel, eig: () => S.eig, embedder: () => S.view?.embedder,
+    inclusion: () => (S.pool ? { pool: S.pool, pi: S.pi, values: () => { const f = inclusionOfText(); return S.pool.samples.map((_, i) => f(i)); } } : null),   // expert: inclusion probabilities for js/inclusion.js
     redraw: () => { if (S.pool) { plot.update(); renderCards(); } }, mark: (i, j) => plot.mark(i, j),
     weights: () => ({ logp: S.logp, logq: S.logq, logKappa: S.pool ? logKappa() : null, scale: S.scale, ov: S.ov ?? 'follow', T: S.T, mode: S.mode, target: S.target, K: S.K, dims: S.dims }),
     recompute: (newDraw) => recompute({ newDraw }),
