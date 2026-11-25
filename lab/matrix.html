@@ -22,21 +22,31 @@
   .controls label { display: inline-flex; gap: 6px; align-items: center; color: var(--text-2); font-size: 13.5px; }
   select, input[type=number] { font: inherit; font-size: 13.5px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
   input[type=number] { width: 4.2em; }
-  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-  .seg button { font: inherit; font-size: 13px; border: 0; background: transparent; color: var(--text-2); padding: 3px 9px; cursor: pointer; }
-  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+  .btn { font: inherit; font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  .btn:disabled { color: var(--muted); cursor: default; }
+  .selbar { display: inline-flex; gap: 6px; align-items: center; color: var(--text-2); font-size: 13.5px; }
   .tval { font-family: var(--mono); font-size: 13px; min-width: 3.2em; display: inline-block; }
-  .Lonly[hidden] { display: none; }
   .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 980px) { .panels { grid-template-columns: 1fr; } }
   .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; min-width: 0; }
   .phead { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
   .phead .note { color: var(--muted); font-size: 12.5px; }
-  .grid { display: grid; grid-template-columns: 70px 1fr; grid-template-rows: 34px auto; gap: 2px; }
-  .corner { grid-row: 1; grid-column: 1; font-size: 10.5px; color: var(--muted); line-height: 1.2; align-self: end; }
-  .top { grid-row: 1; grid-column: 2; position: relative; }
-  .left { grid-row: 2; grid-column: 1; position: relative; }
-  .cw { grid-row: 2; grid-column: 2; position: relative; aspect-ratio: 1; width: 100%; }
+  .grid { display: grid; grid-template-columns: 70px 84px 1fr; gap: 2px; }
+  .left, .prof { position: relative; }
+  .themes { margin: 12px 0 0; font-size: 13px; color: var(--text-2); }
+  .tcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+  .tcard { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: default; transition: border-color .15s; }
+  .tcard:hover { border-color: var(--text-2); }
+  .th-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--text-2); }
+  .th-head b { color: var(--text); font-weight: 600; }
+  .tcard .end { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .tcard .vs { color: var(--muted); font-size: 12px; text-align: center; margin: 6px 0 0; letter-spacing: .02em; }
+  .tcard .ex { font: 15px/1.35 var(--serif); color: var(--text); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; margin-top: 3px; padding-left: 8px; border-left: 2px solid var(--border); }
+  .th-rest { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+  .themes .note2 { color: var(--muted); font-size: 12px; margin-top: 6px; max-width: 110ch; }
+  .cw svg.dim { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .chip { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }
+  .cw { position: relative; aspect-ratio: 1; width: 100%; }
   .cw canvas { width: 100%; height: 100%; image-rendering: pixelated; display: block; cursor: crosshair; }
   svg.margin { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
   .xh { position: absolute; pointer-events: none; background: var(--accent); opacity: .55; display: none; }
@@ -56,34 +66,39 @@
 <body>
 <main>
   <h1>Matrix orderings lab</h1>
-  <p class="lede">The pool's similarity matrix, rows reordered so similar completions form blocks. Compare orderings side by side.
+  <p class="lede">The pool's DPP kernel L = diag(√w) G diag(√w), rows reordered so similar completions form blocks. Compare orderings side by side.
     Notes: <a href="https://github.com/timvieira/dpp-lm-demo/blob/main/docs/matrix-views.md">docs/matrix-views.md</a>, section 2A.</p>
 
   <div class="controls">
     <label>Prompt <select id="pool"></select></label>
     <label>Embedder <select id="emb"></select></label>
-    <label>Rows <span class="seg" id="rows"><button data-v="all" aria-pressed="true">all</button><button data-v="distinct">distinct</button></span></label>
-    <label>Show <span class="seg" id="show"><button data-v="G" aria-pressed="true">G</button><button data-v="L">L</button></span></label>
-    <label>Order on <span class="seg" id="on"><button data-v="G" aria-pressed="true">G</button><button data-v="L">L</button></span></label>
     <label>K <input type="number" id="K" min="1" max="12" value="3"></label>
-    <span class="Lonly" id="Lctl" hidden>
-      <label>T <input type="range" id="T" min="0" max="1000" value="575" step="5" style="width:120px"><span class="tval" id="Tout">20.0</span></label>
-      <label>Target <select id="target"><option value="global">Global</option><option value="gl">Global and local</option></select></label>
-      <label>Weights <select id="mode"><option value="map">Most likely (κ)</option><option value="sample">Sample (κ/q)</option></select></label>
-    </span>
+    <label title="Eigenvalues this close (relative) are one theme: inside a near-degenerate eigenspace the individual eigenvectors are not determined">Merge eigenvalues within <input type="number" id="merge" min="0" max="50" step="1" value="5">%</label>
+    <label>T <input type="range" id="T" min="0" max="1000" value="575" step="5" style="width:120px"><span class="tval" id="Tout">20.0</span></label>
+    <label>Target <select id="target"><option value="global">Global</option><option value="gl">Global and local</option></select></label>
+    <label>Weights <select id="mode"><option value="map">Most likely (κ)</option><option value="sample">Sample (κ/q)</option></select></label>
+    <span class="selbar"><span id="selinfo"></span> <button type="button" class="btn" id="reorder" disabled>Re-order for this selection</button> <button type="button" class="btn" id="clear" disabled>Clear</button></span>
   </div>
 
   <div class="panels" id="panels"></div>
+  <div class="themes" id="themes"></div>
 
   <div class="hover" id="hover"><span class="k">Hover a cell to see the pair.</span></div>
 
+  <p class="legend"><b>Conditioning</b>: click a row to add that completion to a selection of up to K (click again to remove it). The matrix then
+    shows L conditioned on the selection being in the sample, L^A = L − L_{·A} L_A⁻¹ L_{A·} (the Schur complement; in GP terms the posterior
+    covariance), on the same colour scale and in the same row order, so fading is real. The rest of the sample is then a (K − |A|)-DPP with kernel L^A;
+    hover a row for its inclusion probability before and after. A completion already in the span of the selection (e.g. an exact copy) has
+    leftover zero and cannot be added: no set containing both has positive volume. "Re-order" recomputes the order from L^A.</p>
   <p class="legend">
-    <b>Pool order</b>: as drawn. <b>Average linkage</b>: Manuel's order (UPGMA on 1 − cos). <b>Pivots, flat</b>: the first K pivots of pivoted Cholesky
-    (greedy volume), each followed by the completions it explains the most of. <b>Pivots, nested</b>: the whole factorisation as a tree; parent = the earlier
-    pivot that explains the most of a completion; height = its leftover length when taken (a volume factor). <b>Themes</b>: each completion joins the
-    eigenvector carrying the largest share of its length. Red ticks: the greedy (Most likely) picks for the current weights. Top strip: height
-    (leftover length when taken) for the pivot orders. <b>Show</b> picks the matrix drawn; <b>Order on</b> picks the matrix the order is computed from.
-    L = diag(√w) G diag(√w); G is L for the Global target at T = ∞.
+    Everything is computed from L, the kernel the DPP uses (w = κ for Most likely, κ/q for Sample; L = G for the Global target at T = ∞).
+    <b>Pool order</b>: as drawn. <b>Average linkage</b>: Manuel's order (UPGMA on 1 − cos; the cosine of L is G, so it ignores quality).
+    <b>Pivots, flat</b>: the first K pivots of pivoted Cholesky (greedy volume: the Most likely picks), each followed by the completions it
+    explains the most of. <b>Pivots, nested</b>: the whole factorisation as a tree; parent = the earlier pivot that explains the most of a
+    completion. <b>Themes</b>: the K-DPP chooses K eigenvectors of L, theme a with probability p_a, and every inclusion probability splits
+    exactly over them, π_i = Σ_a p_a u_a(i)²; each completion joins the theme carrying the largest part. The bars beside the theme blocks show that part's share of
+    π_i (full width at the dashed line = 100%): long bars mean a completion belongs to its block cleanly, short ones that its
+    chance of being sampled is spread over many themes; "mean share" averages it over the pool. Red ticks: the greedy (Most likely) picks.
   </p>
 </main>
 <script type="module" src="matrix.js"></script>

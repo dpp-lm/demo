@@ -137,8 +137,16 @@ loads on most gives blocks grounded in how Sample works.
   conditioned K-DPP's inclusion probabilities (the e_k terms). It is a cousin of DPP sampling, not an
   instance.
 
-**Next check:** prototype the flat and nested orders on a few presets and compare the picture with Manuel's
-average-linkage order.
+**Lab findings (25 Nov), https://timvieira.github.io/dpp-lm-demo/lab/matrix.html:**
+- Average linkage draws the cleanest blocks: its leaf order both groups and seriates. But it cannot see L
+  (the cosine of L is G, so quality cancels).
+- Flat pivots get the coarse blocks right (e.g. the story preset's two main blocks at K = 3), but the
+  insides are striped: sorting by "how much the pivot explains" does not put similar rows next to each other.
+- The nested tree on G puts outliers first: at T = ∞ greedy volume takes the most unusual completions first
+  (the known weakness of farthest-first), each a tiny subtree at the top. On L at T = 20 it is better, still
+  striped.
+- So pivoted Cholesky looks good for which block a completion belongs to, and weak for the order inside a
+  block.
 
 **Open: G or L in the matrix?**
 - G is pure similarity, fixed for a pool. L is similarity × quality, and it changes with T, the target and
@@ -177,6 +185,14 @@ yet. It does sound fun to play with.
 recomputed given that one is in. For example, pin a skeleton joke: the other skeleton jokes' inclusion
 drops, unrelated jokes' rises. That shows the distribution's structure directly. It would be a feature of
 the matrix view (hover or click a row), not a separate panel.
+
+**Built in the lab (25 Nov).** Click up to K rows; the matrix shows L^A on the unconditioned colour scale and
+in the unconditioned row order (Tim's three choices: fixed order with an optional "Re-order" on L^A; fixed
+scale, so fading is a real decrease; a completion with leftover zero cannot be added, since no set containing it
+and the selection has positive volume). Hover shows π before and after. Checked against brute-force
+enumeration (tests/orderings.test.mjs). What it shows: on the story preset, selecting one "last letter" opening
+turns its tight block white while the other blocks stay; on the joke preset two picks whiten almost everything
+(the jokes are near-copies: leftovers ≈ 0.0005).
 
 **Already on the page.** The 3-D view's fitted axes condition on the selected set: the axes beyond K are
 the PCA of G − AAᵀ (section 3).
@@ -219,6 +235,117 @@ So B and C are the same computation. Hovering a row could show that row's repuls
 - This is the expected size of the DPP with kernel L, and the effective degrees of freedom of the
   corresponding kernel ridge regression or GP.
 - It explains "K too large for this pool" from the spectrum, without a threshold (backlog item).
+
+### Themes, formalised: inclusion splits exactly over the eigenvectors
+
+This is the K-DPP's spectral form (Kulesza & Taskar 2011, 2012). Write the kernel L = Σ_a λ_a u_a u_aᵀ.
+
+1. **Sampling is a mixture.** A K-DPP is a mixture of projection DPPs: it first chooses K eigenvectors J, with
+   probability Π_{a∈J} λ_a / e_K(λ), then draws K items from the projection DPP with kernel Σ_{a∈J} u_a u_aᵀ.
+2. **Theme a is chosen with probability**
+
+   p_a = λ_a · e_{K−1}(λ without a) / e_K(λ),
+
+   and Σ_a p_a = K. Because a large λ_a only drives p_a toward 1, a dominant eigenvalue cannot swamp the
+   others. That is why the bouquet direction no longer takes over: the first theme rule used λ_a u_a(i)²,
+   which it did swamp.
+3. **Given J, item i is included with probability Σ_{a∈J} u_a(i)²,** the diagonal of the projection kernel.
+4. **Therefore every inclusion probability splits exactly over the themes:**
+
+   π_i = Σ_a p_a · u_a(i)².
+
+   Checked numerically against the page's inclusion probabilities, across presets, T, Most likely and Sample
+   weights, and K = 2 and 5: equal to 2.5e-13, with Σ p_a = K to 1e-6.
+
+**The block rule.** Completion i joins the theme carrying the largest part, p_a u_a(i)², of its inclusion
+probability. So a block is "the completions that get most of their chance of being sampled through this
+theme".
+- This uses only L's eigendecomposition, which the sampler already uses.
+- p_a is the probability that a Sample covers the theme.
+- The hover shows π_i and the share carried by its theme.
+
+**What is rigorous and what is not:**
+- **Rigorous:** the decomposition π_i = Σ_a p_a u_a(i)², and p_a as the probability that theme a is chosen.
+- **An attribution, not an event:** "i is included via theme a". Within a chosen J, the projection DPP mixes the
+  chosen eigenvectors, so an individual draw does not single out one theme for an item. p_a u_a(i)² is theme
+  a's contribution to π_i, not the probability of an event "i is drawn for a".
+- **Why the blocks look good, and when they would be exact:**
+  - If L is block-diagonal, its eigenvectors can be chosen supported on single blocks, so themes = blocks
+    exactly.
+  - With some overlap between blocks, matrix perturbation theory (Davis–Kahan) says the eigenvectors stay near
+    the block ones when the eigenvalue gaps are large compared with the overlap.
+  - This is the reasoning behind spectral clustering (Ng, Jordan & Weiss 2001; von Luxburg 2007), although
+    that literature mostly uses normalised affinities or Laplacians rather than the raw kernel.
+- **Open:** the order inside a block. Sorting by the signed loading u_a(i) puts the theme's two ends at the
+  block's ends, a heuristic (spectral seriation along one eigenvector). Its guarantees (Atkins, Boman &
+  Hendrickson 1998) are for the Laplacian's Fiedler vector, not for raw kernel eigenvectors.
+
+**Block strength: each completion's profile over the themes.** r_i(a) = p_a u_a(i)² / π_i is a distribution over
+themes (it sums to 1): through which themes the DPP would include completion i. A theme block is the argmax of
+that profile, so a block is only as strong as its members' profiles are peaked. At T = 20 and K = 3:
+
+| Preset | First block | Its theme's share of each member's π | Mean cosine within |
+|---|---|---|---|
+| Joke | 125 members | 71% on average | 0.99 |
+| City | 121 members | 42% | 0.93 |
+| Story | 130 members | 30% (min 14%) | 0.62 |
+
+So the story's first block is a "no dominant theme" bucket, not a cluster: story openings vary along many
+directions at once, the same fact the effective dimension measures.
+
+**Decided (Tim): show block strength honestly.** No forcing blocks where the pool has none. The lab draws, beside
+each row, the share of π_i carried by its own theme, and gives the pool's mean share in the panel caption (joke
+66%, story 33%).
+
+**Theme profiles as stacked bars (lab, 25 Nov).** Beside the rows, each completion's π_i as a bar on one
+absolute scale, split into p_a u_a(i)² per theme; summed over the rows each colour gives its p_a, and all p sum to K.
+- Colours: three muted hues (slate blue #3f74b5, ochre #b8862a, teal #1f9c86) plus a neutral grey for the rest.
+  Checked with the data-viz validator on all pairs (colours follow the theme, so any two can touch), together with the
+  accent red: every check passes; the closest pair is ochre against the accent (CVD ΔE 8.0, normal vision 15.1). No
+  fourth muted hue passed with them, so at most three themes get a colour.
+- How many: the effective number of themes K²/Σ p_a², capped at three. Since Σ p = K and each p ≤ 1, it is always at
+  least K, so for K ≥ 3 it always reaches the cap; it only adapts for K < 3.
+- Merging: eigenvalues within a relative gap (5% by default, a control in the lab) are one theme. Inside a degenerate
+  eigenspace the individual eigenvectors are not determined but the space is, and with equal p the group's part of
+  π_i is too. The 5% is a knob, not a principle: open.
+- The rest: one grey segment, labelled with its share of the sample, (K − Σ coloured p)/K.
+- Stable colours: each coloured theme takes the colour of the previous theme whose eigenspace it overlaps most
+  (overlap above one half: more shared than not), else a free colour. Tested: a change of T from 20 to 21 keeps
+  every colour on its theme.
+- Seen: story 49% rest (no dominant themes); joke 27% rest, with bars short for most rows because a few completions
+  carry most of the probability (absolute scale).
+
+**Theme cards: elucidating themes without naming them (lab, 25 Nov).** Tim: the attribution is interesting but
+hard to grasp unnamed, and the themes are latent, so naming is the wrong angle. What is principled:
+- Taken alone, a theme is a distribution over the completions, u_a(i)² (it sums to 1): if the sampler had chosen
+  only that theme, completion i would be drawn with that probability. So "the most representative completions" is
+  exact: the largest u_a(i)².
+- Theme 1 is the shared core. When L is entrywise positive (true in all 18 presets), Perron–Frobenius makes the
+  top eigenvector one-signed. Its most typical completions show what all the completions share.
+- Every later theme is a contrast: orthogonal to a one-signed vector, it must have both signs, so it opposes two
+  groups. The card shows each end's most representative distinct completions and its share of u_a². The sign is
+  arbitrary, so the ends are a pair (heavier end first).
+- Merged (near-degenerate) themes have no ends: inside the eigenspace the vectors are not determined. Their card
+  shows the most representative completions of the group.
+- What it shows: joke theme 2 is atom jokes against skeleton jokes; joke theme 3 is bare jokes against jokes with
+  the "Sure! Here's a joke for you" preamble (form, not content); story theme 2 is the "last letter from her
+  brother" openings against "Elara saw the sky turn…"; story theme 3 is the ghost openings against "the sky
+  turned the color of …, no one thought to ask why".
+- Hovering a card dims every row whose largest part of π belongs to another theme.
+- If a pool's L had negative entries, theme 1 need not be one-signed; the card would then say "contrast".
+
+**Open:** order inside a block by the rest of the profile (second theme, then third) instead of the signed
+loading. That replaces the one remaining heuristic with the same exact quantity, and nests the blocks.
+
+**Status in the lab:** themes now use this rule on L. They give clean blocks on the joke preset; on the story
+preset the first theme (p ≈ 0.9) is a large, noisier block.
+
+**Tim:**
+- Principles first. If the eigenvectors can do what clustering does, use them: the algorithm already uses
+  them, so they have real explanatory power and rigorous interpretations.
+- Always use L, the matrix the algorithm uses. **Decided.** G is the special case of the Global target at
+  T = ∞. Average linkage cannot see L at all: the cosine of L is G, so quality cancels. That counts against it
+  on these principles.
 
 ### The dual view: push on it, don't drop it
 
@@ -288,7 +415,7 @@ Take the SVD Φ = U Σ Vᵀ. Then:
 
 ## 4. Open questions
 
-1. **G or L as the basis for each view.** G answers "what's in the pool" and is stable for a pool. L answers
+1. **G or L as the basis for each view.** Decided: L (Tim). The notes below are kept for the record. G answers "what's in the pool" and is stable for a pool. L answers
    "what this DPP, at this T, with this target and mode, cares about", and it moves.
    - The matrix (A): lean G, with quality in the margin (above).
    - Themes (D) and the dual: the axes from G, re-weighted by L. Sample's theme probabilities must use L.
@@ -322,5 +449,9 @@ Take the SVD Φ = U Σ Vᵀ. Then:
   2412.08820.
 - Y. Chen, E. N. Epperly, J. A. Tropp and R. J. Webber (2025). Randomly pivoted Cholesky: practical
   approximation of a kernel matrix with few entry evaluations. CPAM; arXiv 2207.06503.
+- A. Y. Ng, M. I. Jordan and Y. Weiss (2001). On spectral clustering: analysis and an algorithm.
+- U. von Luxburg (2007). A tutorial on spectral clustering.
+- J. E. Atkins, E. G. Boman and B. Hendrickson (1998). A spectral algorithm for seriation and the consecutive
+  ones problem.
 - L. Chen, G. Zhang and H. Zhou (2018). Fast greedy MAP inference for determinantal point process to
   improve recommendation diversity.

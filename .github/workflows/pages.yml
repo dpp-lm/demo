@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: 22
       - name: Unit tests (DPP maths)
-        run: node --test tests/dpp.test.mjs tests/dpp-reference.test.mjs
+        run: node --test tests/dpp.test.mjs tests/dpp-reference.test.mjs tests/orderings.test.mjs
       - name: Assemble site
         # Scripts and styles go under a per-commit folder, so a reload never mixes a new page
         # with stale cached code (Pages lets browsers reuse files for 10 minutes).
@@ -32,10 +32,13 @@ jobs:
           mkdir -p "_site/$V" _site/lab
           cp -r index.html data _site/
           cp -r css js lab "_site/$V/"
-          # The matrix-orderings lab: the page at a stable address, its scripts beside the versioned js they import.
-          cp lab/matrix.html _site/lab/
-          sed -i "s#src=\"matrix.js\"#src=\"../$V/lab/matrix.js\"#" _site/lab/matrix.html
-          grep -q "$V/lab/matrix.js" _site/lab/matrix.html
+          # The lab prototypes: each page at a stable address, its script beside the versioned js it imports.
+          for f in lab/*.html; do
+            cp "$f" _site/lab/
+            s=$(basename "$f" .html)
+            sed -i "s#src=\"$s.js\"#src=\"../$V/lab/$s.js\"#" "_site/lab/$s.html"
+            grep -q "$V/lab/$s.js" "_site/lab/$s.html"
+          done
           sed -i "s#href=\"css/style.css\"#href=\"$V/css/style.css\"#; s#src=\"js/main.js\"#src=\"$V/js/main.js\"#" _site/index.html
           grep -q "$V/js/main.js" _site/index.html && grep -q "$V/css/style.css" _site/index.html
       - uses: actions/configure-pages@v5

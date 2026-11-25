@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building a set</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400..800;1,400..800&display=swap">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<style>
+  /* The main page's tokens (css/style.css), so the prototype speaks the same visual language. */
+  :root { color-scheme: light; --bg: #f6f1ea; --surface: #fbfaf8; --surface-2: #f1ede7; --border: #e2ddd5; --text: #333333; --text-2: #555555;
+    --muted: #999999; --ink: #555555; --btn: #ebe6de; --btn-hover: #e1dbd1; --btn-line: #d3cbbf; --accent: #c8473c;
+    --serif: "EB Garamond", "PT Serif", Georgia, serif; --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: "SF Mono", "Fira Code", Menlo, Consolas, monospace; --r: 6px; --rail-w: 340px; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 var(--sans); }
+  header { padding: 14px 16px 0; }
+  h1 { font: 500 26px/1.15 var(--serif); margin: 0; }
+  .lede { color: var(--text-2); margin: 2px 0 10px; font-size: 14px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 8px 16px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface); }
+  .controls label { display: inline-flex; gap: 6px; align-items: center; color: var(--text-2); font-size: 13.5px; }
+  select, input[type=number] { font: inherit; font-size: 13.5px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+  input[type=number] { width: 4.2em; }
+  .tval { font-family: var(--mono); font-size: 13px; min-width: 3.2em; display: inline-block; }
+  .hint { color: var(--muted); font-size: 12.5px; }
+  kbd { font: 11.5px var(--mono); border: 1px solid var(--btn-line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--surface); }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--rail-w); min-height: calc(100vh - 120px); }
+  @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+  .pane { position: relative; min-width: 0; padding: 12px 16px; }
+  .pane h2 { font: 500 20px/1.2 var(--serif); margin: 0 0 6px; }
+  .pane .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 8px; min-height: 1.4em; }
+  #plot { position: relative; width: 100%; aspect-ratio: 1; max-height: 78vh; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); overflow: hidden; }
+  #plot canvas { display: block; }
+  .grid { display: grid; grid-template-columns: 64px 1fr; gap: 2px; }
+  .left { position: relative; }
+  svg.margin { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .cw { position: relative; aspect-ratio: 1; width: 100%; }
+  .cw canvas { width: 100%; height: 100%; image-rendering: pixelated; display: block; cursor: pointer; border-radius: 2px; }
+  .xh { position: absolute; pointer-events: none; background: var(--text-2); opacity: .45; display: none; }
+  .xh.r { left: 0; right: 0; height: 1px; } .xh.c { top: 0; bottom: 0; width: 1px; }
+  .pair { margin-top: 10px; font-size: 12.5px; color: var(--text-2); min-height: 3.2em; }
+  .pair .v { font-family: var(--mono); }
+  .rail { border-left: 1px solid var(--border); background: var(--surface); padding: 12px 14px; }
+  @media (max-width: 1100px) { .rail { border-left: 0; border-top: 1px solid var(--border); } }
+  .rail h2 { font: 500 22px/1.2 var(--serif); margin: 0 0 2px; }
+  .rail .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+  .cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .card { position: relative; background: #fff; border: 1px solid var(--border); border-radius: var(--r); padding: 12px 34px 10px 14px; display: flex; flex-direction: column; gap: 8px; transition: border-color .15s; }
+  .card.hl { border-color: var(--text-2); }
+  .card .txt { white-space: pre-wrap; overflow-wrap: anywhere; font: 17px/1.4 var(--serif); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; overflow: hidden; }
+  .card .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--muted); font: 11.5px var(--sans); }
+  .card .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--accent); }
+  .card .num { font: 600 11.5px var(--sans); color: var(--accent); }
+  .card .x { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border: 0; background: none; color: var(--muted); font-size: 18px; line-height: 1; border-radius: 4px; cursor: pointer; }
+  .card .x:hover { background: var(--btn); color: var(--text); }
+  .card.cand { border-style: dashed; background: transparent; }
+  .card.cand .dot { background: transparent; border: 1.5px dashed var(--accent); }
+  .card.cand.no .dot { border-color: var(--muted); }
+  .empty { color: var(--muted); font-size: 13.5px; padding: 6px 0; }
+  .legend { color: var(--muted); font-size: 12.5px; margin: 14px 16px 30px; max-width: 100ch; }
+  .legend b { color: var(--text-2); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Building a set</h1>
+  <p class="lede">A separate prototype: the matrix and the scatter plot, linked. Click a row (or a point) to add it to the set, and watch the DPP condition on it.</p>
+</header>
+<div class="controls">
+  <label>Prompt <select id="pool"></select></label>
+  <label>Embedder <select id="emb"></select></label>
+  <label>K <input type="number" id="K" min="1" max="12" value="3"></label>
+  <label>T <input type="range" id="T" min="0" max="1000" value="575" step="5" style="width:110px"><span class="tval" id="Tout">20.0</span></label>
+  <label>Target <select id="target"><option value="global">Global</option><option value="gl">Global and local</option></select></label>
+  <label>Weights <select id="mode"><option value="map">Most likely (κ)</option><option value="sample">Sample (κ/q)</option></select></label>
+  <label>Rows <select id="ord"><option value="theme">Themes</option><option value="avg">Average linkage</option><option value="flat">Pivots, flat</option><option value="nest">Pivots, nested</option><option value="pool">Pool order</option></select></label>
+  <span class="hint"><kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Z</kbd> undoes the last change</span>
+</div>
+<div class="layout">
+  <section class="pane">
+    <h2>The completions</h2>
+    <div class="sub" id="plotsub">Each point is a completion: direction = its meaning, length = √κ. Red: the set so far.</div>
+    <div id="plot"></div>
+  </section>
+  <section class="pane">
+    <h2>The kernel</h2>
+    <div class="sub" id="matsub"></div>
+    <div class="grid"><div class="left"><svg class="margin"></svg></div><div class="cw"><canvas id="mat"></canvas><i class="xh r"></i><i class="xh c"></i></div></div>
+    <div class="pair" id="pair">Hover a cell: each one compares two vectors of the plot.</div>
+  </section>
+  <aside class="rail">
+    <h2>The set</h2>
+    <div class="sub" id="setsub"></div>
+    <ul class="cards" id="cards"></ul>
+  </aside>
+</div>
+<p class="legend">
+  <b>The matrix</b> is the DPP's kernel L = diag(√w) G diag(√w): cell (i, j) is the inner product of the two drawn vectors (√κ_i φ_i · √κ_j φ_j for
+  Most likely). Hovering a cell draws that pair in the plot, with the angle between them. <b>Adding a completion</b> conditions the DPP on it: the
+  matrix shows L^A = L − L_{·A} L_A⁻¹ L_{A·} (what is left of each comparison once the set's directions are explained away), on the unconditioned
+  colour scale and in a fixed row order. Hovering a row shows it as a candidate in the rail, with the factor by which it would multiply the set's
+  volume (its leftover, det L_{A+i} / det L_A). A completion already in the span of the set cannot be added (factor 0).
+</p>
+<script type="module" src="set.js"></script>
+</body>
+</html>

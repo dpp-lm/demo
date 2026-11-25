@@ -289,7 +289,8 @@ function recompute({ newDraw = true } = {}) {
   S.c = lengthsFrom(xo ? drawnFamily(xo, S.mode) : 'quality', lk, lw);
   S.rs = xo?.sizeQ ? pointRadii(lk) : null;
   // The axes are set once per pool (and per 1-D/2-D/3-D choice), when the points are first drawn, and
-  // then left alone: the selection, the mode, T and K never turn them.
+  // then left alone: the selection, the mode, T and K never turn them. Only the visitor does, with
+  // "Fit axes to selection" (fitAxes).
   // expert: changing Axes or Open the cone projects again and frames the plot afresh.
   const fx = xo?.axes === 'fixed';
   if (!S.proj || S.proj.pool !== S.pool) reproject();
@@ -308,10 +309,9 @@ function applyCone(pr) {
   pr.cone = coneOpen();
 }
 
-// Axes, computed once when the points are first drawn. For K ≤ 3 (and K ≤ the drawn dimensions) the
-// first K axes span the completions selected at that moment, so the drawn parallelepiped is exactly the
-// volume being scored for that selection (for later selections it is the volume's shadow on these
-// axes); the remaining axes are the main directions of what is left. Otherwise plain uncentred PCA.
+// Axes. For K ≤ 3 (and K ≤ the drawn dimensions) the first K axes span the selected completions, so
+// the drawn parallelepiped is exactly the volume being scored; the remaining axes are the main
+// directions of what is left. Otherwise plain uncentred PCA.
 // Computed from G alone.
 function project() {
   const N = S.logp.length, G = S.G, sel = S.sel, k = sel.length;
@@ -354,7 +354,7 @@ function project() {
   // expert: fixed axes are never rotated, so the cloud does not move at all.
   const prev = S.proj?.pool === S.pool && !fixedAxes ? S.proj.coords : null;
   if (prev) coords = kabsch(coords, prev, S.dims);
-  return { coords, frac, fitted, k, pool: S.pool, fixed: fixedAxes };
+  return { coords, frac, fitted, k, sel: [...sel], pool: S.pool, fixed: fixedAxes };
 }
 function kabsch(P, Q, d) {
   // Rotation R (d×d, det +1) minimising Σ‖R p_i − q_i‖² over the first d coordinates.
@@ -403,9 +403,16 @@ function renderSpectrum() {
   el.innerHTML = `<p class="sp-head"><span class="fn">Spectrum<button type="button" class="xbtn" data-x="pca" aria-label="About the spectrum">?</button></span></p>` +
     f.map((v, k) => `<div class="bar"><span>${k + 1}</span><span class="fill" style="width:${(100 * v) / max}%"></span><span class="pv">${(100 * v).toFixed(1)}%</span></div>`).join('') +
     `<p class="sp-dims"><span class="lab">Drawn in</span><span class="pick" role="group" aria-label="Dimensions">${[1, 2, 3].map((d) => `<button type="button" class="pick-btn" data-dims="${d}" aria-pressed="${S.dims === d}">${d}-D</button>`).join('')}</span></p>` +
-    `<p class="sp-note">${S.proj.fitted ? 'Axes 1–' + S.proj.k + ' of the plot span the completions selected when it was drawn; the rest show the main remaining directions.' : 'The plot shows the first principal axes.'}</p>`;
+    `<p class="sp-note">${S.proj.fitted ? 'Axes 1–' + S.proj.k + ' of the plot span the completions selected when the axes were fitted; the rest show the main remaining directions.' : 'The plot shows the first principal axes.'}</p>`;
   el.querySelectorAll('[data-dims]').forEach((b) => (b.onclick = () => setDims(+b.dataset.dims)));
 }
+// Whether the axes were fitted to exactly the current selection, so the drawn box is the scored volume.
+function axesFitSel() {
+  const p = S.proj;
+  return !!p?.fitted && p.sel.length === S.sel.length && S.sel.every((i) => p.sel.includes(i));
+}
+// Turn the axes to contain the current selection (aligned to the current view, so points move little).
+function fitAxes() { reproject(); render(); }   // expert: reproject keeps the cone
 function setDims(k) { S.dims = k; S.proj = null; plot.reset(); reproject(); render(); }
 
 function renderReadout() {
@@ -433,7 +440,9 @@ function renderReadout() {
 
 function renderVolHint() {
   const el = $('#vol-hint');
-  if (S.sel.length > 3 || S.sel.length < 2) { el.innerHTML = S.sel.length > 3 ? '<span class="muted">volume drawn for K ≤ 3</span>' : ''; return; }
+  // The box is exact only when the plot's axes contain every selected vector: K ≤ 2 in 2-D, K ≤ 3 in 3-D.
+  if (S.sel.length < 2) { el.innerHTML = ''; return; }
+  if (S.sel.length > S.dims) { el.innerHTML = `<span class="muted">${S.dims === 1 ? 'volume drawn in 2-D and 3-D' : `volume drawn for K ≤ ${S.dims}`}</span>`; return; }
   if (coneOpen()) {   // expert: the box assumes the origin as a vertex, so it is not drawn while the cone is open
     const s = S.proj.coneS ?? 1, f = S.dims === 3 ? s * s : s;
     el.innerHTML = `<span class="muted">cone opened: widths ×${s.toFixed(2)}, every ${S.dims === 3 ? 'volume' : 'area'} ×${f.toFixed(2)}; the box is not drawn</span>`;
@@ -441,9 +450,16 @@ function renderVolHint() {
   }
   // expert: what the drawn volume belongs to when the drawn length is not the kernel's weight (default: Sample draws the √κ arrows)
   const xo = xopt(), suffix = volumeSuffix(kernelFamily(xo, S.mode), drawnFamily(xo, S.mode));
-  el.innerHTML = S.proj.fitted
-    ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg><span class="fn">spanned volume<button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button></span>${suffix}`
-    : `<span class="muted">${xo?.axes === 'fixed' ? 'on fixed axes the box is a projection' : `volume needs ${S.sel.length}-D`}</span>`;
+  if (xo?.axes === 'fixed') { el.innerHTML = '<span class="muted">on fixed axes the box is not drawn</span>'; return; }   // expert:
+  const tried = S.proj.sel.length === S.sel.length && S.sel.every((i) => S.proj.sel.includes(i));
+  if (!axesFitSel()) {
+    // Fitting fails only when the selected vectors are linearly dependent: the volume is then zero.
+    el.innerHTML = tried ? '<span class="muted">zero volume</span>'
+      : '<button type="button" class="link vol-fit" title="Turn the axes to contain the selected completions, so the box drawn is the volume being scored">Fit axes to selection</button>';
+    el.querySelector('.vol-fit')?.addEventListener('click', fitAxes);
+    return;
+  }
+  el.innerHTML = `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg><span class="fn">spanned volume<button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button></span>${suffix}`;
 }
 
 // A completion that hit the max-token limit, rather than ending with the end-of-text token: said in words.
@@ -568,6 +584,10 @@ class Plot2D {
     this.gOrigin.append('path').attr('stroke', css('--muted')).attr('stroke-width', 1);
     this.gGhost = svg.append('g');   // expert: unit positions
     this.gPara = svg.append('g');
+    // Arrowhead for the selected vectors, drawn at the tip in the line's own colour.
+    defs.append('marker').attr('id', 'arrowhead').attr('viewBox', '0 0 10 10').attr('refX', 9).attr('refY', 5)
+      .attr('markerWidth', 4).attr('markerHeight', 4).attr('orient', 'auto-start-reverse')
+      .append('path').attr('d', 'M0,0L10,5L0,10Z').attr('fill', css('--accent'));
     this.gArrow = svg.append('g');
     this.gDot = svg.append('g');
     this.svg = svg;
@@ -620,7 +640,7 @@ class Plot2D {
     const sel = new Set(S.sel);
     const idx = d3.range(N);
     const posD = idx.map((i) => (dims === 1 ? [this.dataXY(i, S.c[i])[0], this.dataXY(i, 1)[1]] : this.dataXY(i, S.c[i])));
-    const vol = dims === 2 && S.sel.length === 2 && S.proj.fitted && !coneOpen();   // expert: no box while the cone is open
+    const vol = dims === 2 && S.sel.length === 2 && axesFitSel() && !coneOpen();   // expert: no box while the cone is open
     const volD = vol ? parallelotope([0, 0], S.sel.map((i) => posD[i])) : { faces: [], corners: [] };
     const ghostD = xopt()?.ghost ? idx.map((i) => this.dataXY(i, 1)) : [];   // expert: unit positions
     if (!this.bx) this.fit([...posD, ...ghostD, ...volD.corners.map((c) => c.p)]);   // framed once, when first drawn
@@ -640,9 +660,10 @@ class Plot2D {
     go(this.gOrigin.select('path').attr('stroke-dasharray', dims === 1 ? '3 3' : null))
       .attr('d', dims === 1 ? `M${ox},16V${H - 16}` : `M${ox - 6},${oy}H${ox + 6}M${ox},${oy - 6}V${oy + 6}`);
     const y0 = (i) => (dims === 1 ? this.pos[i][1] : oy);
-    this.gArrow.selectAll('line').data(S.sel.length <= 3 ? S.sel : [], (i) => i).join(
+    // Every selected completion is an arrow from the origin, whatever K (only the volume box needs K ≤ 2).
+    this.gArrow.selectAll('line').data(S.sel, (i) => i).join(
       (enter) => enter.append('line').attr('x1', ox).attr('y1', y0).attr('x2', ox).attr('y2', y0),
-    ).attr('stroke', css('--accent')).attr('stroke-width', 2);
+    ).attr('stroke', css('--accent')).attr('stroke-width', 2).attr('marker-end', 'url(#arrowhead)');
     go(this.gArrow.selectAll('line')).attr('x1', ox).attr('y1', y0)
       .attr('x2', (i) => this.pos[i][0]).attr('y2', (i) => this.pos[i][1]);
     const face = (f) => 'M' + f.map((q) => px(q).join(',')).join('L') + 'Z';
@@ -708,7 +729,7 @@ const plot = {
         });
       }
       this.p3.update({
-        coords: S.proj.shown ?? S.proj.coords, c: S.c, sel: S.sel, fitted: S.proj.fitted,
+        coords: S.proj.shown ?? S.proj.coords, c: S.c, sel: S.sel, fitted: S.proj.fitted, exact: axesFitSel(),
         rs: S.rs, ghost: !!xopt()?.ghost, volume: !coneOpen(), ghostColor: css('--ghost'),   // expert:
         ...colorHooks(), accent: css('--accent'), text: css('--text-2'), muted: css('--muted'), bg: css('--surface'),
       });
@@ -726,11 +747,10 @@ const plot = {
 };
 
 // ---------------------------------------------------------------- labels
-const MAX_LABELS = 6;
 function labelText(s) { const w = s.text.replace(/\s+/g, ' ').trim().split(' '); return w.length > 5 ? w.slice(0, 5).join(' ') + '…' : w.join(' '); }
 function renderLabels(animate = true) {
   const layer = $('#labels');
-  const show = $('#label-toggle').checked && S.sel.length && S.sel.length <= MAX_LABELS;
+  const show = $('#label-toggle').checked && S.sel.length;   // every selected point, whatever K; the checkbox turns them off
   if (!show) { layer.innerHTML = ''; return; }
   const want = new Set(S.sel.map(String));
   layer.querySelectorAll('.lbl').forEach((el) => { if (!want.has(el.dataset.i)) el.remove(); });
@@ -1076,7 +1096,7 @@ function setMode(m, { recompute: go = true } = {}) {
   S.T = xModeT(S.mode, m, S.T);   // expert: each mode may keep its own T
   if (S.T !== T0) { $('#T-slider').value = tToSlider(S.T); $('#T-out').textContent = fmtT(S.T); }
   S.mode = m;
-  document.querySelectorAll('.step-2 .pick-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
+  document.querySelectorAll('.step-2 .pick-btn[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
   document.querySelectorAll('.step-2 .pick-btn[data-mode="sample"]').forEach((b) => { b.title = m === 'sample' ? 'Draw another subset' : ''; b.setAttribute('aria-label', m === 'sample' ? 'Sample again' : 'Sample'); });   // expert: the refresh icon in the button shows while Sample is on
   if (go) recompute({ newDraw: true });
 }
@@ -1119,7 +1139,7 @@ function wire() {
     usageNotice();   // expert: the research notice follows the selected backend
   };
   refreshNote = modelNote;
-  const advSum = () => ($('#adv-sum').textContent = `${backend().short} · ${TARGETS[S.target].short} · ${readConfig().N} samples`);
+  const advSum = () => ($('#adv-sum').textContent = `${backend().short} · ${readConfig().N} samples`);
   const onSettings = () => { fillEmbedders(); advSum(); modelNote(); configChanged(); };
   window.__settingsChanged = onSettings;
   window.__fillEmbedders = fillEmbedders;
@@ -1127,8 +1147,13 @@ function wire() {
   $('#model').addEventListener('change', onSettings);
   $('#embedder').addEventListener('change', onSettings);
   ['#live-N', '#live-Tp', '#live-max'].forEach((id) => $(id).addEventListener('change', onSettings));
-  $('#target').innerHTML = Object.entries(TARGETS).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join('');
-  $('#target').addEventListener('change', () => { S.target = $('#target').value; advSum(); recompute({ newDraw: true }); });
+  // The target quality is part of κ, like T: it reweights the same completions, so it sits with T and K.
+  $('#target').innerHTML = Object.entries(TARGETS).map(([k, t]) => `<button type="button" class="pick-btn" data-target="${k}" aria-pressed="${k === S.target}">${t.short}</button>`).join('');
+  $('#target').querySelectorAll('.pick-btn').forEach((b) => (b.onclick = () => {
+    S.target = b.dataset.target;
+    $('#target').querySelectorAll('.pick-btn').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    recompute({ newDraw: true });
+  }));
   let pt = 0;
   $('#prompt').addEventListener('input', () => { clearTimeout(pt); pt = setTimeout(configChanged, 250); });
   fillEmbedders(); advSum(); modelNote(); syncFieldNotes();
@@ -1149,7 +1174,7 @@ function wire() {
     raf = requestAnimationFrame(() => recompute({ newDraw: true }));
   });
   // "Most likely" shows the greedy MAP subset; "Sample" draws a new subset every time it is pressed.
-  document.querySelectorAll('.step-2 .pick-btn').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
+  document.querySelectorAll('.step-2 .pick-btn[data-mode]').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
   $('#K').onchange = () => setK($('#K').value);
   $('#K-minus').onclick = () => setK(S.K - 1);
   $('#K-plus').onclick = () => setK(S.K + 1);

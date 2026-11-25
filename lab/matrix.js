@@ -1,11 +1,14 @@
-// Matrix orderings lab: the pool's kernel matrix under different row orders, side by side.
+// Matrix orderings lab: the pool's DPP kernel L under different row orders, side by side.
+// Everything is computed from L = diag(√w) G diag(√w), the matrix the DPP uses.
 import { averageLinkageOrder, flatPivotOrder, nestedPivotOrder, themeOrder, pivotedCholesky } from './orderings.js';
+import { condition } from './condition.js';
+import { themeProfiles, REST_COLOR } from './profiles.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const DATA = '../data/cache/';
-const EMB_LABEL = { 'Qwen/Qwen3-Embedding-4B': 'Qwen3-Embedding-4B', 'Qwen/Qwen3-Embedding-0.6B': 'Qwen3-Embedding-0.6B', 'own:Qwen/Qwen3-14B-AWQ': 'Qwen3 14B own states (256-d projection)' };
+const EMB_LABEL = { 'Qwen/Qwen3-Embedding-4B': 'Qwen3-Embedding-4B', 'Qwen/Qwen3-Embedding-0.6B': 'Qwen3-Embedding-0.6B', 'own:Qwen/Qwen3-14B-AWQ': 'Qwen3 14B own states' };
 const ORDERS = [
   { id: 'pool', label: 'Pool order' },
   { id: 'avg', label: 'Average linkage (Manuel)' },
@@ -13,24 +16,32 @@ const ORDERS = [
   { id: 'nest', label: 'Pivots, nested (tree)' },
   { id: 'theme', label: 'Themes (eigenvectors)' },
 ];
-// T slider as on the main page: log10 T from −1 to 3, the right end is ∞.
+// T slider as on the main page: log10 T from −1 to 3; the right end is ∞.
 const sliderToT = (v) => (v >= 1000 ? Infinity : 10 ** (-1 + (4 * v) / 1000));
 const fmtT = (T) => (T === Infinity ? '∞' : T >= 100 ? T.toFixed(0) : T >= 10 ? T.toFixed(1) : T.toFixed(2));
 
-const S = { index: null, buf: null, samples: null, Gfull: null, items: [], G: null, L: null, n: 0, opts: { rows: 'all', show: 'G', on: 'G', K: 3, T: 20, target: 'global', mode: 'map' }, panels: [], picks: [] };
+// sel: the selected completions (conditioning); cond: L conditioned on them; basis: the kernel the rows are ordered
+// on (L, or L^A after "Re-order") and the K that goes with it; version: bumped whenever the basis changes.
+const S = { index: null, samples: null, G: null, L: null, n: 0, opts: { K: 3, T: 20, target: 'global', mode: 'map' }, panels: [], picks: [],
+  sel: [], cond: null, pi0: null, basis: null, version: 0, msg: '', prof: null, profPrev: [], merge: 0.05 };
+
+// The kernel the rows are ordered on, and the theme profiles drawn beside them (colours matched to the previous ones).
+function setBasis(M, K) {
+  S.basis = { M, K }; S.version++;
+  S.prof = themeProfiles(M, S.n, K, S.profPrev, { merge: S.merge });
+  S.profPrev = S.prof.prev;
+  drawLegend();
+}
 const cache = new Map();
 
 async function loadIndex() {
   S.index = await (await fetch(DATA + 'index.json')).json();
-  const pools = S.index.buffers;
-  $('#pool').innerHTML = pools.map((b, i) => `<option value="${i}">${esc(b.pool.replace(/_T(.*)\.json$/, " · T′ = $1"))}</option>`).join('');
-  $('#pool').value = String(Math.max(0, pools.findIndex((b) => b.pool === 'joke_T1.0.json')));
+  $('#pool').innerHTML = S.index.buffers.map((b, i) => `<option value="${i}">${esc(b.pool.replace(/_T(.*)\.json$/, ' · T′ = $1'))}</option>`).join('');
+  $('#pool').value = String(Math.max(0, S.index.buffers.findIndex((b) => b.pool === 'joke_T1.0.json')));
 }
 
 async function loadPool() {
-  const b = S.index.buffers[+$('#pool').value];
-  const embs = Object.keys(b.G);
-  const cur = $('#emb').value;
+  const b = S.index.buffers[+$('#pool').value], embs = Object.keys(b.G), cur = $('#emb').value;
   $('#emb').innerHTML = embs.map((e) => `<option value="${esc(e)}">${esc(EMB_LABEL[e] ?? e)}</option>`).join('');
   $('#emb').value = embs.includes(cur) ? cur : embs.includes('Qwen/Qwen3-Embedding-4B') ? 'Qwen/Qwen3-Embedding-4B' : embs[0];
   const key = b.pool + '|' + $('#emb').value;
@@ -38,44 +49,63 @@ async function loadPool() {
     const [pool, buf] = await Promise.all([fetch(DATA + b.pool).then((r) => r.json()), fetch(DATA + b.G[$('#emb').value]).then((r) => r.arrayBuffer())]);
     cache.set(key, { samples: pool.samples ?? pool, raw: new Float32Array(buf) });
   }
-  const { samples, raw } = cache.get(key), N = samples.length, M = Math.round(Math.sqrt(raw.length));
+  const { samples, raw } = cache.get(key), n = samples.length, M = Math.round(Math.sqrt(raw.length));
   // Identical strings get identical rows (the embedding is a function of the string), as on the main page.
   const first = new Map(), c = samples.map((s, i) => (first.has(s.text) ? first.get(s.text) : (first.set(s.text, i), i)));
-  const G = new Float64Array(N * N);
-  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) G[i * N + j] = i === j ? 1 : raw[c[i] * M + c[j]];
-  S.samples = samples; S.Gfull = G; S.firstOf = c;
+  const G = new Float64Array(n * n);
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) G[i * n + j] = i === j ? 1 : raw[c[i] * M + c[j]];
+  Object.assign(S, { samples, G, n, sel: [], profPrev: [] });
   rebuild();
 }
 
-// Rows (all or distinct), the weights and L; then every panel.
+// The weights and L for the current settings, then every panel.
 function rebuild() {
-  const N = S.samples.length, o = S.opts;
-  S.items = o.rows === 'distinct' ? [...Array(N).keys()].filter((i) => S.firstOf[i] === i) : [...Array(N).keys()];
-  const n = (S.n = S.items.length), it = S.items;
-  const copies = new Map(); S.firstOf.forEach((f) => copies.set(f, (copies.get(f) ?? 0) + 1));
-  S.copies = it.map((i) => copies.get(S.firstOf[i]));
-  const G = new Float64Array(n * n);
-  for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) G[a * n + b] = S.Gfull[it[a] * N + it[b]];
-  const lk = it.map((i) => (o.T === Infinity ? 0 : S.samples[i].logp / o.T) + (o.target === 'gl' ? S.samples[i].logq : 0));
-  const lw = o.mode === 'sample' ? lk.map((x, a) => x - S.samples[it[a]].logq) : lk;
-  const m = Math.max(...lw), w = lw.map((x) => Math.exp(x - m));
-  const L = new Float64Array(n * n);
-  for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) L[a * n + b] = Math.sqrt(w[a] * w[b]) * G[a * n + b];
-  // Greedy (Most likely) picks: the first K pivots of L with the quality weights κ (not κ/q).
-  const mk = Math.max(...lk), wk = lk.map((x) => Math.exp(x - mk)), Lk = new Float64Array(n * n);
-  for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) Lk[a * n + b] = Math.sqrt(wk[a] * wk[b]) * G[a * n + b];
-  S.picks = pivotedCholesky(Lk, n).piv.slice(0, o.K);
-  S.G = G; S.L = L; S.w = w;
+  const { samples, G, n } = S, o = S.opts;
+  const lk = samples.map((s) => (o.T === Infinity ? 0 : s.logp / o.T) + (o.target === 'gl' ? s.logq : 0));
+  const lw = o.mode === 'sample' ? lk.map((x, i) => x - samples[i].logq) : lk;
+  const weigh = (l) => { const m = Math.max(...l), w = l.map((x) => Math.exp(x - m)), A = new Float64Array(n * n); for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) A[i * n + j] = Math.sqrt(w[i] * w[j]) * G[i * n + j]; return A; };
+  S.L = weigh(lw);
+  S.picks = pivotedCholesky(o.mode === 'map' ? S.L : weigh(lk), n).piv.slice(0, o.K);   // greedy (Most likely) picks use κ
+  S.pi0 = condition(S.L, n, [], o.K).pi;
+  // Keep the selection under the new weights as far as it stays valid (at most K, positive volume).
+  const keep = [];
+  for (const i of S.sel.slice(0, o.K)) if (condition(S.L, n, [...keep, i], o.K).ok) keep.push(i);
+  S.sel = keep;
+  setBasis(S.L, o.K);
+  recondition();
+}
+
+// Condition on the selection and redraw (the row order stays put unless the basis changes).
+function recondition() {
+  S.cond = condition(S.L, S.n, S.sel, S.opts.K);
+  const m = S.sel.length, K = S.opts.K;
+  $('#selinfo').textContent = m ? `Selected ${m} of ${K}` : `Click rows to condition (up to ${K})`;
+  $('#clear').disabled = !m;
+  $('#reorder').disabled = !(m > 0 && m < K);
   S.panels.forEach(drawPanel);
 }
 
+function toggle(i) {
+  const at = S.sel.indexOf(i), K = S.opts.K;
+  if (at >= 0) S.sel.splice(at, 1);
+  else if (S.sel.length >= K) { flash(`The selection is full (K = ${K}). Click a selected row to remove it.`); return; }
+  else if (!S.cond.addable[i]) { flash('Already explained by the selection: its leftover is zero, so no set with both has positive volume.'); return; }
+  else {
+    const c = condition(S.L, S.n, [...S.sel, i], K);
+    if (!c.ok) { flash(`Cannot add it: ${c.reason}.`); return; }
+    S.sel.push(i);
+  }
+  recondition();
+}
+function flash(text) { S.msg = text; $('#selinfo').textContent = text; setTimeout(() => { if (S.msg === text) { S.msg = ''; recondition(); } }, 2600); }
+
 function computeOrder(id) {
-  const M = S.opts.on === 'L' ? S.L : S.G, n = S.n;
+  const { M: L, K } = S.basis, n = S.n;
   if (id === 'pool') return { order: [...Array(n).keys()] };
-  if (id === 'avg') return averageLinkageOrder(M, n);
-  if (id === 'flat') return flatPivotOrder(M, n, S.opts.K);
-  if (id === 'nest') return nestedPivotOrder(M, n);
-  return themeOrder(M, n);
+  if (id === 'avg') return averageLinkageOrder(L, n);
+  if (id === 'flat') return flatPivotOrder(L, n, K);
+  if (id === 'nest') return nestedPivotOrder(L, n);
+  return themeOrder(L, n, K);
 }
 
 // ---------------------------------------------------------------- drawing
@@ -85,128 +115,204 @@ function makePanel(defaultOrder) {
   const el = document.createElement('section');
   el.className = 'panel';
   el.innerHTML = `<div class="phead"><select class="ord">${ORDERS.map((o) => `<option value="${o.id}">${o.label}</option>`).join('')}</select><span class="note"></span></div>
-    <div class="grid"><div class="corner"></div><div class="top"><svg class="margin"></svg></div><div class="left"><svg class="margin"></svg></div>
-    <div class="cw"><canvas></canvas><i class="xh r"></i><i class="xh c"></i></div></div>
+    <div class="grid"><div class="left"><svg class="margin"></svg></div><div class="prof"><svg class="margin"></svg></div>
+    <div class="cw"><canvas></canvas><svg class="dim"></svg><i class="xh r"></i><i class="xh c"></i></div></div>
     <div class="scale"><span class="lo"></span><span class="bar"></span><span class="hi"></span></div>`;
   $('#panels').append(el);
   const P = { el, id: defaultOrder, res: null };
   $('.ord', el).value = defaultOrder;
-  $('.ord', el).onchange = (e) => { P.id = e.target.value; drawPanel(P); };
+  $('.ord', el).onchange = (e) => { P.id = e.target.value; P.v = -1; drawPanel(P); };
   const cv = $('canvas', el);
   cv.onpointermove = (e) => {
     const r = cv.getBoundingClientRect(), n = S.n;
     const row = Math.min(n - 1, Math.max(0, Math.floor(((e.clientY - r.top) / r.height) * n)));
     const col = Math.min(n - 1, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * n)));
-    showPair(P.res.order[row], P.res.order[col], P);
+    showPair(P.res.order[row], P.res.order[col]);
   };
   cv.onpointerleave = () => showPair(-1, -1);
+  // A click (no drag) on a row adds or removes that completion from the selection.
+  let down = null;
+  cv.onpointerdown = (e) => (down = [e.clientX, e.clientY]);
+  cv.onpointerup = (e) => {
+    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6) return;
+    const r = cv.getBoundingClientRect(), row = Math.min(S.n - 1, Math.max(0, Math.floor(((e.clientY - r.top) / r.height) * S.n)));
+    toggle(P.res.order[row]);
+  };
   S.panels.push(P);
-  return P;
 }
 
 function drawPanel(P) {
   const n = S.n; if (!n) return;
   const t0 = performance.now();
-  P.res = computeOrder(P.id);
-  const ms = performance.now() - t0, { order } = P.res;
-  const A = S.opts.show === 'L' ? S.L : S.G;
-  // Colour: paper to ink over the off-diagonal range of the matrix shown.
+  if (P.v !== S.version) { P.res = computeOrder(P.id); P.v = S.version; P.ms = performance.now() - t0; }   // the order changes only with its basis
+  const ms = P.ms, { order } = P.res, A = S.cond.LA;
+  // Colour: paper to ink over the off-diagonal range of the unconditioned L, so conditioning shows as real fading.
   let lo = Infinity, hi = -Infinity;
-  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (i !== j) { const v = A[i * n + j]; if (v < lo) lo = v; if (v > hi) hi = v; }
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (i !== j) { const v = S.L[i * n + j]; if (v < lo) lo = v; if (v > hi) hi = v; }
   if (!(hi > lo)) { lo = 0; hi = 1; }
-  const c0 = parseRGB(css('--surface')), c1 = parseRGB(css('--ink'));
+  const c0 = parseRGB(css('--surface')), c1 = parseRGB(css('--ink')), ca = parseRGB(css('--accent'));
+  const inSel = new Uint8Array(n); for (const i of S.sel) inSel[i] = 1;
   const cv = $('canvas', P.el); cv.width = n; cv.height = n;
   const ctx = cv.getContext('2d'), img = ctx.createImageData(n, n);
   for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
-    const v = A[order[r] * n + order[c]], t = Math.min(1, Math.max(0, (v - lo) / (hi - lo))), k = (r * n + c) * 4;
-    for (let ch = 0; ch < 3; ch++) img.data[k + ch] = Math.round(c0[ch] + (c1[ch] - c0[ch]) * t);
+    const i = order[r], j = order[c], k = (r * n + c) * 4;
+    if (inSel[i] || inSel[j]) {   // selected: out of play, a light accent cross
+      for (let ch = 0; ch < 3; ch++) img.data[k + ch] = Math.round(c0[ch] + (ca[ch] - c0[ch]) * 0.18);
+    } else {
+      const t = Math.min(1, Math.max(0, (A[i * n + j] - lo) / (hi - lo)));
+      for (let ch = 0; ch < 3; ch++) img.data[k + ch] = Math.round(c0[ch] + (c1[ch] - c0[ch]) * t);
+    }
     img.data[k + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
-  $('.lo', P.el).textContent = lo.toFixed(2); $('.hi', P.el).textContent = hi.toFixed(2);
+  $('.lo', P.el).textContent = lo.toPrecision(2); $('.hi', P.el).textContent = hi.toPrecision(2);
   $('.bar', P.el).style.background = `linear-gradient(90deg, ${css('--surface')}, ${css('--ink')})`;
   const pos = new Int32Array(n); order.forEach((i, r) => (pos[i] = r));
   const accent = css('--accent'), muted = css('--muted'), ink = css('--text-2');
-  // Block boundaries (flat pivots, themes).
   const blocks = P.res.blocks ?? [];
-  // Top strip: height for the pivot orders; red ticks for the greedy picks.
-  const top = $('.top svg', P.el), left = $('.left svg', P.el);
-  top.setAttribute('viewBox', `0 0 ${n} 34`); top.setAttribute('preserveAspectRatio', 'none');
+  // Left margin: the tree (nested pivots: leftover length when taken; average linkage: merge distance), else block brackets.
+  const left = $('.left svg', P.el);
   left.setAttribute('viewBox', `0 0 70 ${n}`); left.setAttribute('preserveAspectRatio', 'none');
-  let ts = '', ls = '';
-  if (P.res.height) {
-    const hmax = Math.max(...order.map((i) => P.res.height[i])) || 1;
-    for (let r = 0; r < n; r++) { const h = (P.res.height[order[r]] / hmax) * 24; ts += `<rect x="${r + 0.1}" y="${30 - h}" width="0.8" height="${h}" fill="${ink}" opacity="0.55"/>`; }
-  }
-  for (const i of S.picks) ts += `<rect x="${pos[i]}" y="30" width="1" height="4" fill="${accent}"/>`;
-  for (const [a] of blocks) if (a > 0) ts += `<line x1="${a}" x2="${a}" y1="0" y2="34" stroke="${muted}" stroke-width="1" vector-effect="non-scaling-stroke" stroke-dasharray="2 2"/>`;
-  // Left margin: the tree (nested pivots: heights; average linkage: merge distances), else block brackets.
+  let ls = '';
+  const line = (d, op = 0.7) => `<path d="${d}" fill="none" stroke="${ink}" stroke-width="0.8" vector-effect="non-scaling-stroke" opacity="${op}"/>`;
   if (P.id === 'nest') {
-    const { parent, height } = P.res, hmax = height[order[0]] || 1, x = (h) => 66 - (h / hmax) * 62;
-    for (let r = 0; r < n; r++) {
-      const i = order[r], p = parent[i];
-      if (p < 0) continue;
-      const yi = r + 0.5, yp = pos[p] + 0.5;
-      ls += `<path d="M${x(height[i])} ${yi}H${x(height[p])}V${yp}" fill="none" stroke="${ink}" stroke-width="0.8" vector-effect="non-scaling-stroke" opacity="0.7"/>`;
-    }
+    const { parent, height } = P.res, hmax = height[order[0]] || 1, x = (h) => 64 - (h / hmax) * 60;
+    for (let r = 0; r < n; r++) { const i = order[r], p = parent[i]; if (p >= 0) ls += line(`M${x(height[i])} ${r + 0.5}H${x(height[p])}V${pos[p] + 0.5}`); }
   } else if (P.id === 'avg') {
-    const { merges } = P.res, hmax = Math.max(...merges.map((m) => m.h)) || 1, x = (h) => 66 - (h / hmax) * 62;
+    const { merges } = P.res, hmax = Math.max(...merges.map((m) => m.h)) || 1, x = (h) => 64 - (h / hmax) * 60;
     const yOf = new Map(order.map((i, r) => [i, r + 0.5])), hOf = new Map(order.map((i) => [i, 0]));
     for (const m of merges) {
-      const ya = yOf.get(m.a), yb = yOf.get(m.b), xa = x(hOf.get(m.a)), xb = x(hOf.get(m.b)), xm = x(m.h);
-      ls += `<path d="M${xa} ${ya}H${xm}V${yb}H${xb}" fill="none" stroke="${ink}" stroke-width="0.8" vector-effect="non-scaling-stroke" opacity="0.7"/>`;
+      const ya = yOf.get(m.a), yb = yOf.get(m.b);
+      ls += line(`M${x(hOf.get(m.a))} ${ya}H${x(m.h)}V${yb}H${x(hOf.get(m.b))}`);
       yOf.set(m.node, (ya + yb) / 2); hOf.set(m.node, m.h);
     }
   } else {
     for (const [a, b] of blocks) ls += `<path d="M64 ${a + 0.3}H58V${b - 0.3}H64" fill="none" stroke="${muted}" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
   }
+  // Block strength (themes): for each row, the share of the completion's inclusion probability carried by its own
+  // theme, r_i = p_a u_a(i)^2 / π_i (a full bar at the dashed line = 100%). Short bars: the block is a weak assignment.
+  let strength = '';
+  if (P.id === 'theme') {
+    const { theme, part, pi } = P.res;
+    let sum = 0;
+    ls += `<line x1="4" x2="4" y1="0" y2="${n}" stroke="${muted}" stroke-width="1" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>`;
+    for (let r = 0; r < n; r++) {
+      const i = order[r];
+      if (!(pi[i] > 0)) continue;   // selected items, after a re-order on L^A
+      const sh = part(i, theme[i]) / pi[i];
+      sum += sh;
+      ls += `<rect x="${56 - 52 * sh}" y="${r + 0.12}" width="${52 * sh}" height="0.76" fill="${ink}" opacity="0.55"/>`;
+    }
+    strength = `mean share ${(100 * sum / n).toFixed(0)}% · `;
+  }
   for (const i of S.picks) ls += `<rect x="66" y="${pos[i]}" width="4" height="1" fill="${accent}"/>`;
-  top.innerHTML = ts; left.innerHTML = ls;
-  $('.corner', P.el).textContent = P.res.height ? 'height ↑' : '';
-  const nb = blocks.length ? `${blocks.length} blocks · ` : '';
-  $('.note', P.el).textContent = `${nb}${n} rows · ${S.opts.show} shown, ordered on ${S.opts.on} · ${ms.toFixed(0)} ms`;
+  left.innerHTML = ls;
+  drawProfiles(P, order);
+  const o = S.opts, nb = (blocks.length ? `${blocks.length} blocks · ` : '') + (S.basis.M !== S.L ? 'ordered on L^A · ' : '');
+  $('.note', P.el).textContent = `${nb}${strength}T = ${fmtT(o.T)} · ${o.mode === 'map' ? 'κ' : 'κ/q'} · ${ms.toFixed(0)} ms`;
 }
 
-function showPair(i, j, P) {
+// Theme profiles beside the rows: bar length = pi_i (one scale for all rows; full width = the largest pi_i), split into
+// p_a u_a(i)^2 per coloured theme and a grey rest, in the legend's order. Summed over the rows, each colour gives its p_a.
+function drawProfiles(P, order) {
+  const svg = $('.prof svg', P.el), n = S.n, pr = S.prof, W = 80, gap = 0.8;
+  svg.setAttribute('viewBox', `0 0 84 ${n}`); svg.setAttribute('preserveAspectRatio', 'none');
+  let max = 0; for (let i = 0; i < n; i++) max = Math.max(max, pr.pi[i]);
+  let s = '';
+  for (let r = 0; r < n; r++) {
+    const i = order[r];
+    let x = 2;
+    const seg = (w, c) => { const px = (w / (max || 1)) * W; if (px > gap + 0.2) s += `<rect x="${x}" y="${r + 0.1}" width="${px - gap}" height="0.8" fill="${c}"/>`; x += px; };
+    for (const g of pr.groups) seg(pr.part(i, g), g.color);
+    seg(pr.restPart(i), REST_COLOR);
+  }
+  svg.innerHTML = s;
+  P.maxPi = max;
+}
+
+// One card per coloured theme: what it is (shared core, contrast or merged), its p, and the most representative
+// distinct completions (largest u_a(i)^2) at each end, with each end's share of the theme.
+function drawLegend() {
+  const pr = S.prof, K = S.basis.K, maxPi = Math.max(...pr.pi);
+  const top = (items, k = 2) => { const seen = new Set(), out = []; for (const i of items) { const t = S.samples[i].text; if (seen.has(t)) continue; seen.add(t); out.push(i); if (out.length === k) break; } return out; };
+  // Line breaks as spaces here, so the clamped lines reach the words that differ (a joke's punchline, not its preamble).
+  const ex = (i) => `<div class="ex">${esc(S.samples[i].text.replace(/\s+/g, ' ').trim())}</div>`;
+  const kind = { core: 'shared core', contrast: 'contrast', merged: 'merged themes' };
+  const cards = pr.groups.map((g, x) => {
+    const d = g.desc, head = `<div class="th-head"><i class="chip" style="background:${g.color}"></i><b>${g.label[0].toUpperCase() + g.label.slice(1)}</b> · ${kind[d.kind]} · p = ${g.p.toFixed(2)}</div>`;
+    let body;
+    if (d.kind === 'contrast') body = `<div class="end">one end · ${(100 * d.ends[0].mass).toFixed(0)}% of the theme</div>${top(d.ends[0].items).map(ex).join('')}
+      <div class="vs">contrasted with</div><div class="end">the other end · ${(100 * d.ends[1].mass).toFixed(0)}%</div>${top(d.ends[1].items).map(ex).join('')}`;
+    else body = `<div class="end">${d.kind === 'core' ? 'what the completions share; most typical' : 'most representative (no ends: the eigenvectors are not determined)'}</div>${top(d.ends[0].items).map(ex).join('')}`;
+    return `<div class="tcard" data-g="${x}">${head}${body}</div>`;
+  }).join('');
+  $('#themes').innerHTML = `<div class="tcards">${cards}</div>
+    <div class="th-rest"><i class="chip" style="background:${REST_COLOR}"></i>rest · the other themes · ${(100 * pr.restP / K).toFixed(0)}% of the sample (p = ${pr.restP.toFixed(2)})</div>
+    <div class="note2">Taken alone, a theme is a distribution over the completions, u_a(i)²; the examples are the most likely ones at each end, and each end's share is
+      its total. The sign of an eigenvector is arbitrary, so the two ends are a pair. p is the chance that a sample covers the theme; all p sum to K = ${K}.
+      Bars beside the rows: length = π_i (full width = ${(100 * maxPi).toFixed(1)}%), split by theme; each colour sums to its p over the rows.
+      Effective number of themes K²/Σp² = ${pr.neff.toFixed(1)}; coloured: ${pr.groups.length} (the palette's limit is 3). Hover a card to pick out its rows.</div>`;
+  $('#themes').querySelectorAll('.tcard').forEach((el) => {
+    el.onmouseenter = () => markTheme(pr.groups[+el.dataset.g]);
+    el.onmouseleave = () => markTheme(null);
+  });
+}
+
+// Dim, in every panel, the rows whose largest part of π belongs to another theme.
+function markTheme(g) {
+  for (const P of S.panels) {
+    const svg = $('.dim', P.el), n = S.n;
+    if (!g || !P.res) { svg.innerHTML = ''; continue; }
+    svg.setAttribute('viewBox', `0 0 1 ${n}`); svg.setAttribute('preserveAspectRatio', 'none');
+    let s = '';
+    P.res.order.forEach((i, r) => { if (!g.members(i)) s += `<rect x="0" y="${r}" width="1" height="1"/>`; });
+    svg.innerHTML = `<g fill="${css('--surface')}" opacity="0.82">${s}</g>`;
+  }
+}
+
+function showPair(i, j) {
   S.panels.forEach((Q) => {
     const r = $('.xh.r', Q.el), c = $('.xh.c', Q.el);
     if (i < 0 || !Q.res) { r.style.display = c.style.display = 'none'; return; }
-    const pos = Q.res.order.indexOf(i), posj = Q.res.order.indexOf(j), n = S.n;
+    const n = S.n;
     r.style.display = c.style.display = 'block';
-    r.style.top = `${(100 * (pos + 0.5)) / n}%`; c.style.left = `${(100 * (posj + 0.5)) / n}%`;
+    r.style.top = `${(100 * (Q.res.order.indexOf(i) + 0.5)) / n}%`; c.style.left = `${(100 * (Q.res.order.indexOf(j) + 0.5)) / n}%`;
   });
   if (i < 0) return;
-  const n = S.n, it = S.items, s = (a) => S.samples[it[a]];
-  const nest = S.panels.map((Q) => Q.res).find((r) => r?.parent);
+  const n = S.n, s = (a) => S.samples[a];
+  const th = S.panels.map((Q) => Q.res).find((r) => r?.part);
   const extra = (a) => {
     const bits = [`log p ${s(a).logp.toFixed(1)}`];
-    if (S.copies[a] > 1) bits.push(`×${S.copies[a]}`);
     if (S.picks.includes(a)) bits.push('greedy pick');
-    if (nest) bits.push(`height ${nest.height[a].toFixed(3)}${nest.parent[a] >= 0 ? '' : ' (root)'}`);
+    if (S.sel.includes(a)) bits.push('selected');
+    else if (S.sel.length >= S.opts.K) bits.push(`π ${(100 * S.pi0[a]).toFixed(1)}% → 0 (the selection already has K)`);
+    else if (S.sel.length) bits.push(`π ${(100 * S.pi0[a]).toFixed(1)}% → ${(100 * S.cond.pi[a]).toFixed(1)}% given the selection${S.cond.addable[a] ? '' : ' (already explained: leftover 0)'}`);
+    else bits.push(`π ${(100 * S.pi0[a]).toFixed(1)}%`);
+    if (S.prof && S.prof.pi[a] > 0) {
+      const pr = S.prof, pc = (x) => (100 * x / pr.pi[a]).toFixed(0);
+      bits.push(pr.groups.map((g) => `<i class="chip" style="background:${g.color}"></i>${pc(pr.part(a, g))}%`).join(' ') + ` <i class="chip" style="background:${REST_COLOR}"></i>${pc(pr.restPart(a))}%`);
+    }
+    if (th) {
+      const t = th.theme[a], rank = th.blocks.findIndex((b) => b[2] === t);
+      if (th.pi[a] > 0) bits.push(`${(100 * th.part(a, t) / th.pi[a]).toFixed(0)}% of π via theme ${rank + 1} (p = ${th.p[t].toFixed(2)})`);
+    }
     return bits.join(' · ');
   };
   $('#hover').innerHTML = `<div class="pair">
     <div><div class="k">Row</div><div class="t">${esc(s(i).text)}</div><div class="v">${extra(i)}</div></div>
     <div><div class="k">Column</div><div class="t">${esc(s(j).text)}</div><div class="v">${extra(j)}</div></div></div>
-    <div class="v">G = ${S.G[i * n + j].toFixed(4)} · L = ${S.L[i * n + j].toExponential(3)}</div>`;
+    <div class="v">L = ${S.L[i * n + j].toPrecision(3)}${S.sel.length ? ` · L^A = ${S.cond.LA[i * n + j].toPrecision(3)}` : ''} · cos = G = ${S.G[i * n + j].toFixed(4)}</div>`;
 }
 
 // ---------------------------------------------------------------- controls
-function seg(id, key) {
-  $(id).querySelectorAll('button').forEach((b) => (b.onclick = () => {
-    $(id).querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
-    S.opts[key] = b.dataset.v;
-    $('#Lctl').hidden = S.opts.show !== 'L' && S.opts.on !== 'L';
-    rebuild();
-  }));
-}
-
 async function main() {
   await loadIndex();
-  makePanel('avg'); makePanel('nest');
-  seg('#rows', 'rows'); seg('#show', 'show'); seg('#on', 'on');
+  makePanel('avg'); makePanel('theme');
   $('#pool').onchange = loadPool; $('#emb').onchange = loadPool;
-  $('#K').onchange = (e) => { S.opts.K = Math.max(1, Math.min(12, +e.target.value || 3)); rebuild(); };
+  $('#K').onchange = (e) => { S.opts.K = Math.max(1, Math.min(12, +e.target.value || 3)); e.target.value = S.opts.K; rebuild(); };
+  $('#clear').onclick = () => { S.sel = []; if (S.basis.M !== S.L) setBasis(S.L, S.opts.K); recondition(); };
+  $('#reorder').onclick = () => { setBasis(S.cond.LA, S.opts.K - S.sel.length); recondition(); };
+  $('#merge').onchange = (e) => { S.merge = Math.max(0, Math.min(50, +e.target.value || 0)) / 100; e.target.value = S.merge * 100; setBasis(S.basis.M, S.basis.K); S.panels.forEach(drawPanel); };
   $('#T').oninput = (e) => { S.opts.T = sliderToT(+e.target.value); $('#Tout').textContent = fmtT(S.opts.T); };
   $('#T').onchange = () => rebuild();
   $('#target').onchange = (e) => { S.opts.target = e.target.value; rebuild(); };

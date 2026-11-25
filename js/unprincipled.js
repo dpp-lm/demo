@@ -137,10 +137,10 @@ export function initUnprincipled(c) {
   modeNote.hidden = true;
   row?.after(modeNote);
   targetNote = document.createElement('p');
-  targetNote.className = 'menu-note';
+  targetNote.className = 'x-wt-note';
   targetNote.id = 'x-target-note';
   targetNote.hidden = true;
-  document.getElementById('target')?.closest('label')?.after(targetNote);
+  document.getElementById('target')?.closest('.mode-row')?.after(targetNote);   // upstream moved Target to its own row under the mode
   ctx.onSelection(refresh);
   ctx.onPool(() => { lastSig = ''; });
   ctx.onOff(() => {

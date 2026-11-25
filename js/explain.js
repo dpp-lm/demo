@@ -21,9 +21,8 @@ export const EXPLAIN = {
   },
   volume: {
     title: 'Spanned volume',
-    body: `<p>The grey box is spanned by the selected arrows, each drawn at length $\\sqrt{\\kappa(y)}$ in both modes. With <b>Most likely</b> its squared volume is $\\det \\mathbf L_S$, the subset's score: long arrows (likely completions) pointing in different directions (different meanings) make a big box; near-duplicates flatten it.</p>
-      <p>With <b>Sample</b> the sets are scored with the arrows lengthened by $1/\\sqrt{p^{\\circ}_{T'}(y)}$, to undo how the completions were drawn. The box still shows the $\\sqrt{\\kappa(y)}$ arrows, so its volume is not the quantity Sample draws from.</p>
-      <p>For $K \\le 3$ the plot's first axes are chosen once, to contain the arrows selected when the points were first drawn, so for that set the box is exactly the volume of those arrows. For a later set it is the volume's shadow on the same axes.</p>`,
+    body: `<p>The grey box is spanned by the selected arrows. Its squared volume is $\\det \\mathbf L_S$, the subset's score: long arrows (likely completions) pointing in different directions (different meanings) make a big box; near-duplicates flatten it.</p>
+      <p>The box is drawn only when the plot's axes contain the selected arrows ($K \\le 2$ in 2-D, $K \\le 3$ in 3-D), so it is exactly the volume being scored, not a projection of it. The axes stay put as the selection changes; <i>Fit axes to selection</i> turns them to the current one.</p>`,
   },
   logp: {
     title: 'log P(S)',
@@ -91,7 +90,7 @@ export const EXPLAIN = {
   pca: {
     title: 'Spectrum',
     body: `<p>The completions' embeddings have hundreds of dimensions. The bars show how much of their spread lies along each of the first principal axes (uncentred, so arrows start at the origin, where volume is measured from). A pool whose spread sits in very few axes has little room for diverse subsets.</p>
-      <p>For $K \\le 3$ the plot's axes are fitted to the selected completions instead; otherwise it shows the first principal axes.</p>`,
+      <p>If the plot was first drawn with $K$ no more than its dimensions, or after <i>Fit axes to selection</i>, its first axes are fitted to the selected completions instead; otherwise it shows the first principal axes.</p>`,
   },
 };
 
