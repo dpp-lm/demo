@@ -3,7 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { flatPivotOrder, nestedPivotOrder, averageLinkageOrder, themeOrder, pivotedCholesky } from '../lab/orderings.js';
-import { greedyMAPLog, logDetSub, kdpp } from '../js/dpp.js';
+import { condition } from '../lab/condition.js';
+import { greedyMAPLog, logDetSub, kdpp, mulberry32 } from '../js/dpp.js';
 
 const dir = new URL('../data/cache/', import.meta.url);
 const index = JSON.parse(readFileSync(new URL('index.json', dir)));
@@ -57,9 +58,6 @@ for (const pool of ['story_T1.0.json', 'joke_T1.5.json']) {
 }
 
 // Conditioning (lab/condition.js): P(i in S | A in S) against brute force over every K-set of a small kernel.
-import { condition } from '../lab/condition.js';
-import { mulberry32 } from '../js/dpp.js';
-
 test('conditioning: π(i | A) matches brute-force enumeration; volume-zero selections are refused', () => {
   const rng = mulberry32(7), n = 9, D = 5, K = 4;
   const X = Array.from({ length: n }, () => Array.from({ length: D }, () => rng() - 0.5));

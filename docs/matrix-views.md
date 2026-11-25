@@ -186,6 +186,14 @@ recomputed given that one is in. For example, pin a skeleton joke: the other ske
 drops, unrelated jokes' rises. That shows the distribution's structure directly. It would be a feature of
 the matrix view (hover or click a row), not a separate panel.
 
+**Built in the lab (25 Nov).** Click up to K rows; the matrix shows L^A on the unconditioned colour scale and
+in the unconditioned row order (Tim's three choices: fixed order with an optional "Re-order" on L^A; fixed
+scale, so fading is a real decrease; a completion with leftover zero cannot be added, since no set containing it
+and the selection has positive volume). Hover shows π before and after. Checked against brute-force
+enumeration (tests/orderings.test.mjs). What it shows: on the story preset, selecting one "last letter" opening
+turns its tight block white while the other blocks stay; on the joke preset two picks whiten almost everything
+(the jokes are near-copies: leftovers ≈ 0.0005).
+
 **Already on the page.** The 3-D view's fitted axes condition on the selected set: the axes beyond K are
 the PCA of G − AAᵀ (section 3).
 
