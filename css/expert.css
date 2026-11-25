@@ -166,3 +166,6 @@ input:disabled + span, .btn:disabled { opacity: .45; cursor: default; }
 .incl-opts { display: flex; align-items: center; gap: 12px; margin: 4px 0 2px 22px; font: 12.5px var(--sans); color: var(--text-2); white-space: nowrap; }
 .incl-opts[hidden] { display: none; }
 .incl-opts select { font: inherit; margin-left: 4px; }
+
+/* expert: two header links stack so the title keeps its two lines */
+@media (min-width: 761px) { .brand .links { flex-direction: column; align-items: flex-end; gap: 2px; } }
