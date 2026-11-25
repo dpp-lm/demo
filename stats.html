@@ -166,7 +166,7 @@
           <option value="30" selected>Last 30 days</option>
           <option value="90">Last 90 days</option>
           <option value="365">Last year</option>
-          <option value="366">All time</option>
+          <option value="all">All time</option>
         </select>
         <button class="small" id="refreshBtn">Refresh</button>
         <button class="small" id="lockBtn" title="Forget the password in this browser">Lock</button>
@@ -384,13 +384,13 @@
       ["Unique visitors", nf(t.visitors), ""],
       ["Sessions", nf(t.sessions), ""],
       ["Sessions that ran a sample", nf(t.sessionsWithRun), pct(t.sessionsWithRun, t.sessions)],
-      ["Runs", nf(t.runs), nf(t.requests) + " requests in all"],
+      ["Runs", nf(t.runs), nf(t.requests) + " requests in all" + (t.cachedRequests ? ", " + nf(t.cachedRequests) + " from the draw cache" : "")],
       ["Completions generated", nf(t.completions), ""],
       ["Tokens generated", nf(t.tokens), ""],
       ["GPU time", fmtDur(t.gpuSeconds), num(t.gpuSeconds, 1) + " s of run time"],
       ["Median session length", fmtDur(t.medianSessionS), "mean " + fmtDur(t.meanSessionS)],
       ["Errors", nf(t.errors), ""],
-      ["Today (UTC)", nf(today.visitors) + " visitors", nf(today.sessions) + " sessions, " + nf(today.runs) + " runs, " + nf(today.errors) + " errors"],
+      ["Today (UTC)", nf(today.visitors) + " visitors", nf(today.sessions) + " sessions, " + (today.requests != null ? nf(today.requests) + " requests, " : "") + nf(today.runs) + " runs, " + nf(today.errors) + " errors"],
     ];
     const box = $("tiles");
     box.replaceChildren();
@@ -423,7 +423,7 @@
     table.appendChild(head);
     rows.forEach((r) => {
       const tr = h("tr");
-      tr.appendChild(h("td", "", r.key));
+      tr.appendChild(h("td", "", r.key || "none"));
       [r.requests, r.runs, r.sessions].forEach((v) => tr.appendChild(h("td", "num", nf(v))));
       table.appendChild(tr);
     });
