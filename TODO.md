@@ -106,3 +106,12 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
   heatmaps are the starting point). Design it to fit the demo: house colours, compact, no hand-picking of the subset.
 - When K is too large for the pool, explain it from the spectrum (effective dimension), not a threshold.
 
+
+## Question: warm up the Modal GPU when a visitor arrives?
+- It would cut the cold start (loading Qwen3 14B onto the GPU) from the first run's wait, a clear win for
+  the visitor's experience.
+- The cost: every visit, including the many that never run anything, would pay for the GPU's start-up plus
+  its idle time before it shuts down, all out of the $30 credit.
+- Options to weigh: warm on arrival; warm on a sign of intent instead (choosing Modal, focusing the prompt,
+  signing in), which pays only for likely runs; or no warm-up, with an honest "starting the GPU" message.
+  Measure the cold-start time and the cost per warm-up before deciding.
