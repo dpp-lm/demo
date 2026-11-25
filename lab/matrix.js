@@ -1,6 +1,7 @@
 // Matrix orderings lab: the pool's DPP kernel L under different row orders, side by side.
 // Everything is computed from L = diag(√w) G diag(√w), the matrix the DPP uses.
 import { averageLinkageOrder, flatPivotOrder, nestedPivotOrder, themeOrder, pivotedCholesky } from './orderings.js';
+import { condition } from './condition.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -18,7 +19,10 @@ const ORDERS = [
 const sliderToT = (v) => (v >= 1000 ? Infinity : 10 ** (-1 + (4 * v) / 1000));
 const fmtT = (T) => (T === Infinity ? '∞' : T >= 100 ? T.toFixed(0) : T >= 10 ? T.toFixed(1) : T.toFixed(2));
 
-const S = { index: null, samples: null, G: null, L: null, n: 0, opts: { K: 3, T: 20, target: 'global', mode: 'map' }, panels: [], picks: [] };
+// sel: the selected completions (conditioning); cond: L conditioned on them; basis: the kernel the rows are ordered
+// on (L, or L^A after "Re-order") and the K that goes with it; version: bumped whenever the basis changes.
+const S = { index: null, samples: null, G: null, L: null, n: 0, opts: { K: 3, T: 20, target: 'global', mode: 'map' }, panels: [], picks: [],
+  sel: [], cond: null, pi0: null, basis: null, version: 0, msg: '' };
 const cache = new Map();
 
 async function loadIndex() {
@@ -41,7 +45,7 @@ async function loadPool() {
   const first = new Map(), c = samples.map((s, i) => (first.has(s.text) ? first.get(s.text) : (first.set(s.text, i), i)));
   const G = new Float64Array(n * n);
   for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) G[i * n + j] = i === j ? 1 : raw[c[i] * M + c[j]];
-  Object.assign(S, { samples, G, n });
+  Object.assign(S, { samples, G, n, sel: [] });
   rebuild();
 }
 
@@ -53,16 +57,46 @@ function rebuild() {
   const weigh = (l) => { const m = Math.max(...l), w = l.map((x) => Math.exp(x - m)), A = new Float64Array(n * n); for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) A[i * n + j] = Math.sqrt(w[i] * w[j]) * G[i * n + j]; return A; };
   S.L = weigh(lw);
   S.picks = pivotedCholesky(o.mode === 'map' ? S.L : weigh(lk), n).piv.slice(0, o.K);   // greedy (Most likely) picks use κ
+  S.pi0 = condition(S.L, n, [], o.K).pi;
+  // Keep the selection under the new weights as far as it stays valid (at most K, positive volume).
+  const keep = [];
+  for (const i of S.sel.slice(0, o.K)) if (condition(S.L, n, [...keep, i], o.K).ok) keep.push(i);
+  S.sel = keep;
+  S.basis = { M: S.L, K: o.K }; S.version++;
+  recondition();
+}
+
+// Condition on the selection and redraw (the row order stays put unless the basis changes).
+function recondition() {
+  S.cond = condition(S.L, S.n, S.sel, S.opts.K);
+  const m = S.sel.length, K = S.opts.K;
+  $('#selinfo').textContent = m ? `Selected ${m} of ${K}` : `Click rows to condition (up to ${K})`;
+  $('#clear').disabled = !m;
+  $('#reorder').disabled = !(m > 0 && m < K);
   S.panels.forEach(drawPanel);
 }
 
+function toggle(i) {
+  const at = S.sel.indexOf(i), K = S.opts.K;
+  if (at >= 0) S.sel.splice(at, 1);
+  else if (S.sel.length >= K) { flash(`The selection is full (K = ${K}). Click a selected row to remove it.`); return; }
+  else if (!S.cond.addable[i]) { flash('Already explained by the selection: its leftover is zero, so no set with both has positive volume.'); return; }
+  else {
+    const c = condition(S.L, S.n, [...S.sel, i], K);
+    if (!c.ok) { flash(`Cannot add it: ${c.reason}.`); return; }
+    S.sel.push(i);
+  }
+  recondition();
+}
+function flash(text) { S.msg = text; $('#selinfo').textContent = text; setTimeout(() => { if (S.msg === text) { S.msg = ''; recondition(); } }, 2600); }
+
 function computeOrder(id) {
-  const { L, n } = S;
+  const { M: L, K } = S.basis, n = S.n;
   if (id === 'pool') return { order: [...Array(n).keys()] };
   if (id === 'avg') return averageLinkageOrder(L, n);
-  if (id === 'flat') return flatPivotOrder(L, n, S.opts.K);
+  if (id === 'flat') return flatPivotOrder(L, n, K);
   if (id === 'nest') return nestedPivotOrder(L, n);
-  return themeOrder(L, n, S.opts.K);
+  return themeOrder(L, n, K);
 }
 
 // ---------------------------------------------------------------- drawing
@@ -78,7 +112,7 @@ function makePanel(defaultOrder) {
   $('#panels').append(el);
   const P = { el, id: defaultOrder, res: null };
   $('.ord', el).value = defaultOrder;
-  $('.ord', el).onchange = (e) => { P.id = e.target.value; drawPanel(P); };
+  $('.ord', el).onchange = (e) => { P.id = e.target.value; P.v = -1; drawPanel(P); };
   const cv = $('canvas', el);
   cv.onpointermove = (e) => {
     const r = cv.getBoundingClientRect(), n = S.n;
@@ -87,24 +121,38 @@ function makePanel(defaultOrder) {
     showPair(P.res.order[row], P.res.order[col]);
   };
   cv.onpointerleave = () => showPair(-1, -1);
+  // A click (no drag) on a row adds or removes that completion from the selection.
+  let down = null;
+  cv.onpointerdown = (e) => (down = [e.clientX, e.clientY]);
+  cv.onpointerup = (e) => {
+    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6) return;
+    const r = cv.getBoundingClientRect(), row = Math.min(S.n - 1, Math.max(0, Math.floor(((e.clientY - r.top) / r.height) * S.n)));
+    toggle(P.res.order[row]);
+  };
   S.panels.push(P);
 }
 
 function drawPanel(P) {
   const n = S.n; if (!n) return;
   const t0 = performance.now();
-  P.res = computeOrder(P.id);
-  const ms = performance.now() - t0, { order } = P.res, A = S.L;
-  // Colour: paper to ink over the off-diagonal range.
+  if (P.v !== S.version) { P.res = computeOrder(P.id); P.v = S.version; P.ms = performance.now() - t0; }   // the order changes only with its basis
+  const ms = P.ms, { order } = P.res, A = S.cond.LA;
+  // Colour: paper to ink over the off-diagonal range of the unconditioned L, so conditioning shows as real fading.
   let lo = Infinity, hi = -Infinity;
-  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (i !== j) { const v = A[i * n + j]; if (v < lo) lo = v; if (v > hi) hi = v; }
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (i !== j) { const v = S.L[i * n + j]; if (v < lo) lo = v; if (v > hi) hi = v; }
   if (!(hi > lo)) { lo = 0; hi = 1; }
-  const c0 = parseRGB(css('--surface')), c1 = parseRGB(css('--ink'));
+  const c0 = parseRGB(css('--surface')), c1 = parseRGB(css('--ink')), ca = parseRGB(css('--accent'));
+  const inSel = new Uint8Array(n); for (const i of S.sel) inSel[i] = 1;
   const cv = $('canvas', P.el); cv.width = n; cv.height = n;
   const ctx = cv.getContext('2d'), img = ctx.createImageData(n, n);
   for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
-    const v = A[order[r] * n + order[c]], t = Math.min(1, Math.max(0, (v - lo) / (hi - lo))), k = (r * n + c) * 4;
-    for (let ch = 0; ch < 3; ch++) img.data[k + ch] = Math.round(c0[ch] + (c1[ch] - c0[ch]) * t);
+    const i = order[r], j = order[c], k = (r * n + c) * 4;
+    if (inSel[i] || inSel[j]) {   // selected: out of play, a light accent cross
+      for (let ch = 0; ch < 3; ch++) img.data[k + ch] = Math.round(c0[ch] + (ca[ch] - c0[ch]) * 0.18);
+    } else {
+      const t = Math.min(1, Math.max(0, (A[i * n + j] - lo) / (hi - lo)));
+      for (let ch = 0; ch < 3; ch++) img.data[k + ch] = Math.round(c0[ch] + (c1[ch] - c0[ch]) * t);
+    }
     img.data[k + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
@@ -140,7 +188,9 @@ function drawPanel(P) {
     let sum = 0;
     ls += `<line x1="4" x2="4" y1="0" y2="${n}" stroke="${muted}" stroke-width="1" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>`;
     for (let r = 0; r < n; r++) {
-      const i = order[r], sh = part(i, theme[i]) / pi[i];
+      const i = order[r];
+      if (!(pi[i] > 0)) continue;   // selected items, after a re-order on L^A
+      const sh = part(i, theme[i]) / pi[i];
       sum += sh;
       ls += `<rect x="${56 - 52 * sh}" y="${r + 0.12}" width="${52 * sh}" height="0.76" fill="${ink}" opacity="0.55"/>`;
     }
@@ -148,7 +198,7 @@ function drawPanel(P) {
   }
   for (const i of S.picks) ls += `<rect x="66" y="${pos[i]}" width="4" height="1" fill="${accent}"/>`;
   left.innerHTML = ls;
-  const o = S.opts, nb = blocks.length ? `${blocks.length} blocks · ` : '';
+  const o = S.opts, nb = (blocks.length ? `${blocks.length} blocks · ` : '') + (S.basis.M !== S.L ? 'ordered on L^A · ' : '');
   $('.note', P.el).textContent = `${nb}${strength}T = ${fmtT(o.T)} · ${o.mode === 'map' ? 'κ' : 'κ/q'} · ${ms.toFixed(0)} ms`;
 }
 
@@ -166,16 +216,20 @@ function showPair(i, j) {
   const extra = (a) => {
     const bits = [`log p ${s(a).logp.toFixed(1)}`];
     if (S.picks.includes(a)) bits.push('greedy pick');
+    if (S.sel.includes(a)) bits.push('selected');
+    else if (S.sel.length >= S.opts.K) bits.push(`π ${(100 * S.pi0[a]).toFixed(1)}% → 0 (the selection already has K)`);
+    else if (S.sel.length) bits.push(`π ${(100 * S.pi0[a]).toFixed(1)}% → ${(100 * S.cond.pi[a]).toFixed(1)}% given the selection${S.cond.addable[a] ? '' : ' (already explained: leftover 0)'}`);
+    else bits.push(`π ${(100 * S.pi0[a]).toFixed(1)}%`);
     if (th) {
       const t = th.theme[a], rank = th.blocks.findIndex((b) => b[2] === t);
-      bits.push(`π ${(100 * th.pi[a]).toFixed(1)}%, ${(100 * th.part(a, t) / th.pi[a]).toFixed(0)}% of it via theme ${rank + 1} (p = ${th.p[t].toFixed(2)})`);
+      if (th.pi[a] > 0) bits.push(`${(100 * th.part(a, t) / th.pi[a]).toFixed(0)}% of π via theme ${rank + 1} (p = ${th.p[t].toFixed(2)})`);
     }
     return bits.join(' · ');
   };
   $('#hover').innerHTML = `<div class="pair">
     <div><div class="k">Row</div><div class="t">${esc(s(i).text)}</div><div class="v">${extra(i)}</div></div>
     <div><div class="k">Column</div><div class="t">${esc(s(j).text)}</div><div class="v">${extra(j)}</div></div></div>
-    <div class="v">L = ${S.L[i * n + j].toPrecision(3)} · cos = G = ${S.G[i * n + j].toFixed(4)}</div>`;
+    <div class="v">L = ${S.L[i * n + j].toPrecision(3)}${S.sel.length ? ` · L^A = ${S.cond.LA[i * n + j].toPrecision(3)}` : ''} · cos = G = ${S.G[i * n + j].toFixed(4)}</div>`;
 }
 
 // ---------------------------------------------------------------- controls
@@ -184,6 +238,8 @@ async function main() {
   makePanel('avg'); makePanel('theme');
   $('#pool').onchange = loadPool; $('#emb').onchange = loadPool;
   $('#K').onchange = (e) => { S.opts.K = Math.max(1, Math.min(12, +e.target.value || 3)); e.target.value = S.opts.K; rebuild(); };
+  $('#clear').onclick = () => { S.sel = []; if (S.basis.M !== S.L) { S.basis = { M: S.L, K: S.opts.K }; S.version++; } recondition(); };
+  $('#reorder').onclick = () => { S.basis = { M: S.cond.LA, K: S.opts.K - S.sel.length }; S.version++; recondition(); };
   $('#T').oninput = (e) => { S.opts.T = sliderToT(+e.target.value); $('#Tout').textContent = fmtT(S.opts.T); };
   $('#T').onchange = () => rebuild();
   $('#target').onchange = (e) => { S.opts.target = e.target.value; rebuild(); };

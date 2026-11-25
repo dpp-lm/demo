@@ -22,6 +22,9 @@
   .controls label { display: inline-flex; gap: 6px; align-items: center; color: var(--text-2); font-size: 13.5px; }
   select, input[type=number] { font: inherit; font-size: 13.5px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
   input[type=number] { width: 4.2em; }
+  .btn { font: inherit; font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  .btn:disabled { color: var(--muted); cursor: default; }
+  .selbar { display: inline-flex; gap: 6px; align-items: center; color: var(--text-2); font-size: 13.5px; }
   .tval { font-family: var(--mono); font-size: 13px; min-width: 3.2em; display: inline-block; }
   .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 980px) { .panels { grid-template-columns: 1fr; } }
@@ -60,12 +63,18 @@
     <label>T <input type="range" id="T" min="0" max="1000" value="575" step="5" style="width:120px"><span class="tval" id="Tout">20.0</span></label>
     <label>Target <select id="target"><option value="global">Global</option><option value="gl">Global and local</option></select></label>
     <label>Weights <select id="mode"><option value="map">Most likely (κ)</option><option value="sample">Sample (κ/q)</option></select></label>
+    <span class="selbar"><span id="selinfo"></span> <button type="button" class="btn" id="reorder" disabled>Re-order for this selection</button> <button type="button" class="btn" id="clear" disabled>Clear</button></span>
   </div>
 
   <div class="panels" id="panels"></div>
 
   <div class="hover" id="hover"><span class="k">Hover a cell to see the pair.</span></div>
 
+  <p class="legend"><b>Conditioning</b>: click a row to add that completion to a selection of up to K (click again to remove it). The matrix then
+    shows L conditioned on the selection being in the sample, L^A = L − L_{·A} L_A⁻¹ L_{A·} (the Schur complement; in GP terms the posterior
+    covariance), on the same colour scale and in the same row order, so fading is real. The rest of the sample is then a (K − |A|)-DPP with kernel L^A;
+    hover a row for its inclusion probability before and after. A completion already in the span of the selection (e.g. an exact copy) has
+    leftover zero and cannot be added: no set containing both has positive volume. "Re-order" recomputes the order from L^A.</p>
   <p class="legend">
     Everything is computed from L, the kernel the DPP uses (w = κ for Most likely, κ/q for Sample; L = G for the Global target at T = ∞).
     <b>Pool order</b>: as drawn. <b>Average linkage</b>: Manuel's order (UPGMA on 1 − cos; the cosine of L is G, so it ignores quality).

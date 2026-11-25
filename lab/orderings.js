@@ -98,7 +98,11 @@ export function nestedPivotOrder(M, n) {
  */
 export function averageLinkageOrder(M, n) {
   const D = new Float64Array(n * n);
-  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) D[i * n + j] = 1 - M[i * n + j] / Math.sqrt(M[i * n + i] * M[j * n + j] || 1);
+  // An item with no length left (e.g. after conditioning on it) is at distance 1 from everything.
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    const den = Math.sqrt(Math.max(0, M[i * n + i]) * Math.max(0, M[j * n + j]));
+    D[i * n + j] = den > 0 ? 1 - M[i * n + j] / den : 1;
+  }
   let active = Array.from({ length: n }, (_, i) => i);
   const size = new Map(active.map((i) => [i, 1])), id = new Map(active.map((i) => [i, i]));
   const dist = new Map();   // key 'a,b' with a<b (slot indices) -> distance

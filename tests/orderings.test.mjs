@@ -55,3 +55,27 @@ for (const pool of ['story_T1.0.json', 'joke_T1.5.json']) {
     }
   });
 }
+
+// Conditioning (lab/condition.js): P(i in S | A in S) against brute force over every K-set of a small kernel.
+import { condition } from '../lab/condition.js';
+import { mulberry32 } from '../js/dpp.js';
+
+test('conditioning: π(i | A) matches brute-force enumeration; volume-zero selections are refused', () => {
+  const rng = mulberry32(7), n = 9, D = 5, K = 4;
+  const X = Array.from({ length: n }, () => Array.from({ length: D }, () => rng() - 0.5));
+  const dot = (a, b) => a.reduce((s, x, d) => s + x * b[d], 0);
+  const L = new Float64Array(n * n);
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) L[i * n + j] = dot(X[i], X[j]) + (i === j ? 0.05 : 0);
+  const sets = [];
+  (function rec(s, c) { if (c.length === K) { sets.push(c.slice()); return; } for (let i = s; i < n; i++) { c.push(i); rec(i + 1, c); c.pop(); } })(0, []);
+  const w = sets.map((S) => Math.exp(logDetSub(L, n, S))), has = (S, xs) => xs.every((x) => S.includes(x));
+  for (const A of [[], [2], [2, 5], [0, 3, 7]]) {
+    const c = condition(L, n, A, K), PA = sets.reduce((s, S, k) => s + (has(S, A) ? w[k] : 0), 0);
+    for (let i = 0; i < n; i++) assert.ok(Math.abs(sets.reduce((s, S, k) => s + (has(S, [...A, i]) ? w[k] : 0), 0) / PA - c.pi[i]) < 1e-12);
+  }
+  // An exact copy of a selected item has leftover zero: not addable, and selecting both is refused.
+  const m = n + 1, src = (i) => (i === n ? 2 : i), L2 = new Float64Array(m * m);
+  for (let i = 0; i < m; i++) for (let j = 0; j < m; j++) L2[i * m + j] = dot(X[src(i)], X[src(j)]);
+  assert.equal(condition(L2, m, [2], K).addable[n], 0);
+  assert.equal(condition(L2, m, [2, n], K).ok, false);
+});
