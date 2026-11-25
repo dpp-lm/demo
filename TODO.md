@@ -30,17 +30,23 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
   effective dimension Σ λ/(λ+1) (also explains "K too large").
 - Conditioning (Schur complement): shared by greedy MAP and sampling; value as an exploration tool TBD.
 - Pairwise repulsion: π_ij/(π_i π_j) (the marginal-kernel picture; a K-DPP needs π_ij computed directly).
+- Decided (Tim): always L, the matrix the algorithm uses (G is L for the Global target at T = ∞).
+- The lab, a separate page for playing with orderings: https://timvieira.github.io/dpp-lm-demo/lab/matrix.html
+  (lab/; tests in tests/orderings.test.mjs, run before each deploy). Findings so far (details in the notes):
+  - Average linkage (Manuel's) draws the cleanest blocks, but cannot see L: the cosine of L is G.
+  - Pivoted Cholesky (greedy volume) gets the coarse blocks right; the insides are striped. The nested tree
+    puts outliers first at T = ∞ (with no quality, greedy volume favours them).
+  - Themes, by the exact split π_i = Σ_a p_a u_a(i)²: clean blocks on the joke preset; on the story preset
+    the first theme is a large, noisier block.
+- Open: which ordering to use; the order inside a block; whether conditioning (a "what if" pin) earns a place.
 
 ## Run log and shared cache (for us, not a visitor feature)
-- Store every run: full configuration (prompt, exact weights, embedder, N, T′, max tokens), seed,
-  completions with exact log p and log q, token counts, timestamp. Nothing about the visitor.
-- Cache keyed by (prompt, exact weights, T′, max tokens): a growing stream of i.i.d. draws.
-  A request for N is served from the first N draws; only the shortfall is sampled.
-  Embeddings cached per (text, embedder). 4-bit and 16-bit weights keep separate streams.
-- Where: Manuel's server (needs his agreement: it currently does not log prompt text),
-  then Modal (on hold). Export to a private place we can download from.
-- One-line notice near the prompt: "Prompts and completions are saved and may be used for research."
-- Open question: should ↑ on a cached setting add fresh draws, or show the cached ones?
+- Done on Manuel's server (25 Nov): every run is logged (nothing about the visitor), and the shared draw
+  cache exists, opt-in through `offset` (see "From Manuel's update" below). Our page says "Runs here are
+  logged for research." while a GPU-server run is in progress.
+- Open: an export of the log to a private place we can download from (ask Manuel); Modal (on hold).
+- Open question: should ↑ on a cached setting add fresh draws, or show the cached ones? (Same decision as
+  whether our page sends `offset`.)
 
 ## From Manuel's update (25 Nov): decide what to take
 - His server, beyond contract v1:
@@ -61,9 +67,8 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
   - "Sample again" as a refresh icon on the Sample button;
   - "Color by inclusion probability" in the View menu.
 
-## Waiting on Manuel
-- (Done, 25 Nov: Manuel merged the own-states PR and moved his server to contract v1. Checked here:
-  /status says version 1 with limits 200 / 256, and n = 201 and max_new_tokens = 300 get 400 bad_request.)
+Done (25 Nov): Manuel merged the own-states PR and moved his server to contract v1. Checked here: /status
+says version 1 with limits 200 / 256, and n = 201 and max_new_tokens = 300 get 400 bad_request.
 
 ## The LM's own states as an embedding
 - Decided: exact own states, no random projection. The sampler sums each sequence's raw logits; the
@@ -71,7 +76,7 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
   Pooling is the mean over generated steps, including the step that samples EOS (from his code).
 - PR opened on Manuel's fork (branch own-exact on timvieira/dpp-lm-demo, one commit on his main
   e769c13). Draft, note and numpy check in docs/manuel/ (own-exact.patch, own-exact-PR.md,
-  own_exact_check.py). It is not tested on a GPU.
+  own_exact_check.py). Tested on the GPU by Manuel (below).
 - Done on Manuel's side (25 Nov): merged and live. M built, cond(A) = 300; the hook sees raw logits (no
   −inf, not divided by T′); recovery error 1.7e-4 per step (vLLM's logits are float16), max |ΔG| 7.7e-6
   against vLLM's own final-norm states. His fix: /embed_own refuses more than 400 texts.
@@ -100,6 +105,17 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
   not a matched point. Global matches the pool only at T = 1 with T′ = 1 (then κ = p = q); for T′ ≠ 1 it
   never matches. Global and local matches at T = ∞ for every T′ (κ = p°_{T′} = q). Today's default,
   Global at T = 20, sits on the poor-fit plateau. Options: Global at T = 1, or Global and local at large T.
+- What the options give (the 9 presets drawn at T′ = 1, K = 3, Global):
+  - T = 1: fit at the floor (Sample uses 95–196 of 200 completions), but Most likely picks near-duplicates
+    (closest pair's cosine 0.76–0.99; e.g. two "The last letter from her brother…" openings, two skeleton jokes).
+  - T = 20: diverse picks (closest pair 0.38–0.81), but Sample effectively uses only 3–10 completions.
+  - Global and local at T = 20 gives the same picks as T = 1 here (with T′ = 1, κ = p^{1/20}·p ≈ p).
+  - The tension is built in: the pool can only represent targets close to the distribution it was drawn
+    from, which is dominated by quality; a target flat enough for diversity leans on the pool's rare
+    completions, where the fit breaks.
+- Undecided. Claude's recommendation: keep T = 20 (the default mode is Most likely, and the fit is about
+  Sample; the pool-fit readout already flags Sample there). The effective-count readout above would make
+  that flag easy to read.
 
 ## Later: a "follow the action" camera (decide later)
 - Today the view is set once, when the points are first drawn (axes, zoom, framing), and then only the
@@ -114,7 +130,7 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
   S_β = exp∘(β(G − 1)): origin-free (small β: det ≈ β^(K−1)·det(EᵀE), E = φ_j − φ_1), still a fixed kernel
   over strings, centred picture. Decide together with whether option C ships (see the DPP/GP handoff).
 
-## Later (from the review of Manuel's demo)
+## Later (from the review of Manuel's demo; the matrix views above now cover the kernel-matrix items)
 - Clustering: colour completions by cluster, and/or order completions by cluster (Manuel's demo has
   four methods, a group count and LLM-written group names). Decide whether any of it is faithful and
   useful enough; colour must follow the house style.

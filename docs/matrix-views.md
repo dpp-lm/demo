@@ -137,8 +137,16 @@ loads on most gives blocks grounded in how Sample works.
   conditioned K-DPP's inclusion probabilities (the e_k terms). It is a cousin of DPP sampling, not an
   instance.
 
-**Next check:** prototype the flat and nested orders on a few presets and compare the picture with Manuel's
-average-linkage order.
+**Lab findings (25 Nov), https://timvieira.github.io/dpp-lm-demo/lab/matrix.html:**
+- Average linkage draws the cleanest blocks: its leaf order both groups and seriates. But it cannot see L
+  (the cosine of L is G, so quality cancels).
+- Flat pivots get the coarse blocks right (e.g. the story preset's two main blocks at K = 3), but the
+  insides are striped: sorting by "how much the pivot explains" does not put similar rows next to each other.
+- The nested tree on G puts outliers first: at T = ∞ greedy volume takes the most unusual completions first
+  (the known weakness of farthest-first), each a tiny subtree at the top. On L at T = 20 it is better, still
+  striped.
+- So pivoted Cholesky looks good for which block a completion belongs to, and weak for the order inside a
+  block.
 
 **Open: G or L in the matrix?**
 - G is pure similarity, fixed for a pool. L is similarity × quality, and it changes with T, the target and

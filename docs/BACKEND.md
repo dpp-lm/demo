@@ -25,8 +25,8 @@ Identical completions must have identical rows: batched embedding can make copie
 by ~1e-5, so the page replaces every copy's row by the first copy's (the embedding is a function of
 the string).
 
-(The GPU server currently returns the vectors as `emb` + `D` instead; the page computes G from them in
-float64. It should move to `G`.)
+The GPU server sends `G` for every embedder, and the vectors (`emb`, `D`) only when asked with
+`"emb": true` (since 25 Nov).
 
 ## Limits
 
@@ -60,6 +60,8 @@ Errors are JSON `{code, detail}` with an HTTP status:
 | `rate_limit` | 429 | this visitor's daily runs are used up |
 | `budget` | 429 | the month's GPU budget is used up |
 | `busy` | 429 | the backend is serving other requests; try again shortly |
+| `busy` | 503 | (GPU server) a request waited more than 600 s in the queue |
+| `starting` | 503 | (GPU server) the engine is restarting; try again shortly |
 | `server` | 500 | the run failed; `detail` says why |
 
 CORS: the backend allows `https://timvieira.github.io` (and `http://localhost:*` for development),
