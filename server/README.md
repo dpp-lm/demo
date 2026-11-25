@@ -148,7 +148,7 @@ WantedBy=default.target
 
 ## Cross-origin use
 
-`server.py` adds `CORSMiddleware` for the origins `https://timvieira.github.io`, the server's own page and `http://localhost` with any port (methods GET and POST, headers `Authorization` and `Content-Type`; `Retry-After` is exposed). Error answers carry the headers too. To allow another origin, change `CORS_ORIGINS` or `CORS_ORIGIN_REGEX` in `server.py` and restart.
+`server.py` adds `CORSMiddleware` for the origins `https://timvieira.github.io`, `https://dpp-lm.github.io`, the server's own page and `http://localhost` with any port (methods GET and POST, headers `Authorization` and `Content-Type`; `Retry-After` is exposed). Error answers carry the headers too. To allow another origin, change `CORS_ORIGINS` or `CORS_ORIGIN_REGEX` in `server.py` and restart.
 
 ## Embedders
 

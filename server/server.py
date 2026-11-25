@@ -243,7 +243,7 @@ LOG_MAX_BYTES = 20 * 1024 * 1024         # logs/server.log is rotated (copy-trun
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 GIB = 2**30
 CONTRACT_VERSION = 1                     # docs/BACKEND.md
-CORS_ORIGINS = ["https://timvieira.github.io", "https://zueri-monstro.rufous-hamlet.ts.net"]   # Tim's copy and this server's own page
+CORS_ORIGINS = ["https://timvieira.github.io", "https://dpp-lm.github.io", "https://zueri-monstro.rufous-hamlet.ts.net"]   # Tim's copy, the project site and this server's own page
 CORS_ORIGIN_REGEX = r"^http://localhost(:\d+)?$"   # development pages
 
 log = logging.getLogger("dpp-sampler")

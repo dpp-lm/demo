@@ -95,7 +95,7 @@ Every error is JSON `{"code": "...", "detail": "message"}`. `detail` is the read
 
 ## CORS
 
-Allowed origins: `https://timvieira.github.io`, `https://zueri-monstro.rufous-hamlet.ts.net` (the server's own page), and `http://localhost` with any port. Methods `GET`, `POST`. Request headers `Authorization` and `Content-Type`. `Retry-After` is exposed. The owner and stats headers are not allowed cross-origin: the stats page runs on the server's own origin, where no CORS check applies. Error answers carry the same headers.
+Allowed origins: `https://timvieira.github.io`, `https://dpp-lm.github.io` (the project site), `https://zueri-monstro.rufous-hamlet.ts.net` (the server's own page), and `http://localhost` with any port. Methods `GET`, `POST`. Request headers `Authorization` and `Content-Type`. `Retry-After` is exposed. The owner and stats headers are not allowed cross-origin: the stats page runs on the server's own origin, where no CORS check applies. Error answers carry the same headers.
 
 ## `POST /describe`, `GET /queue`
 
