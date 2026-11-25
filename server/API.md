@@ -21,7 +21,7 @@ This server (`server/`) implements version 1 of the backend contract in `docs/BA
 - Contract fields: `version`, `model`, `modelKey`, `embedders` (id to repo; `own` has `null`), `defaultEmbedder`, `limits`, `auth` (always `false`: no sign-in).
 - `maxN` and `maxNewTokens` at the top level are the older spelling of `limits`, kept for the page.
 - `state` of a model is `ready`, `loading`, `cold` or `unavailable`. `own` is offered for the models in `ownModels`.
-- `logsRuns`: the server stores every successful `/sample` run with its prompt and completions (the run log, below). `drawCache`: `/sample` accepts `offset` (below). `usage`: the server stores usage counts (sessions, UI events, one row per request; no text). The page sends `visitor`, `session` and `POST /event` only when `usage` is true, and shows a notice when `logsRuns` is true.
+- `logsRuns`: the server stores every successful `/sample` run with its prompt and completions (the run log, below). `drawCache`: `/sample` accepts `offset` (below). `usage`: the server stores sessions, UI events and one row per request, with the client address and the prompt of each request (see Usage below). The page sends `visitor`, `session` and `POST /event` only when `usage` is true, and shows a notice when `logsRuns` is true.
 
 ## `POST /sample`
 
@@ -119,9 +119,9 @@ A batch generated for a stream (`offset` requests) has the same fields, `seed` i
 
 ## Usage
 
-The usage store is a SQLite database (`usage/usage.sqlite3`, directory mode 700, file 600; `DPP_USAGE=0` turns it off, `DPP_USAGE_DIR` moves it), separate from the run log. It stores sessions, UI events and one row per request to `/sample`, `/embed` and `/describe`: time, session, origin host, route, model, embedder, N, T′, max tokens, outcome (`ok` or the error code, `aborted` when the client left), queue wait, run time, `generate_s` and `embed_s`, tokens, completions, and the `run_id` of a successful sample. It stores no text and no client address.
+The usage store is a SQLite database (`usage/usage.sqlite3`, directory mode 700, file 600; `DPP_USAGE=0` turns it off, `DPP_USAGE_DIR` moves it), separate from the run log. It stores sessions, UI events and one row per request to `/sample`, `/embed` and `/describe`: time, session, origin host, route, model, embedder, N, T′, max tokens, outcome (`ok` or the error code, `aborted` when the client left), queue wait, run time, `generate_s` and `embed_s`, tokens, completions, the `run_id` of a successful sample, and, for each request, the client address (`addr`) and the prompt text (`prompt`, cut at 2000 characters, the prompt limit of `/sample`). Sessions and events also store `addr`. Completions are not stored in this database: a generated sample points to its run log line by `run_id`, and a sample answered from the draw cache points to its stream by a `stream_key` (an internal hash of the prompt and settings, never returned) with `offset` and `N`. The run log still holds nothing about the visitor. An existing database is migrated when the server opens it: the new columns are added and old rows keep an empty `addr` and `prompt`.
 
-**Identity.** The page sends optional `visitor` (a random id kept in localStorage) and `session` (a random id per page load) in the body of `/sample`, `/embed`, `/describe` and `/event`. A request without them (for example from `https://timvieira.github.io`) is grouped by day under `a-<16 hex>`, a keyed hash of the client address. The key is random, held in memory only, replaced every UTC day and never written anywhere, so the id changes daily (and at a restart) and the address cannot be recovered. The session of such a request is `d-<16 hex>`. **Origin** is the host of the `Origin` header, else of the `Referer`, else empty.
+**Identity.** The page sends optional `visitor` (a random id kept in localStorage) and `session` (a random id per page load) in the body of `/sample`, `/embed`, `/describe` and `/event`. A request without them (for example from `https://timvieira.github.io`) is grouped by day under `a-<16 hex>`, a keyed hash of the client address. The key is random, held in memory only, replaced every UTC day and never written anywhere, so the id changes daily (and at a restart). The hash only groups such requests: the address itself is stored in the `addr` columns. The session of such a request is `d-<16 hex>`. **Origin** is the host of the `Origin` header, else of the `Referer`, else empty. **Address** is the limit key of the request, `req_client` in `server.py`: the peer address, or behind the local Caddy proxy the address in `X-Real-IP`; an IPv6 address is reduced to its /64 prefix; `shared` when the proxy sends no valid address.
 
 ### `POST /event`
 
@@ -156,7 +156,7 @@ All need the header `X-Stats-Password` (the stats password) or `X-Own-Secret` (t
     "busiestHours": [{"hour": 0, "requests": 2}, "... 24 entries, hour 0 to 23 UTC ..."]
   },
   "sessions": [{"id": "<session id>", "visitor": "<first 8 characters of the visitor id>", "start": "2026-11-25T14:20:11Z", "durationS": 95,
-                "origin": "zueri-monstro.rufous-hamlet.ts.net", "referrer": "news.example.org", "runs": 2, "requests": 3, "events": 5}],
+                "origin": "zueri-monstro.rufous-hamlet.ts.net", "referrer": "news.example.org", "runs": 2, "requests": 3, "events": 5, "addr": "203.0.113.5"}],
   "sessionsTruncated": 0
 }
 ```
@@ -164,19 +164,19 @@ All need the header `X-Stats-Password` (the stats password) or `X-Own-Secret` (t
 - A session belongs to the day of its first activity. `visitors` counts distinct visitor ids, so an anonymous visitor counts once per day. `cachedRequests` counts successful `/sample` requests served entirely from a stream, `cachedCompletions` the draws read from streams (including the cached part of a request that also sampled); `completions` and `tokens` count only what was generated. `runs` are successful `/sample` requests, `requests` all requests to the three routes, `errors` requests whose outcome is not `ok`. `gpuSeconds` is the run time (after the queue wait) of every request. Session length is last activity minus first activity.
 - `daily` has one entry per UTC day from the first day with data (at most N entries) to today, so it is long for `days=all`; days without activity are zeros. `today` has the same fields as a `daily` entry.
 - `byOrigin` is sorted by `requests`; a request without an origin has the key `""`, the same value `origin` has in the sessions. `byEmbedder` counts successful runs. `byErrorCode` counts failed requests. `n`, `tprime` and `maxNewTokens` count successful runs by value, sorted by key. The medians are over `/sample` queue waits and over successful runs' `generate_s` and `embed_s`.
-- `sessions` has the 200 most recent sessions by last activity; `sessionsTruncated` is how many more the window holds.
+- `sessions` has the 200 most recent sessions by last activity; `sessionsTruncated` is how many more the window holds. `addr` is the client address of the session's first request or event that carried one, `""` for sessions stored before addresses were kept.
 
 **`GET /stats/session?id=<session id>`**: `{session, events, requests}` in time order (404 for an unknown id, 400 for a malformed one).
 
 ```json
-{"session": {"id": "...", "visitor": "a1b2c3d4", "start": "2026-11-25T14:20:11Z", "durationS": 95, "origin": "...", "referrer": ""},
+{"session": {"id": "...", "visitor": "a1b2c3d4", "start": "2026-11-25T14:20:11Z", "durationS": 95, "origin": "...", "referrer": "", "addr": "203.0.113.5"},
  "events": [{"time": "2026-11-25T14:20:11Z", "type": "load", "name": "", "value": ""}, {"time": "...", "type": "ui", "name": "mode", "value": "map"}],
  "requests": [{"time": "...", "route": "/sample", "model": "qwen3-14b", "embedder": "qwen3-emb", "N": 30, "Tprime": 1.0, "maxNewTokens": 64,
                "outcome": "ok", "queueWaitS": 0.0, "runS": 4.2, "generateS": 3.1, "embedS": 0.4, "tokens": 900, "completions": 30,
-               "runId": "<32 hex>", "prompt": "...", "cached": 0, "offset": null}]}
+               "runId": "<32 hex>", "prompt": "...", "addr": "203.0.113.5", "cached": 0, "offset": null, "drawTexts": null}]}
 ```
 
-`prompt` is read from the run log by `runId` (`null` when the run log is off or has no such line). Requests that are not successful samples have `runId` and `prompt` absent or null.
+`prompt` is the stored prompt of the request, also for failed requests when the body was read far enough to contain it (`null` for old rows; for those with a `runId` it is read from the run log, `null` when the log has no such line). `addr` is the address of the request. `drawTexts` is for a successful `/sample` with `offset`: the draws `[offset, offset + N)` of the stream, read from the draw cache as `[{text, logp, logq, nTokens, ended}]`, whether or not the request also generated some of them; `null` when the stream has been evicted, for requests without `offset` (their completions are in the run log, by `runId`), and for other routes. Requests that are not successful samples have `runId` null.
 
 **`GET /stats/run?id=<run_id>`**: the full run log line (above), with all completions, `logp` and `logq`. 404 when the run log is off or the id is unknown.
 

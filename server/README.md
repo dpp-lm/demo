@@ -93,10 +93,9 @@ exact `logp`, `logq`, `nTokens`, `ended`, the timing, the UTC time and a random 
 ## Usage stats
 
 A second store, `usage/usage.sqlite3` (SQLite, directory mode 700, file 600, `DPP_USAGE=0` to turn off, `DPP_USAGE_DIR` to move), holds sessions, UI events and one row per request to
-`/sample`, `/embed`, `/describe` (time, session, origin host, route, settings, outcome, queue wait, run time, tokens, `run_id`). It has no text and no address. It is kept apart from the
-run log; a row of a successful sample points to the run log line by `run_id`. The page sends `visitor` (random, kept in its localStorage) and `session` (random per page load),
+`/sample`, `/embed`, `/describe` (time, session, origin host, route, settings, outcome, queue wait, run time, tokens, `run_id`). It also holds the client address (the limit key of `req_client`: the `X-Real-IP` behind Caddy, IPv6 as its /64) in sessions, events and requests, and the prompt text of every request (cut at 2000 characters). It holds no completions: a generated sample points to its run log line by `run_id`, and a sample answered from the draw cache points to its stream (an internal `stream_key`, plus `offset` and N), from which `/stats/session` reads the texts as long as the stream is cached. The run log stays free of visitor data. An older database file is migrated when the server opens it (columns added, old rows keep empty values). The page sends `visitor` (random, kept in its localStorage) and `session` (random per page load),
 and `POST /event` for the page load and a few UI events. A request without ids is grouped per UTC day under a keyed hash of the client address; the key is random, kept in
-memory and replaced every day. `GET /stats`, `/stats/session`, `/stats/run` serve the dashboard and need `X-Stats-Password`.
+memory and replaced every day, and the address is stored next to it. `GET /stats`, `/stats/session`, `/stats/run` serve the dashboard and need `X-Stats-Password`.
 
 `/stats?days=all` returns the whole history. `totals.cachedRequests` and `cachedCompletions` count reads from the draw cache.
 

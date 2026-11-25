@@ -1,12 +1,17 @@
 """Private usage store of the demo server: sessions, UI events and one row per request (no GPU imports, unit-testable).
 
 Kept apart from the research run log (`api_guard.RunLog`), which holds the completions and nothing about visitors.
-This store holds who did what and when, never text: a row of `requests` may point at a run-log record by `run_id`.
+This store holds who did what and when. It stores the client address (the limit key `req_client` returns: the visitor address
+from X-Real-IP behind Caddy, IPv6 reduced to its /64, or 'shared' when there is none) in `sessions`, `events` and `requests`, and the
+prompt text of each request in `requests`. Completions are not stored here. A row of `requests` points at them by `run_id` (run log)
+or, for a request answered from the draw cache, by `stream_key` with `stream_offset` and `n` (the draw cache holds the texts).
 
 Identity. The page sends a random `visitor` (kept in its localStorage) and a random `session` (per page load) with its
 requests and in `POST /event`. A request without them (for example Tim's copy of the page) is grouped per UTC day under
 `DailySalt.anon_id(client)`, a keyed hash of the client address whose key is random, lives in memory only and is replaced
-every UTC day. The address itself is never stored, and the same visitor gets a different id on every day.
+every UTC day. The hash only groups such requests; the address is stored next to it in the `addr` columns.
+Databases made before the `addr`, `prompt` and `stream_key` columns existed are migrated in place on open (`_migrate`): the columns
+are added and old rows keep ''.
 
 Database: SQLite, mode 600, in a directory of mode 700 (`DPP_USAGE_DIR`, default `usage/` next to server.py).
 """
@@ -138,16 +143,16 @@ class UsageStore:
     SCHEMA = """
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY, visitor TEXT NOT NULL, first_t REAL NOT NULL, last_t REAL NOT NULL, day TEXT NOT NULL,
-      origin TEXT NOT NULL DEFAULT '', referrer TEXT NOT NULL DEFAULT '', events INTEGER NOT NULL DEFAULT 0);
+      origin TEXT NOT NULL DEFAULT '', referrer TEXT NOT NULL DEFAULT '', events INTEGER NOT NULL DEFAULT 0, addr TEXT NOT NULL DEFAULT '');
     CREATE INDEX IF NOT EXISTS sessions_day ON sessions(day);
     CREATE TABLE IF NOT EXISTS events (
-      id INTEGER PRIMARY KEY, t REAL NOT NULL, session TEXT NOT NULL, type TEXT NOT NULL, name TEXT, value TEXT);
+      id INTEGER PRIMARY KEY, t REAL NOT NULL, session TEXT NOT NULL, type TEXT NOT NULL, name TEXT, value TEXT, addr TEXT NOT NULL DEFAULT '');
     CREATE INDEX IF NOT EXISTS events_session ON events(session);
     CREATE TABLE IF NOT EXISTS requests (
       id INTEGER PRIMARY KEY, t REAL NOT NULL, day TEXT NOT NULL, session TEXT NOT NULL, origin TEXT NOT NULL DEFAULT '',
       route TEXT NOT NULL, model TEXT, embedder TEXT, n INTEGER, tprime REAL, max_new INTEGER, outcome TEXT NOT NULL,
       wait_s REAL, run_s REAL, gen_s REAL, embed_s REAL, tokens INTEGER, completions INTEGER, run_id TEXT,
-      cached_n INTEGER, stream_offset INTEGER);
+      cached_n INTEGER, stream_offset INTEGER, addr TEXT NOT NULL DEFAULT '', prompt TEXT NOT NULL DEFAULT '', stream_key TEXT);
     CREATE INDEX IF NOT EXISTS requests_day ON requests(day);
     CREATE INDEX IF NOT EXISTS requests_session ON requests(session);
     CREATE INDEX IF NOT EXISTS requests_run ON requests(run_id);
@@ -174,14 +179,26 @@ class UsageStore:
                 self.db.execute("PRAGMA journal_mode=WAL")
                 self.db.execute("PRAGMA synchronous=NORMAL")
                 self.db.executescript(self.SCHEMA)
-                have = {r[1] for r in self.db.execute("PRAGMA table_info(requests)")}
-                for col in ("cached_n", "stream_offset"):   # databases made before the draw cache
-                    if col not in have:
-                        self.db.execute(f"ALTER TABLE requests ADD COLUMN {col} INTEGER")
+                self._migrate(self.db)
             finally:
                 os.umask(old)
             os.chmod(self.path, 0o600)
         return self.db
+
+    MIGRATIONS = (("requests", "cached_n", "INTEGER"), ("requests", "stream_offset", "INTEGER"),   # before the draw cache
+                  ("sessions", "addr", "TEXT NOT NULL DEFAULT ''"), ("events", "addr", "TEXT NOT NULL DEFAULT ''"),
+                  ("requests", "addr", "TEXT NOT NULL DEFAULT ''"), ("requests", "prompt", "TEXT NOT NULL DEFAULT ''"),
+                  ("requests", "stream_key", "TEXT"))
+
+    @classmethod
+    def _migrate(cls, db):
+        """Add every column of MIGRATIONS that an older database file lacks. Old rows keep the default ('' or NULL)."""
+        have = {}
+        for table, col, decl in cls.MIGRATIONS:
+            if table not in have:
+                have[table] = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+            if col not in have[table]:
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
     def _safe(self, f, *a):
         """Run a write under the lock; a failure is reported and swallowed (a usage record never fails a request)."""
@@ -199,34 +216,35 @@ class UsageStore:
 
     # ---------------------------------------------------------------- writes
     @staticmethod
-    def _touch(db, session, visitor, t, origin, referrer=""):
+    def _touch(db, session, visitor, t, origin, referrer="", addr=""):
         row = db.execute("SELECT 1 FROM sessions WHERE id=?", (session,)).fetchone()
         if row is None:
-            db.execute("INSERT INTO sessions(id, visitor, first_t, last_t, day, origin, referrer) VALUES(?,?,?,?,?,?,?)",
-                       (session, visitor, t, t, day_of(t), origin, referrer))
-        else:
+            db.execute("INSERT INTO sessions(id, visitor, first_t, last_t, day, origin, referrer, addr) VALUES(?,?,?,?,?,?,?,?)",
+                       (session, visitor, t, t, day_of(t), origin, referrer, addr))
+        else:   # the first non-empty value of origin, referrer and addr stays
             db.execute("UPDATE sessions SET last_t=MAX(last_t, ?), origin=CASE WHEN origin='' THEN ? ELSE origin END, "
-                       "referrer=CASE WHEN referrer='' THEN ? ELSE referrer END WHERE id=?", (t, origin, referrer, session))
+                       "referrer=CASE WHEN referrer='' THEN ? ELSE referrer END, addr=CASE WHEN addr='' THEN ? ELSE addr END WHERE id=?",
+                       (t, origin, referrer, addr, session))
 
     def record_request(self, t, session, visitor, origin, route, outcome, model=None, embedder=None, n=None, tprime=None,
                        max_new=None, wait_s=None, run_s=None, gen_s=None, embed_s=None, tokens=None, completions=None, run_id=None,
-                       cached=None, offset=None):
+                       cached=None, offset=None, addr="", prompt="", stream_key=None):
         def w(db):
-            self._touch(db, session, visitor, t, origin)
+            self._touch(db, session, visitor, t, origin, addr=addr)
             db.execute("INSERT INTO requests(t, day, session, origin, route, model, embedder, n, tprime, max_new, outcome, wait_s, run_s,"
-                       " gen_s, embed_s, tokens, completions, run_id, cached_n, stream_offset) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                       " gen_s, embed_s, tokens, completions, run_id, cached_n, stream_offset, addr, prompt, stream_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (t, day_of(t), session, origin, route, model, embedder, n, tprime, max_new, outcome, wait_s, run_s, gen_s,
-                        embed_s, tokens, completions, run_id, cached, offset))
+                        embed_s, tokens, completions, run_id, cached, offset, addr, prompt or "", stream_key))
         return self._safe(w)
 
-    def record_event(self, t, session, visitor, origin, etype, name="", value="", ref=""):
+    def record_event(self, t, session, visitor, origin, etype, name="", value="", ref="", addr=""):
         """Store a UI event. Returns 'ok', 'ignored' (the session is at its event cap) or None on failure."""
         def w(db):
-            self._touch(db, session, visitor, t, origin, ref if etype == "load" else "")
+            self._touch(db, session, visitor, t, origin, ref if etype == "load" else "", addr)
             (n,) = db.execute("SELECT events FROM sessions WHERE id=?", (session,)).fetchone()
             if n >= MAX_EVENTS_PER_SESSION:
                 return "ignored"
-            db.execute("INSERT INTO events(t, session, type, name, value) VALUES(?,?,?,?,?)", (t, session, etype, name, value))
+            db.execute("INSERT INTO events(t, session, type, name, value, addr) VALUES(?,?,?,?,?,?)", (t, session, etype, name, value, addr))
             db.execute("UPDATE sessions SET events=events+1 WHERE id=?", (session,))
             return "ok"
         return self._safe(w)
@@ -242,7 +260,7 @@ class UsageStore:
         since = "0000-01-01" if everything else day_of(now - (days - 1) * 86400)
 
         def r(db):
-            ses = db.execute("SELECT id, visitor, first_t, last_t, day, origin, referrer, events FROM sessions WHERE day>=? ORDER BY first_t",
+            ses = db.execute("SELECT id, visitor, first_t, last_t, day, origin, referrer, events, addr FROM sessions WHERE day>=? ORDER BY first_t",
                              (since,)).fetchall()
             req = db.execute("SELECT t, day, session, origin, route, model, embedder, n, tprime, max_new, outcome, wait_s, run_s, gen_s,"
                              " embed_s, tokens, completions, run_id, cached_n FROM requests WHERE day>=? ORDER BY t", (since,)).fetchall()
@@ -311,19 +329,20 @@ class UsageStore:
             "sessions": [{"id": s[0], "visitor": s[1][:8], "start": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(s[2])),
                           "durationS": round(s[3] - s[2]), "origin": s[5], "referrer": s[6],
                           "runs": per_run_sessions.get(s[0], [0, 0])[1], "requests": per_run_sessions.get(s[0], [0, 0])[0],
-                          "events": s[7]} for s in shown],
+                          "events": s[7], "addr": s[8]} for s in shown],
             "sessionsTruncated": max(0, len(order) - len(shown)),
         }
 
     def session(self, sid):
-        """Events and requests of one session in time order, or None when the session is unknown."""
+        """Events and requests of one session in time order, or None when the session is unknown. A request has `_stream`, the draw-cache
+        stream key (or None), which the route turns into `drawTexts` and drops."""
         def r(db):
-            s = db.execute("SELECT id, visitor, first_t, last_t, origin, referrer FROM sessions WHERE id=?", (sid,)).fetchone()
+            s = db.execute("SELECT id, visitor, first_t, last_t, origin, referrer, addr FROM sessions WHERE id=?", (sid,)).fetchone()
             if s is None:
                 return None
             ev = db.execute("SELECT t, type, name, value FROM events WHERE session=? ORDER BY t, id", (sid,)).fetchall()
             rq = db.execute("SELECT t, route, model, embedder, n, tprime, max_new, outcome, wait_s, run_s, gen_s, embed_s, tokens,"
-                            " completions, run_id, cached_n, stream_offset FROM requests WHERE session=? ORDER BY t, id", (sid,)).fetchall()
+                            " completions, run_id, cached_n, stream_offset, prompt, addr, stream_key FROM requests WHERE session=? ORDER BY t, id", (sid,)).fetchall()
             return s, ev, rq
         got = self._safe(r)
         if got is None:
@@ -331,11 +350,11 @@ class UsageStore:
         s, ev, rq = got
         iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
         return {
-            "session": {"id": s[0], "visitor": s[1][:8], "start": iso(s[2]), "durationS": round(s[3] - s[2]), "origin": s[4], "referrer": s[5]},
+            "session": {"id": s[0], "visitor": s[1][:8], "start": iso(s[2]), "durationS": round(s[3] - s[2]), "origin": s[4], "referrer": s[5], "addr": s[6]},
             "events": [{"time": iso(e[0]), "type": e[1], "name": e[2] or "", "value": e[3] or ""} for e in ev],
             "requests": [{"time": iso(q[0]), "route": q[1], "model": q[2], "embedder": q[3], "N": q[4], "Tprime": q[5], "maxNewTokens": q[6],
                           "outcome": q[7], "queueWaitS": q[8], "runS": q[9], "generateS": q[10], "embedS": q[11], "tokens": q[12],
-                          "completions": q[13], "runId": q[14], "cached": q[15], "offset": q[16]} for q in rq],
+                          "completions": q[13], "runId": q[14], "cached": q[15], "offset": q[16], "prompt": q[17] or None, "addr": q[18], "_stream": q[19]} for q in rq],
         }
 
     def run_day(self, run_id):

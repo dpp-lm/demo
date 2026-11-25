@@ -1,5 +1,5 @@
 """Unit tests of the run log (api_guard.RunLog) and the usage store (usage.py); no GPU: .venv/bin/python tests/test_usage.py"""
-import json, os, stat, sys, tempfile, threading, time
+import json, os, sqlite3, stat, sys, tempfile, threading, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from fastapi import HTTPException
 import api_guard as G
@@ -170,14 +170,56 @@ src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "usage
 srv = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server.py")).read()
 check("the salt is never written to disk (no file write or database use of it)", "self.key" in src and "open(" not in src.split("class DailySalt")[1].split("def check_password")[0]
       and "SALT" in srv and "SALT.key" not in srv and "USAGE.record" not in srv.split("SALT =")[0])
-# everything stored and everything returned is free of raw addresses
+# the address is stored in the addr columns; the daily id next to it is the hash and does not contain it
 for addr in ("203.0.113.9", "198.51.100.7"):
-    St.record_request(NOON + 90, "d-" + "9" * 16, salt.anon_id(addr)[0], "timvieira.github.io", "/sample", "ok", model="m", embedder="e", n=2, run_id="d" * 32)
-dump = St.dump_text() + json.dumps(St.stats(30, now=NOON + 100)) + json.dumps(St.session("d-" + "9" * 16))
-raw = open(St.path, "rb").read() + (open(St.path + "-wal", "rb").read() if os.path.exists(St.path + "-wal") else b"")
-check("stored data and /stats output contain no raw client address", all(a not in dump and a.encode() not in raw for a in ("203.0.113.9", "198.51.100.7", "203.0.113", "198.51.100")))
+    St.record_request(NOON + 90, "d-" + "9" * 16, salt.anon_id(addr)[0], "timvieira.github.io", "/sample", "ok", model="m", embedder="e", n=2, run_id="d" * 32, addr=addr, prompt="p")
+dump = St.dump_text()
+check("stored addresses are in the addr columns and in no other column", "203.0.113.9" in dump and "198.51.100.7" in dump
+      and all(a not in v for a in ("203.0.113.9", "198.51.100.7") for r in sqlite3.connect(St.path).execute("SELECT id, visitor FROM sessions") for v in r))
+check("/stats/session of that session has the address", St.session("d-" + "9" * 16)["session"]["addr"] == "203.0.113.9" and St.session("d-" + "9" * 16)["requests"][1]["addr"] == "198.51.100.7")
 check("files next to the db have mode 600", all(mode(os.path.join(d3, f)) == 0o600 for f in os.listdir(d3)), sorted(os.listdir(d3)))
-check("no table has a user-agent, address or secret column", all(c not in src.lower().split("schema = ")[1].split('"""')[1] for c in ("user_agent", "agent", "address", "ip ", "secret")))
+check("no table has a user-agent or secret column", all(c not in src.lower().split("schema = ")[1].split('"""')[1] for c in ("user_agent", "agent", "secret")))
+
+# ---------------------------------------------------------------- address, prompt, stream key, migration
+SA = "sa" * 6
+St.record_event(NOON + 200, SA, "va" * 6, "x", "load", addr="203.0.113.9")
+St.record_event(NOON + 201, SA, "va" * 6, "x", "ui", "mode", "map", addr="198.51.100.7")
+St.record_request(NOON + 202, SA, "va" * 6, "x", "/sample", "ok", model="m", n=2, run_id="f" * 32, addr="203.0.113.9", prompt="Name a color.", stream_key="k" * 64, offset=3, cached=2)
+St.record_request(NOON + 203, SA, "va" * 6, "x", "/describe", "bad_request", addr="203.0.113.9")
+sa = St.session(SA)
+check("session detail has the address of the session (the first one stored)", sa["session"]["addr"] == "203.0.113.9", sa["session"])
+check("request detail has addr, prompt (None when empty) and the internal stream key", [(q["addr"], q["prompt"], q["_stream"]) for q in sa["requests"]] == [("203.0.113.9", "Name a color.", "k" * 64), ("203.0.113.9", None, None)], sa["requests"])
+check("/stats sessions list has addr", {s["id"]: s["addr"] for s in St.stats(7, now=NOON + 300)["sessions"]}[SA] == "203.0.113.9" and all("addr" in s for s in St.stats(7, now=NOON + 300)["sessions"]))
+db = sqlite3.connect(St.path)
+check("event rows hold the address", [r[0] for r in db.execute("SELECT addr FROM events WHERE session=? ORDER BY id", (SA,))] == ["203.0.113.9", "198.51.100.7"])
+check("columns: sessions.addr, events.addr, requests.addr, requests.prompt, requests.stream_key",
+      all(c in {r[1] for r in db.execute(f"PRAGMA table_info({t})")} for t, c in (("sessions", "addr"), ("events", "addr"), ("requests", "addr"), ("requests", "prompt"), ("requests", "stream_key"))))
+db.close()
+check("rows written without an address keep '' in /stats", [s["addr"] for s in St.stats(7, now=NOON + 100)["sessions"] if s["id"] == S1] == [""])
+# migration: a database file with the schema before the address, prompt and stream_key columns (and before the draw cache)
+dm = os.path.join(tempfile.mkdtemp(), "old"); os.makedirs(dm)
+old = sqlite3.connect(os.path.join(dm, "usage.sqlite3"))
+old.executescript("""
+CREATE TABLE sessions (id TEXT PRIMARY KEY, visitor TEXT NOT NULL, first_t REAL NOT NULL, last_t REAL NOT NULL, day TEXT NOT NULL,
+  origin TEXT NOT NULL DEFAULT '', referrer TEXT NOT NULL DEFAULT '', events INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE events (id INTEGER PRIMARY KEY, t REAL NOT NULL, session TEXT NOT NULL, type TEXT NOT NULL, name TEXT, value TEXT);
+CREATE TABLE requests (id INTEGER PRIMARY KEY, t REAL NOT NULL, day TEXT NOT NULL, session TEXT NOT NULL, origin TEXT NOT NULL DEFAULT '',
+  route TEXT NOT NULL, model TEXT, embedder TEXT, n INTEGER, tprime REAL, max_new INTEGER, outcome TEXT NOT NULL,
+  wait_s REAL, run_s REAL, gen_s REAL, embed_s REAL, tokens INTEGER, completions INTEGER, run_id TEXT);""")
+old.execute("INSERT INTO sessions VALUES('oldsession1', 'oldvisitor1', ?, ?, ?, 'x', '', 1)", (NOON, NOON + 5, day_of(NOON)))
+old.execute("INSERT INTO events(t, session, type, name, value) VALUES(?, 'oldsession1', 'load', '', '')", (NOON,))
+old.execute("INSERT INTO requests(t, day, session, route, model, n, outcome, run_s, completions, run_id) VALUES(?, ?, 'oldsession1', '/sample', 'm', 4, 'ok', 1.0, 4, ?)", (NOON + 1, day_of(NOON), "1" * 32))
+old.commit(); old.close()
+Sm = U.UsageStore(dm, True, errs.append)
+n0 = len(errs)
+Sm.record_request(NOON + 10, "oldsession1", "oldvisitor1", "x", "/sample", "ok", n=2, addr="192.0.2.1", prompt="new prompt", stream_key="z" * 64, offset=0)   # opens and migrates
+cols = lambda t: {r[1] for r in sqlite3.connect(Sm.path).execute(f"PRAGMA table_info({t})")}
+check("migration adds addr, prompt, stream_key, cached_n, stream_offset to an old file", {"addr"} <= cols("sessions") & cols("events") & cols("requests") and {"prompt", "stream_key", "cached_n", "stream_offset"} <= cols("requests") and len(errs) == n0, errs[n0:])
+so = Sm.session("oldsession1")
+check("migrated: old rows keep '' (prompt None in the API), the old session and event stay, new rows have the new fields",
+      so["session"]["addr"] == "192.0.2.1" and [(q["addr"], q["prompt"], q["runId"]) for q in so["requests"]] == [("", None, "1" * 32), ("192.0.2.1", "new prompt", None)] and len(so["events"]) == 1, so)
+Sm2 = U.UsageStore(dm, True, errs.append)
+check("opening a migrated file again is a no-op and the stats still work", Sm2.stats(30, now=NOON + 100)["totals"]["requests"] == 2 and len(errs) == n0)
 
 # ---------------------------------------------------------------- password
 dd = tempfile.mkdtemp(); own = os.path.join(dd, "own"); pw = os.path.join(dd, "pw")

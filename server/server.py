@@ -835,7 +835,7 @@ async def stream_sample(req, body, owner, prompt, n, t_prime, max_new, key, embe
     client, t0, with_emb = req_client(req), time.time(), bool(body.get("emb"))
     rec = {"t": round(t0, 1), "model": key, "n": n, "t_prime": t_prime, "max_new": max_new, "embedder": embedder, "prompt_chars": len(prompt),
            "client": G.short(client), "owner": owner, "offset": offset}
-    req.state.u.update(offset=offset)
+    req.state.u.update(offset=offset, stream_key=skey)
     try:
         if end <= length:   # entirely from the stream: no queue, no GPU budget, a cheap rate limit
             if not owner:
@@ -935,8 +935,10 @@ async def stream_sample(req, body, owner, prompt, n, t_prime, max_new, key, embe
 
 
 def note_ids(req, body):
-    """Remember the page's optional `visitor` and `session` ids (malformed ones are ignored) for the usage record of this request."""
+    """Remember the page's optional `visitor` and `session` ids (malformed ones are ignored) and the body's `prompt` (a string) for the usage record of this request."""
     req.state.u["visitor"], req.state.u["session"] = U.valid_id(body.get("visitor")), U.valid_id(body.get("session"))
+    if isinstance(body.get("prompt"), str):   # stored in the usage record, also when the request fails later (capped by usage_logged)
+        req.state.u["prompt"] = body["prompt"]
 
 
 def identity(req, visitor, session, t):
@@ -976,7 +978,8 @@ def usage_logged(route):
                                              embedder=u.get("embedder"), n=u.get("n"), tprime=u.get("tprime"), max_new=u.get("max_new"),
                                              wait_s=wait, run_s=round(time.time() - t0 - (wait or 0), 2), gen_s=u.get("gen_s"),
                                              embed_s=u.get("embed_s"), tokens=u.get("tokens"), completions=u.get("completions"),
-                                             run_id=u.get("run_id"), cached=u.get("cached"), offset=u.get("offset"))
+                                             run_id=u.get("run_id"), cached=u.get("cached"), offset=u.get("offset"),
+                                             addr=req_client(req), prompt=(u.get("prompt") or "")[:MAX_PROMPT_CHARS], stream_key=u.get("stream_key"))
                 except Exception:
                     log.exception("usage record failed")
         return wrapper
@@ -1409,7 +1412,7 @@ async def event_endpoint(req: Request):
     if USAGE.enabled:
         now = time.time()
         _, visitor = identity(req, U.valid_id(body.get("visitor")), sid, now)
-        USAGE.record_event(now, sid, visitor, U.request_origin(req.headers), ev[0], ev[1], ev[2], ev[3])
+        USAGE.record_event(now, sid, visitor, U.request_origin(req.headers), ev[0], ev[1], ev[2], ev[3], addr=req_client(req))
     return Response(status_code=204)
 
 
@@ -1448,14 +1451,17 @@ async def stats_session(req: Request, id: str = ""):
     out = await asyncio.to_thread(USAGE.session, id)
     if out is None:
         raise G.bad("Unknown session.", 404)
-    days = {}
     for q in out["requests"]:
-        if q["runId"]:
-            days.setdefault(q["time"][:10], []).append(q)
-    for day, qs in days.items():   # prompt and settings of each run come from the run log, by run_id
-        for q in qs:
+        skey = q.pop("_stream")
+        if q["runId"] and not q["prompt"]:   # rows from before the usage store kept prompts: the run log has it, by run_id
             rec = await asyncio.to_thread(RUNLOG.find, q["runId"], await asyncio.to_thread(USAGE.run_day, q["runId"]))
             q["prompt"] = rec["prompt"] if rec else None
+        q["drawTexts"] = None   # the completions of a stream request: draws [offset, offset + N) read from the draw cache, None when evicted
+        if skey and q["outcome"] == "ok" and q["offset"] is not None and q["N"] and DRAWS.enabled:
+            try:
+                q["drawTexts"] = await asyncio.to_thread(DRAWS.read, skey, q["offset"], q["offset"] + q["N"], False)
+            except Exception:   # the stream was evicted or is shorter than the request
+                pass
     return JSONResponse(out, headers=NO_STORE)
 
 

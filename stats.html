@@ -124,6 +124,9 @@
   .tl .head { font-weight: 600; }
   .tl .meta { color: var(--text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .prompt { white-space: pre-wrap; overflow-wrap: anywhere; margin: 3px 0; padding: 6px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); max-height: 9em; overflow-y: auto; }
+  .addr { color: var(--text-2); font-size: 12.5px; margin: 0 0 6px; }
+  .prompt.clip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: none; cursor: pointer; }
+  .prompt.clip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .bad { color: var(--accent); font-weight: 600; }
   .run { margin-top: 6px; }
   .comps { margin-top: 6px; max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); }
@@ -447,14 +450,14 @@
     if (!sessions.length) return empty(container, "No sessions recorded in this range yet.");
     const rows = sessions.slice().sort((a, b) => (a.start < b.start ? 1 : a.start > b.start ? -1 : 0));
     const table = h("table"), head = h("tr");
-    [["Session", ""], ["Visitor", ""], ["Start (UTC)", ""], ["Duration", "num"], ["Origin", ""], ["Referrer", ""],
+    [["Session", ""], ["Visitor", ""], ["Address", ""], ["Start (UTC)", ""], ["Duration", "num"], ["Origin", ""], ["Referrer", ""],
      ["Runs", "num"], ["Requests", "num"], ["Events", "num"], ["", ""]].forEach(([t, c]) => head.appendChild(h("th", c, t)));
     table.appendChild(head);
     rows.forEach((s) => {
       const tr = h("tr", "session");
       const idc = h("td", "id nw", s.id.length > 14 ? s.id.slice(0, 14) + "…" : s.id);
       idc.title = s.id;
-      tr.append(idc, h("td", "id", s.visitor || "n/a"), h("td", "nw", fmtWhen(s.start)), h("td", "num", fmtDur(s.durationS)),
+      tr.append(idc, h("td", "id", s.visitor || "n/a"), h("td", "id nw", s.addr || "none"), h("td", "nw", fmtWhen(s.start)), h("td", "num", fmtDur(s.durationS)),
         h("td", "", s.origin || "none"), h("td", "", s.referrer || "none"),
         h("td", "num", nf(s.runs)), h("td", "num", nf(s.requests)), h("td", "num", nf(s.events)));
       const act = h("td"), btn = h("button", "small", "Details");
@@ -468,7 +471,7 @@
         try {
           const data = await api("/stats/session?id=" + encodeURIComponent(s.id));
           open = h("tr", "detail");
-          const td = h("td"); td.colSpan = 10;
+          const td = h("td"); td.colSpan = 11;
           const wrap = h("div", "stick");   // keeps the details inside the visible width of the scrolling table
           wrap.style.width = Math.max(240, container.clientWidth - 26) + "px";
           wrap.appendChild(renderTimeline(data));
@@ -489,6 +492,11 @@
     items.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : a.kind === b.kind ? 0 : a.kind === "event" ? -1 : 1));
     if (!items.length) return h("div", "empty", "No events or requests stored for this session.");
     const ul = h("ul", "tl");
+    const sess = data.session || {};
+    const top = h("div", "addr", "Address ");
+    top.appendChild(h("span", "id", sess.addr || "none"));
+    const root = h("div");
+    root.append(top, ul);
     items.forEach((it) => {
       const li = h("li"), body = h("div", "body");
       li.append(h("div", "when", fmtTime(it.t)), body);
@@ -501,7 +509,7 @@
         const oc = h("span", ok ? "" : "bad", ok ? "ok" : q.outcome);
         head.appendChild(oc);
         body.appendChild(head);
-        if (q.prompt != null) { body.appendChild(h("div", "prompt", q.prompt)); }
+        if (q.prompt) body.appendChild(promptBlock(q.prompt));
         else if (q.runId) body.appendChild(h("div", "meta", "Prompt not available (the run log has no such line)."));
         const set = [];
         if (q.model) set.push("model " + q.model);
@@ -519,10 +527,53 @@
         if (q.tokens != null) tm.push(nf(q.tokens) + " tokens");
         if (tm.length) body.appendChild(h("div", "meta", tm.join(", ")));
         if (q.runId) body.appendChild(runBlock(q.runId));
+        if (q.drawTexts && q.drawTexts.length) body.appendChild(drawBlock(q));
+        else if (q.offset != null && q.cached && !q.runId) body.appendChild(h("div", "meta", "Completions not available (the draw cache no longer has this stream)."));
       }
       ul.appendChild(li);
     });
-    return ul;
+    return root;
+  }
+
+  // One line with the full text on click or Enter; short prompts without a line break show as they are.
+  function promptBlock(text) {
+    const d = h("div", "prompt clip", text);
+    d.title = "Show the full prompt";
+    if (text.length < 80 && !text.includes("\n")) { d.className = "prompt"; d.title = ""; return d; }
+    d.tabIndex = 0; d.setAttribute("role", "button"); d.setAttribute("aria-expanded", "false");
+    const toggle = () => {
+      const open = d.classList.toggle("clip");
+      d.setAttribute("aria-expanded", String(!open));
+      d.title = open ? "Show the full prompt" : "Show one line";
+    };
+    d.addEventListener("click", toggle);
+    d.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); } });
+    return d;
+  }
+
+  // Completions of a request answered from the draw cache (the server reads them from the stream; null once evicted).
+  function drawBlock(q) {
+    const box = h("div", "run"), btn = h("button", "small", "Show completions");
+    box.appendChild(btn);
+    let panel = null;
+    btn.addEventListener("click", () => {
+      if (panel) { panel.remove(); panel = null; btn.textContent = "Show completions"; return; }
+      panel = h("div");
+      panel.appendChild(h("div", "runbar", "Draws " + nf(q.offset) + " to " + nf(q.offset + q.drawTexts.length - 1) + " of the stream"));
+      const list = h("div", "comps");
+      list.tabIndex = 0;
+      q.drawTexts.forEach((c, i) => {
+        const d = h("div", "comp");
+        d.appendChild(h("div", "txt", c.text));
+        d.appendChild(h("div", "nums", "#" + (q.offset + i) + "  log p " + num(c.logp, 3) + "  log q " + num(c.logq, 3)
+          + "  " + nf(c.nTokens) + " tokens  " + (c.ended ? "ended" : "cut at the token limit")));
+        list.appendChild(d);
+      });
+      panel.appendChild(list);
+      box.appendChild(panel);
+      btn.textContent = "Hide completions";
+    });
+    return box;
   }
 
   function copyText(text) {

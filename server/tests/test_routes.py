@@ -4,7 +4,7 @@ Usage (needs vllm and torch importable, as the service venv has): .venv/bin/pyth
 import json, os, sys, tempfile, time
 tmp = tempfile.mkdtemp()
 os.environ.update(DPP_LOGQ="1", DPP_MODELS="qwen3-14b", DPP_OWN_EMB="1", DPP_RUNLOG_DIR=os.path.join(tmp, "runlog"),
-                  DPP_USAGE_DIR=os.path.join(tmp, "usage"), DPP_STATS_PASSWORD_FILE=os.path.join(tmp, "pw"), HF_HUB_OFFLINE="1")
+                  DPP_USAGE_DIR=os.path.join(tmp, "usage"), DPP_DRAW_CACHE_DIR=os.path.join(tmp, "drawcache"), DPP_STATS_PASSWORD_FILE=os.path.join(tmp, "pw"), HF_HUB_OFFLINE="1")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import server as srv
 import api_guard as G
@@ -63,7 +63,7 @@ t0 = time.time()
 fake = type("R", (), {"client": type("C", (), {"host": "127.0.0.1"})(), "headers": {"x-real-ip": "203.0.113.77"}})()
 sess, vis = srv.identity(fake, None, None, t0)
 srv.USAGE.record_request(t0, sess, vis, "timvieira.github.io", "/sample", "ok", model="qwen3-14b", embedder="qwen3-emb", n=4, tprime=1.0, max_new=16,
-                         wait_s=0.0, run_s=1.0, gen_s=0.8, embed_s=0.2, tokens=40, completions=4, run_id="a" * 32)
+                         wait_s=0.0, run_s=1.0, gen_s=0.8, embed_s=0.2, tokens=40, completions=4, run_id="a" * 32, addr=srv.req_client(fake))
 # run log record for that run
 srv.RUNLOG.write(G.sample_record({"prompt": "Name a color.", "N": 1, "Tprime": 1.0, "maxNewTokens": 16, "seed": 1, "embedder": "x", "timing": {},
                                   "samples": [{"text": "Blue", "logp": -1.0, "logq": -1.0, "nTokens": 1, "ended": True}]}, "qwen3-14b", "Qwen/Qwen3-14B-AWQ", "rev", "qwen3-emb", t0, "a" * 32))
@@ -80,7 +80,7 @@ check("stats: shape", set(j) == {"generated", "days", "since", "totals", "today"
 check("stats: the owner key works too", c.get("/stats", headers={"X-Own-Secret": "OWNERKEY-for-tests"}).status_code == 200)
 check("stats: counted the visit, the anonymous run and the refused requests", j["totals"]["sessions"] >= 2 and j["totals"]["runs"] == 1 and j["totals"]["completions"] == 4 and j["totals"]["errors"] >= 1 and {e["key"] for e in j["breakdowns"]["byErrorCode"]} >= {"bad_request", "auth"}, j["totals"])
 body = json.dumps(j) + json.dumps(c.get("/stats/session?id=" + S1, headers={"X-Stats-Password": "test-password"}).json())
-check("stats: no raw client address anywhere in the output", "203.0.113" not in body and "127.0.0.1" not in body)
+check("stats: the loopback peer address 127.0.0.1 is never stored (the client key is the X-Real-IP)", "127.0.0.1" not in body and "203.0.113.77" in body)
 sid = sess
 sd = c.get("/stats/session", params={"id": sid}, headers={"X-Stats-Password": "test-password"}).json()
 check("stats/session: the run with its prompt from the run log", sd["requests"][0]["runId"] == "a" * 32 and sd["requests"][0]["prompt"] == "Name a color." and sd["requests"][0]["outcome"] == "ok", sd["requests"][:1])
@@ -90,6 +90,30 @@ check("stats/session: unknown 404, bad id 400", c.get("/stats/session", params={
 rr = c.get("/stats/run", params={"id": "a" * 32}, headers={"X-Stats-Password": "test-password"})
 check("stats/run: the full run-log record", rr.status_code == 200 and rr.json()["samples"][0]["logp"] == -1.0 and rr.json()["run_id"] == "a" * 32)
 check("stats/run: unknown 404", c.get("/stats/run", params={"id": "b" * 32}, headers={"X-Stats-Password": "test-password"}).status_code == 404)
+# address, prompt and cached completions in the usage store
+H = {"X-Stats-Password": "test-password"}
+check("stats/session: the address is the limit key (X-Real-IP behind the proxy), on the session and the request", sd["session"]["addr"] == "203.0.113.77" and sd["requests"][0]["addr"] == "203.0.113.77", sd["session"])
+check("stats/session: a row without a stored prompt gets it from the run log", sd["requests"][0]["prompt"] == "Name a color.")
+s1 = c.get("/stats/session", params={"id": S1}, headers=H).json()
+check("event: the address is stored on the session and /stats lists it", s1["session"]["addr"] == "203.0.113.5" and {x["id"]: x["addr"] for x in c.get("/stats?days=7", headers=H).json()["sessions"]}[S1] == "203.0.113.5")
+# a failed request still stores its address and prompt (capped at MAX_PROMPT_CHARS)
+r = c.post("/sample", json={"prompt": "P" * (srv.MAX_PROMPT_CHARS + 50), "n": 201, "visitor": V1, "session": "sessFAIL1"}, headers={"X-Real-IP": "203.0.113.6"})
+fs = c.get("/stats/session", params={"id": "sessFAIL1"}, headers=H).json()
+check("failed /sample: 400, row has address and the prompt capped at MAX_PROMPT_CHARS", r.status_code == 400 and fs["session"]["addr"] == "203.0.113.6" and fs["requests"][0]["outcome"] == "bad_request"
+      and fs["requests"][0]["prompt"] == "P" * srv.MAX_PROMPT_CHARS, [(q["outcome"], len(q["prompt"] or "")) for q in fs["requests"]])
+c.post("/embed", json={"texts": 5, "prompt": "embed prompt", "session": "sessFAIL2"}, headers={"X-Real-IP": "203.0.113.6"})
+check("failed /embed with a prompt field stores it", c.get("/stats/session", params={"id": "sessFAIL2"}, headers=H).json()["requests"][0]["prompt"] == "embed prompt")
+# a request answered from the draw cache: texts come from the stream by (key, offset, N), no run log line
+skey = srv.D.stream_key("cached prompt", "qwen3-14b", "Qwen/Qwen3-14B-AWQ", "rev", 1.0, 16)
+srv.DRAWS.append(skey, {"model_key": "qwen3-14b", "repo": "Qwen/Qwen3-14B-AWQ", "revision": "rev", "tprime": 1.0, "max_new": 16}, 0,
+                 [{"text": f"draw {i}", "logp": -1.0 - i, "logq": -1.0, "nTokens": 2, "ended": True} for i in range(6)], [None] * 6, 5, "c" * 32)
+tc = time.time()
+srv.USAGE.record_request(tc, "sessCACHE1", "visCACHE01", "x", "/sample", "ok", model="qwen3-14b", n=3, cached=3, offset=2, completions=0, addr="203.0.113.8", prompt="cached prompt", stream_key=skey)
+srv.USAGE.record_request(tc + 1, "sessCACHE1", "visCACHE01", "x", "/sample", "ok", model="qwen3-14b", n=3, cached=3, offset=5, completions=0, addr="203.0.113.8", prompt="cached prompt", stream_key=skey)   # past the end
+cs = c.get("/stats/session", params={"id": "sessCACHE1"}, headers=H).json()["requests"]
+check("stats/session: cached request has drawTexts for [offset, offset + N), prompt, no runId, no stream key in the output",
+      [d["text"] for d in cs[0]["drawTexts"]] == ["draw 2", "draw 3", "draw 4"] and cs[0]["drawTexts"][0]["logp"] == -3.0 and cs[0]["prompt"] == "cached prompt" and cs[0]["runId"] is None and "_stream" not in cs[0] and skey not in json.dumps(cs), cs[0])
+check("stats/session: a stream that is shorter than the read (or evicted) gives drawTexts null, other requests too", cs[1]["drawTexts"] is None and sd["requests"][0]["drawTexts"] is None)
 # failed attempts are limited
 srv.S["authfail"] = G.RateWindow(srv.STATS_FAILS, srv.STATS_FAIL_WINDOW)
 codes = [c.get("/stats", headers={"X-Stats-Password": f"bad{i}", "X-Real-IP": "198.51.100.200"}).status_code for i in range(srv.STATS_FAILS + 2)]

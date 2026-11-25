@@ -228,6 +228,15 @@ async def main():
         sess = al["sessions"][0]["id"]
         sd = (await ac.get("/stats/session", params={"id": sess}, headers={"X-Stats-Password": "pw-for-tests"})).json()
         check("stats/session: requests carry cached and offset", all("cached" in q and "offset" in q for q in sd["requests"]))
+        # every /sample request through the handlers stores address and prompt; the cached ones show their draws
+        allq = []
+        for s in al["sessions"]:
+            allq += (await ac.get("/stats/session", params={"id": s["id"]}, headers={"X-Stats-Password": "pw-for-tests"})).json()["requests"]
+        cq = [q for q in allq if q["route"] == "/sample" and q["outcome"] == "ok" and q["offset"] is not None]
+        check("stats/session: stream requests store the prompt and the address (the X-Real-IP these requests send)", cq and all(q["prompt"] and q["addr"].startswith(("198.51.100.", "203.0.113.")) for q in cq) and any(q["prompt"] == B["prompt"] for q in cq), sorted({(q["addr"], q["prompt"]) for q in cq}))
+        check("stats/session: stream requests list drawTexts (N texts in stream order), also those answered from the cache", all(q["drawTexts"] is not None and len(q["drawTexts"]) == q["N"] for q in cq)
+              and any(q["cached"] == q["N"] for q in cq) and all("_stream" not in q for q in allq), [(q["N"], q["cached"], q["offset"]) for q in cq[:4]])
+        check("stats/session: a request without offset has no drawTexts", all(q["drawTexts"] is None for q in allq if q["offset"] is None))
 
     # the cache off
     srv.DRAWS.enabled = False
