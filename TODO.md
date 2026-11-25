@@ -75,7 +75,7 @@ says version 1 with limits 200 / 256, and n = 201 and max_new_tokens = 300 get 4
   server recovers the full 5120-d mean hidden state ((AᵀA)⁻¹Aᵀ l̄, A = [W | 1]), centres it, and sends G.
   Pooling is the mean over generated steps, including the step that samples EOS (from his code).
 - PR opened on Manuel's fork (branch own-exact on timvieira/dpp-lm-demo, one commit on his main
-  e769c13). Draft, note and numpy check in docs/manuel/ (own-exact.patch, own-exact-PR.md,
+  e769c13). Draft, note and numpy check in docs/manuel/ on the scratch branch (own-exact.patch, own-exact-PR.md,
   own_exact_check.py). Tested on the GPU by Manuel (below).
 - Done on Manuel's side (25 Nov): merged and live. M built, cond(A) = 300; the hook sees raw logits (no
   −inf, not divided by T′); recovery error 1.7e-4 per step (vLLM's logits are float16), max |ΔG| 7.7e-6
