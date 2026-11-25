@@ -2,6 +2,7 @@ import * as d3 from 'd3';
 import { eigSym, kdpp, greedyMAPLog, quality, diversity, mulberry32 } from './dpp.js';
 import { Plot3D } from './plot3d.js';
 import { openCone } from './layout.js';   // expert:
+import { usageBody, usageNotice, usageReady } from './usage.js';   // expert: usage ids and the research notice
 import { initExplainers } from './explain.js';
 import { authEnabled, getAuth, signIn, signOut, finishSignIn } from './hfauth.js';
 import { initExpert, noteStatus, queueWatch, poolChanged, selectionChanged, pointColors, panelBottom, xopt, xModeT } from './expert.js';   // expert:
@@ -836,7 +837,7 @@ class RunError extends Error { constructor(code, message) { super(message); this
 async function callBackend(B, path, body, { signal, auth }) {
   const headers = { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${auth.token}` } : {}) };
   let r;
-  try { r = await fetch(`${B.url}${path}`, { method: 'POST', signal, headers, body: JSON.stringify(body) }); }
+  try { r = await fetch(`${B.url}${path}`, { method: 'POST', signal, headers, body: JSON.stringify(usageBody(B.url, path, body)) }); }   // expert: ids only for our server
   catch (e) { if (e.name === 'AbortError') throw e; throw new RunError('unreachable', ''); }
   const out = await r.json().catch(() => null);
   if (r.ok && out) return out;
@@ -1108,6 +1109,7 @@ function wire() {
         : 'Runs on a Hugging Face ZeroGPU Space and uses your account’s daily GPU quota; needs a free Hugging Face sign-in.';
     $('#model-note').innerHTML = escapeHtml(where) + (B.auth && a ? ` Signed in as <b>${escapeHtml(a.user)}</b>. <button type="button" class="link" id="hf-signout">Sign out</button>` : '');
     $('#hf-signout')?.addEventListener('click', (e) => { e.stopPropagation(); signOut(); modelNote(); });
+    usageNotice();   // expert: the research notice follows the selected backend
   };
   refreshNote = modelNote;
   const advSum = () => ($('#adv-sum').textContent = `${backend().short} · ${TARGETS[S.target].short} · ${readConfig().N} samples`);
@@ -1254,4 +1256,4 @@ const reveal = () => document.documentElement.classList.remove('booting');
 setTimeout(reveal, 6000);
 loadData().then(configChanged).catch((e) => {
   stageMsg('error', { title: 'The examples could not be loaded.', detail: escapeHtml(e.message || '') + ' You can still type a prompt and press ↑.', actions: '<button type="button" class="btn" data-act="reload" onclick="location.reload()">Try again</button>', sticky: '*' });
-}).then(() => Promise.race([document.fonts?.ready, new Promise((r) => setTimeout(r, 1500))])).then(() => requestAnimationFrame(reveal));
+}).then(() => Promise.race([Promise.all([document.fonts?.ready, usageReady]), new Promise((r) => setTimeout(r, 1500))]) /* expert: usageReady */).then(() => requestAnimationFrame(reveal));

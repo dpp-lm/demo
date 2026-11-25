@@ -13,6 +13,7 @@
 // }
 
 import { EXPLAIN } from './explain.js';
+import { usageStatus, initUsage } from './usage.js';
 import { serverExtras, queueText, newRequestId } from './expert-lib.js';
 import { groupsSection, initGroups, groupColors, groupInfo } from './groups.js';
 import { principledSection, initUnprincipled, npState, npModeT } from './unprincipled.js';
@@ -50,6 +51,7 @@ const $ = (s) => document.querySelector(s);
 export function noteStatus(B, body) {
   B.statusBody = body ?? null;
   B.queue = !!(body && typeof body.queue === 'object' && body.queue);
+  usageStatus(B, body);   // usage ids, the load event and the research notice (js/usage.js)
   if (on) applyServerExtras();
 }
 
@@ -198,4 +200,5 @@ export function initExpert(hooks) {
   window.addEventListener('resize', fitPanel);
   new ResizeObserver(fitPanel).observe(document.querySelector('.dock'));
   if (read()) setOn(true, { save: false });
+  initUsage();
 }

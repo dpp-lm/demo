@@ -6,6 +6,7 @@
 import { EXPLAIN } from './explain.js';
 import { GROUP_METHODS, groupLabels, groupNames, groupCounts, groupSlot, gramToVectors, decodeDescribe, newRequestId, treeOf } from './expert-lib.js';
 import { groupTexts } from './matrices.js';
+import { usageBody } from './usage.js';
 
 const DEFAULTS = { on: false, method: 'tree', k: 6, naming: 'num', llm: false };
 const NAMINGS = [{ id: 'num', label: 'Numbers' }, { id: 'kw', label: 'Keywords' }, { id: 'medoid', label: 'Typical member' }];
@@ -99,7 +100,7 @@ async function describeGroups() {
   try {
     const res = await fetch(`${info.B.url}/describe`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30000),
-      body: JSON.stringify({ prompt: pool.prompt ?? '', groups, request_id: newRequestId() }),
+      body: JSON.stringify(usageBody(info.B.url, '/describe', { prompt: pool.prompt ?? '', groups, request_id: newRequestId() })),
     });
     const body = await res.json().catch(() => null);
     if (!res.ok) throw new Error(body?.detail || body?.error || `status ${res.status}`);
