@@ -21,6 +21,15 @@ vector-length lock, point size for quality, unit positions, open the cone, axes 
 multi-model rail and morphing, his extra data files, in-browser models, Gemma, mpnet, owner-only
 routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T′ marker.
 
+## Next: the matrix views (in discussion)
+- A, high priority: the pool's similarity matrix, reordered so similar completions form blocks (VAT,
+  Bezdek & Hathaway 2002; Manuel's "pairs of completions" panel is the start). Details under discussion.
+  A dendrogram only if its ordering is coherent with the DPP's geometry (no arbitrary linkage rule).
+- Themes: eigenvectors of the kernel as themes over the completions (the dual view is where they live);
+  effective dimension Σ λ/(λ+1) (also explains "K too large").
+- Conditioning (Schur complement): shared by greedy MAP and sampling; value as an exploration tool TBD.
+- Pairwise repulsion: π_ij/(π_i π_j) (the marginal-kernel picture; a K-DPP needs π_ij computed directly).
+
 ## Run log and shared cache (for us, not a visitor feature)
 - Store every run: full configuration (prompt, exact weights, embedder, N, T′, max tokens), seed,
   completions with exact log p and log q, token counts, timestamp. Nothing about the visitor.
