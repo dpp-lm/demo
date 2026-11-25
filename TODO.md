@@ -33,19 +33,25 @@ routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T�
 - Open question: should ↑ on a cached setting add fresh draws, or show the cached ones?
 
 ## Waiting on Manuel
+- The exact own-states PR (see "The LM's own states" below).
 - The server to follow docs/BACKEND.md (scripts/conformance.mjs): refuse n > 200 with 400
   bad_request instead of capping; send G instead of emb; version and limits in /status; /embed.
 - Qwen3-Embedding-4B is now on the server (qwen3-emb-4b): decide whether to add it to the page and
   re-embed the precomputed pools (Modal and the Space would need it too).
 
-## Later: the LM's own states as an embedding
-- Manuel sent the files (Google Drive folder own_emb_qwen3-14b: P.safetensors, a 151,936 × 256 fp16
-  map from logits; mu.npy, a fixed 256-d mean; meta.json). With them, Modal and the Space could compute
-  the same vectors as his server.
-- Before wiring them in: (1) they are a random 5120 → 256 projection, against "no random projection
-  anywhere"; the alternative is exact own states on every backend (a change on his server); (2) ask him
-  how tokens are pooled (meta.json does not say; our note assumed the mean over generated tokens);
-  (3) check the own states against Qwen3-Embedding (the picks on the joke and sorting presets).
+## The LM's own states as an embedding
+- Decided: exact own states, no random projection. The sampler sums each sequence's raw logits; the
+  server recovers the full 5120-d mean hidden state ((AᵀA)⁻¹Aᵀ l̄, A = [W | 1]), centres it, and sends G.
+  Pooling is the mean over generated steps, including the step that samples EOS (from his code).
+- PR opened on Manuel's fork (branch own-exact on timvieira/dpp-lm-demo, one commit on his main
+  e769c13). Draft, note and numpy check in docs/manuel/ on the scratch branch (own-exact.patch, own-exact-PR.md,
+  own_exact_check.py). It is not tested on a GPU.
+- Waiting on Manuel: the GPU checks in the PR (does the hook see raw logits, with no −inf masking?
+  recovery against HF hidden states), merge, then build_own_M.py and a precompute run (mu_full.npy and
+  the G files).
+- Then: refresh data/cache/*.own.G.bin from his new G files (today's come from the 256-d projection),
+  and check the own states against Qwen3-Embedding (the picks on the joke and sorting presets).
+- Modal and the Space: no own states for now (his P files are the projection we are dropping).
 
 ## Later: Qwen3-Embedding-4B on Modal
 - Modal's L40S (48 GB) cannot hold Qwen3 14B (≈30 GB) plus the 4B embedder in float32 (16 GB) and the
