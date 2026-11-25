@@ -104,6 +104,16 @@ says version 1 with limits 200 / 256, and n = 201 and max_new_tokens = 300 get 4
   the embedder in bfloat16 on the L40S (similarities off by ~1e-3). Until then the page lists 4B on Modal
   and explains, with a way forward, if it is chosen.
 
+## Later: toggling the embedding as a knob on the same completions
+- Interesting for the future (Tim): switching the embedding keeps the completions and only changes G,
+  so it is a re-embedding, not a new draw; it could sit with T, K and the target as a way to compare
+  what different notions of similarity pick from the same pool. For now it stays in the upper panel.
+- Within one backend this already holds: a missing embedding re-embeds the existing completions
+  (runLive, embedTexts). Two gaps if it becomes a lower-panel knob: the empty-pool message says
+  "Press ↑ to sample N completions" when only embedding is needed; and on another backend than the one
+  that drew the completions, ↑ draws N new ones (draws are reused only per backend) instead of
+  re-embedding those on screen.
+
 ## Untested
 - Hugging Face sign-in end to end, now that the page is back at the main address.
 - Two-finger panning on a real touch screen.
