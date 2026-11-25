@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Demo usage</title>
+<style>
+  /* Colors and type copied from css/style.css (light theme; the demo has no dark theme). */
+  :root {
+    color-scheme: light;
+    --bg: #f6f1ea;
+    --surface: #fbfaf8;
+    --surface-2: #f1ede7;
+    --border: #e2ddd5;
+    --text: #333333;
+    --text-2: #555555;
+    --muted: #8a8a8a;
+    --btn: #ebe6de;
+    --btn-hover: #e1dbd1;
+    --btn-line: #d3cbbf;
+    --focus: #333333;
+    --accent: #c8473c;
+    --ink: #555555;
+    --grid: #e6dfd4;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    --r: 6px;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+  #app { max-width: 1160px; margin: 0 auto; padding: 16px 16px 60px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0; line-height: 1.2; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+  h3 { font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+  .sub { font-size: 12.5px; color: var(--text-2); margin-top: 3px; }
+  .cap { font-size: 12.5px; color: var(--text-2); margin: 0 0 8px; }
+  button {
+    font: inherit; font-size: 13px; cursor: pointer; border-radius: var(--r);
+    border: 1px solid var(--btn-line); background: var(--btn); color: var(--text); padding: 6px 12px;
+  }
+  button:hover { background: var(--btn-hover); }
+  button:disabled { opacity: .6; cursor: default; }
+  button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+  button.small { padding: 3px 9px; font-size: 12px; }
+  select, input[type=password] {
+    font: inherit; font-size: 13px; padding: 6px 8px; border-radius: var(--r);
+    border: 1px solid var(--btn-line); background: var(--surface); color: var(--text);
+  }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; min-width: 0; }
+
+  /* gate */
+  #gate { display: flex; justify-content: center; padding: 60px 0; }
+  #gate .card { max-width: 360px; width: 100%; }
+  #gate h2 { margin-bottom: 6px; }
+  #gate p { font-size: 13px; color: var(--text-2); margin: 0 0 12px; }
+  #gate .row { display: flex; gap: 8px; }
+  #gate input { flex: 1; min-width: 0; }
+  #gateError { color: var(--accent); font-size: 13px; min-height: 18px; margin-top: 8px; }
+
+  header { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  #controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #controls label { font-size: 13px; color: var(--text-2); }
+  #err { color: var(--accent); font-size: 13px; min-height: 18px; margin-bottom: 6px; }
+
+  /* tiles */
+  #tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+  .tile .k { font-size: 12.5px; color: var(--text-2); }
+  .tile .v { font-size: 24px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .tile .n { font-size: 12px; color: var(--text-2); margin-top: 1px; font-variant-numeric: tabular-nums; }
+
+  /* charts */
+  .chart-wrap { position: relative; }
+  svg.chart { width: 100%; height: auto; display: block; overflow: visible; }
+  .tick { font-size: 10px; fill: var(--text-2); font-variant-numeric: tabular-nums; }
+  .peak { font-size: 10.5px; font-weight: 600; fill: var(--text); font-variant-numeric: tabular-nums; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .hit { fill: transparent; }
+  .hit:hover { fill: var(--text); fill-opacity: .05; }
+  .tip {
+    position: absolute; pointer-events: none; opacity: 0; transform: translate(-50%, -100%);
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r);
+    padding: 4px 8px; font-size: 12px; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.1); z-index: 2;
+  }
+  .tip .tv { font-weight: 600; font-variant-numeric: tabular-nums; }
+  details.data-table { margin-top: 8px; }
+  details.data-table summary { font-size: 12.5px; color: var(--text-2); cursor: pointer; }
+
+  /* tables */
+  .scroll { overflow-x: auto; max-width: 100%; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 12px; color: var(--text-2); font-weight: 600; white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.nw { white-space: nowrap; }
+  tr.session:hover { background: var(--surface-2); }
+  tr.detail > td { background: var(--surface-2); padding: 10px 12px; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .id { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+  .empty { color: var(--text-2); font-size: 13px; padding: 6px 0; }
+
+  /* breakdown grid */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 14px; }
+  .grid > .card { margin-bottom: 0; }
+  .blist { display: grid; grid-template-columns: minmax(0, 12em) 1fr auto; gap: 4px 10px; align-items: center; font-size: 13px; }
+  .blist .bk { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .blist .bar { height: 10px; background: var(--grid); border-radius: 5px; overflow: hidden; }
+  .blist .bar i { display: block; height: 100%; background: var(--ink); border-radius: 5px; }
+  .blist .bv { font-variant-numeric: tabular-nums; text-align: right; }
+  .medians { display: flex; gap: 10px; flex-wrap: wrap; }
+  .medians .tile { flex: 1 1 130px; }
+
+  /* session timeline */
+  .stick { position: sticky; left: 0; }
+  .tl { list-style: none; margin: 0; padding: 0; }
+  .tl > li { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--btn-line); font-size: 13px; }
+  .tl > li:last-child { border-bottom: none; }
+  .tl .when { font-variant-numeric: tabular-nums; color: var(--text-2); font-size: 12px; padding-top: 1px; }
+  .tl .body { min-width: 0; }
+  .tl .head { font-weight: 600; }
+  .tl .meta { color: var(--text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .prompt { white-space: pre-wrap; overflow-wrap: anywhere; margin: 3px 0; padding: 6px 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); max-height: 9em; overflow-y: auto; }
+  .bad { color: var(--accent); font-weight: 600; }
+  .run { margin-top: 6px; }
+  .comps { margin-top: 6px; max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); }
+  .comp { padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .comp:last-child { border-bottom: none; }
+  .comp .txt { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .comp .nums { color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .runbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; font-size: 12.5px; color: var(--text-2); }
+
+  @media (max-width: 520px) {
+    .blist { grid-template-columns: minmax(0, 9em) 1fr auto; }
+    .tl > li { grid-template-columns: 58px minmax(0, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="gate">
+    <div class="card">
+      <h2>Demo usage</h2>
+      <p>Enter the stats password.</p>
+      <form class="row" id="gateForm">
+        <input type="password" id="pwInput" autocomplete="current-password" placeholder="Password" aria-label="Password">
+        <button class="primary" id="unlockBtn" type="submit">Unlock</button>
+      </form>
+      <div id="gateError" role="alert"></div>
+    </div>
+  </div>
+
+  <div id="dash" hidden>
+    <header>
+      <div>
+        <h1>Demo usage</h1>
+        <div class="sub" id="subLine"></div>
+      </div>
+      <div id="controls">
+        <label for="rangeSelect">Range</label>
+        <select id="rangeSelect">
+          <option value="7">Last 7 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="365">Last year</option>
+          <option value="366">All time</option>
+        </select>
+        <button class="small" id="refreshBtn">Refresh</button>
+        <button class="small" id="lockBtn" title="Forget the password in this browser">Lock</button>
+      </div>
+    </header>
+
+    <div id="err" role="alert"></div>
+    <div id="tiles"></div>
+
+    <div class="card">
+      <h2>Unique visitors per day</h2>
+      <p class="cap">Distinct visitor ids. A request without an id counts as a new anonymous visitor each day.</p>
+      <div class="chart-wrap"><svg class="chart" id="chartVisitors" role="img" aria-label="Unique visitors per day"></svg><div class="tip" id="tipVisitors"></div></div>
+      <details class="data-table"><summary>Daily numbers</summary><div class="scroll" id="dailyTable"></div></details>
+    </div>
+    <div class="card">
+      <h2>Runs per day</h2>
+      <p class="cap">Successful sample requests.</p>
+      <div class="chart-wrap"><svg class="chart" id="chartRuns" role="img" aria-label="Runs per day"></svg><div class="tip" id="tipRuns"></div></div>
+    </div>
+    <div class="card">
+      <h2>Errors per day</h2>
+      <p class="cap">Requests whose outcome is not ok.</p>
+      <div class="chart-wrap"><svg class="chart" id="chartErrors" role="img" aria-label="Errors per day"></svg><div class="tip" id="tipErrors"></div></div>
+    </div>
+
+    <div class="grid" id="breakdowns">
+      <div class="card"><h3>Origin</h3><p class="cap">The page that made the request.</p><div class="scroll" id="bOrigin"></div></div>
+      <div class="card"><h3>Embedder</h3><p class="cap">Successful runs.</p><div id="bEmbedder"></div></div>
+      <div class="card"><h3>Error code</h3><p class="cap">Failed requests.</p><div id="bError"></div></div>
+      <div class="card"><h3>Number of completions (N)</h3><p class="cap">Successful runs.</p><div id="bN"></div></div>
+      <div class="card"><h3>Sampling temperature (T′)</h3><p class="cap">Successful runs.</p><div id="bT"></div></div>
+      <div class="card"><h3>Max new tokens</h3><p class="cap">Successful runs.</p><div id="bMax"></div></div>
+    </div>
+
+    <div class="card">
+      <h2>Timing</h2>
+      <p class="cap">Medians: queue wait over sample requests, generate and embed times over successful runs.</p>
+      <div class="medians" id="medians"></div>
+    </div>
+
+    <div class="card">
+      <h2>Requests by hour of day</h2>
+      <p class="cap" id="hoursCap">Hours are UTC, as the server reports them.</p>
+      <div class="chart-wrap"><svg class="chart" id="chartHours" role="img" aria-label="Requests by hour of day"></svg><div class="tip" id="tipHours"></div></div>
+    </div>
+
+    <div class="card">
+      <h2>Sessions</h2>
+      <p class="cap" id="sessCap">Newest first. A session is one page load. Times are shown in UTC.</p>
+      <div class="scroll" id="sessions"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  const params = new URLSearchParams(location.search);
+  let API = "/dpp_api";
+  const apiParam = params.get("api");
+  if (apiParam && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(apiParam)) API = apiParam.replace(/\/+$/, "");
+  const PW_KEY = "dpp_stats_pw";
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const $ = (id) => document.getElementById(id);
+  const gate = $("gate"), dash = $("dash"), pwInput = $("pwInput"), gateError = $("gateError");
+  const rangeSelect = $("rangeSelect"), subLine = $("subLine"), errEl = $("err");
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+  let pw = "";
+  try { pw = localStorage.getItem(PW_KEY) || ""; } catch (_) { pw = ""; }
+
+  const nf = (n) => (n == null ? "n/a" : Number(n).toLocaleString("en-US"));
+  const num = (n, d) => (n == null ? "n/a" : Number(n).toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: 0 }));
+  function fmtDur(s) {
+    s = Math.max(0, Math.round(s || 0));
+    if (s < 60) return s + " s";
+    if (s < 3600) return Math.floor(s / 60) + " min " + (s % 60) + " s";
+    return Math.floor(s / 3600) + " h " + Math.floor((s % 3600) / 60) + " min";
+  }
+  function fmtSec(s) { return s == null ? "n/a" : (s < 10 ? Number(s).toFixed(2) : Number(s).toFixed(1)) + " s"; }
+  function fmtDay(iso) {
+    const [y, m, d] = iso.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  }
+  const fmtWhen = (iso) => (iso ? iso.slice(0, 16).replace("T", " ") : "n/a");
+  const fmtTime = (iso) => (iso ? iso.slice(11, 19) : "");
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) + "% of sessions" : "");
+
+  function showGate(msg) {
+    dash.hidden = true;
+    gate.style.display = "flex";
+    gateError.textContent = msg || "";
+    pwInput.value = "";
+    pwInput.focus();
+  }
+
+  class ApiError extends Error { constructor(kind, status) { super(kind); this.kind = kind; this.status = status; } }
+
+  async function api(path) {
+    let res;
+    try { res = await fetch(API + path, { headers: { "X-Stats-Password": pw }, cache: "no-store" }); }
+    catch (_) { throw new ApiError("network", 0); }
+    if (res.status === 401) {
+      try { localStorage.removeItem(PW_KEY); } catch (_) {}
+      pw = "";
+      showGate("That password was rejected.");
+      throw new ApiError("unauthorized", 401);
+    }
+    if (res.status === 503) throw new ApiError("unconfigured", 503);
+    if (res.status === 429) throw new ApiError("rate", 429);
+    if (!res.ok) throw new ApiError("http", res.status);
+    return res.json();
+  }
+
+  function errorMessage(e) {
+    if (e.kind === "unconfigured") return "No stats password is configured on the server. Write one to ~/dpp-sampler/.stats_password (mode 600, one line) or set DPP_STATS_PASSWORD; no restart is needed.";
+    if (e.kind === "rate") return "Too many attempts, try again in a few minutes.";
+    if (e.kind === "network") return "Could not reach the server.";
+    return "Could not load the data (HTTP " + e.status + ").";
+  }
+  // A failure on the gate shows there; on the dashboard it shows above the tiles.
+  function report(e) {
+    if (e.kind === "unauthorized") return;
+    const m = errorMessage(e);
+    if (dash.hidden) { gate.style.display = "flex"; gateError.textContent = m; } else errEl.textContent = m;
+  }
+
+  // ---- small DOM helpers: all visitor-supplied text goes through textContent ----
+  function h(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  function svgEl(name, attrs, text) {
+    const n = document.createElementNS(SVG_NS, name);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  function empty(container, msg) { container.replaceChildren(h("div", "empty", msg)); }
+
+  // ---- charts: one series each; the heading names the measure ----
+  function niceMax(v) {
+    if (!v || v <= 4) return 4;
+    const mag = Math.pow(10, Math.floor(Math.log10(v)));
+    for (const step of [1, 2, 4, 6, 8, 10]) if (v <= step * mag) return step * mag;
+    return 10 * mag;
+  }
+  function barPath(x, y, w, hh, r) {
+    r = Math.min(r, w / 2, hh);
+    return `M${x},${y + hh} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + hh} Z`;
+  }
+  // points: [{label, value, tipLabel}]
+  function renderChart(svg, tip, points, color, unit, emptyMsg) {
+    const W = 760, H = 190, padL = 42, padR = 10, padT = 18, padB = 26;
+    svg.replaceChildren();
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const values = points.map((p) => p.value || 0);
+    const mx = Math.max(0, ...values);
+    const top = niceMax(mx);
+    const yOf = (v) => padT + plotH - (v / top) * plotH;
+    for (const v of [0, top / 2, top]) {
+      const y = yOf(v);
+      svg.appendChild(svgEl("line", { class: "gridline", x1: padL, y1: y, x2: W - padR, y2: y }));
+      svg.appendChild(svgEl("text", { class: "tick", x: padL - 8, y: y + 3.5, "text-anchor": "end" }, nf(Math.round(v * 10) / 10)));
+    }
+    if (!points.length) { svg.appendChild(svgEl("text", { class: "tick", x: W / 2, y: H / 2, "text-anchor": "middle" }, emptyMsg || "No data in this range.")); return; }
+    const band = plotW / points.length;
+    const barW = Math.max(2, Math.min(24, band - 2));
+    const peakIdx = mx > 0 ? values.indexOf(mx) : -1;
+    const step = Math.max(1, Math.ceil(points.length / 6));
+    points.forEach((p, i) => {
+      const v = p.value || 0;
+      const x = padL + band * i + (band - barW) / 2;
+      const y = yOf(v);
+      const bh = padT + plotH - y;
+      if (bh > 0) svg.appendChild(svgEl("path", { d: barPath(x, y, barW, bh, 4), fill: color }));
+      if (i === peakIdx) svg.appendChild(svgEl("text", { class: "peak", x: x + barW / 2, y: Math.max(padT - 5, y - 5), "text-anchor": "middle" }, nf(v)));
+      if (i % step === 0 || i === points.length - 1) svg.appendChild(svgEl("text", { class: "tick", x: x + barW / 2, y: H - padB + 15, "text-anchor": "middle" }, p.label));
+      const hit = svgEl("rect", { class: "hit", x: padL + band * i, y: padT, width: band, height: plotH });
+      const show = () => {
+        tip.replaceChildren(h("span", "tv", nf(v) + " " + unit), document.createTextNode(" on " + p.tipLabel));
+        const box = hit.getBoundingClientRect(), wrap = svg.parentElement.getBoundingClientRect();
+        tip.style.left = Math.max(60, Math.min(wrap.width - 60, box.left - wrap.left + box.width / 2)) + "px";
+        tip.style.top = (box.top - wrap.top - 6) + "px";
+        tip.style.opacity = "1";
+      };
+      hit.addEventListener("mouseenter", show);
+      hit.addEventListener("mousemove", show);
+      hit.addEventListener("mouseleave", () => { tip.style.opacity = "0"; });
+      svg.appendChild(hit);
+    });
+  }
+
+  function renderDailyTable(container, daily) {
+    if (!daily.length) return empty(container, "No days in this range yet.");
+    const table = h("table");
+    const head = h("tr");
+    ["Day", "Visitors", "Sessions", "Runs", "Completions", "Errors"].forEach((t, i) => head.appendChild(h("th", i ? "num" : "", t)));
+    table.appendChild(head);
+    daily.slice().reverse().forEach((d) => {
+      const tr = h("tr");
+      [d.day, nf(d.visitors), nf(d.sessions), nf(d.runs), nf(d.completions), nf(d.errors)].forEach((v, i) => tr.appendChild(h("td", i ? "num" : "nw", v)));
+      table.appendChild(tr);
+    });
+    container.replaceChildren(table);
+  }
+
+  // ---- tiles ----
+  function renderTiles(t, today) {
+    const items = [
+      ["Unique visitors", nf(t.visitors), ""],
+      ["Sessions", nf(t.sessions), ""],
+      ["Sessions that ran a sample", nf(t.sessionsWithRun), pct(t.sessionsWithRun, t.sessions)],
+      ["Runs", nf(t.runs), nf(t.requests) + " requests in all"],
+      ["Completions generated", nf(t.completions), ""],
+      ["Tokens generated", nf(t.tokens), ""],
+      ["GPU time", fmtDur(t.gpuSeconds), num(t.gpuSeconds, 1) + " s of run time"],
+      ["Median session length", fmtDur(t.medianSessionS), "mean " + fmtDur(t.meanSessionS)],
+      ["Errors", nf(t.errors), ""],
+      ["Today (UTC)", nf(today.visitors) + " visitors", nf(today.sessions) + " sessions, " + nf(today.runs) + " runs, " + nf(today.errors) + " errors"],
+    ];
+    const box = $("tiles");
+    box.replaceChildren();
+    items.forEach(([k, v, n]) => {
+      const d = h("div", "tile");
+      d.append(h("div", "k", k), h("div", "v", v), h("div", "n", n || " "));
+      box.appendChild(d);
+    });
+  }
+
+  // ---- breakdowns ----
+  function renderBars(container, rows, fmtKey, emptyMsg) {
+    if (!rows || !rows.length) return empty(container, emptyMsg);
+    const mx = Math.max(...rows.map((r) => r.count));
+    const list = h("div", "blist");
+    rows.forEach((r) => {
+      const k = h("div", "bk", fmtKey ? fmtKey(r.key) : String(r.key));
+      k.title = k.textContent;
+      const bar = h("div", "bar"), fill = h("i");
+      fill.style.width = (mx ? (r.count / mx) * 100 : 0) + "%";
+      bar.appendChild(fill);
+      list.append(k, bar, h("div", "bv", nf(r.count)));
+    });
+    container.replaceChildren(list);
+  }
+  function renderOrigin(container, rows) {
+    if (!rows || !rows.length) return empty(container, "No requests in this range yet.");
+    const table = h("table"), head = h("tr");
+    ["Origin", "Requests", "Runs", "Sessions"].forEach((t, i) => head.appendChild(h("th", i ? "num" : "", t)));
+    table.appendChild(head);
+    rows.forEach((r) => {
+      const tr = h("tr");
+      tr.appendChild(h("td", "", r.key));
+      [r.requests, r.runs, r.sessions].forEach((v) => tr.appendChild(h("td", "num", nf(v))));
+      table.appendChild(tr);
+    });
+    container.replaceChildren(table);
+  }
+  function renderMedians(container, b, hasRuns) {
+    container.replaceChildren();
+    if (!hasRuns) return empty(container, "No runs in this range yet.");
+    [["Queue wait", b.medianQueueWaitS], ["Generate", b.medianGenerateS], ["Embed", b.medianEmbedS]].forEach(([k, v]) => {
+      const d = h("div", "tile");
+      d.append(h("div", "k", k), h("div", "v", fmtSec(v)));
+      container.appendChild(d);
+    });
+  }
+
+  // ---- sessions ----
+  function renderSessions(sessions, truncated) {
+    const container = $("sessions");
+    $("sessCap").textContent = "Newest first. A session is one page load. Times are UTC."
+      + (truncated > 0 ? " The " + nf(sessions.length) + " most recent sessions are shown, " + nf(truncated) + " older ones are not." : "");
+    if (!sessions.length) return empty(container, "No sessions recorded in this range yet.");
+    const rows = sessions.slice().sort((a, b) => (a.start < b.start ? 1 : a.start > b.start ? -1 : 0));
+    const table = h("table"), head = h("tr");
+    [["Session", ""], ["Visitor", ""], ["Start (UTC)", ""], ["Duration", "num"], ["Origin", ""], ["Referrer", ""],
+     ["Runs", "num"], ["Requests", "num"], ["Events", "num"], ["", ""]].forEach(([t, c]) => head.appendChild(h("th", c, t)));
+    table.appendChild(head);
+    rows.forEach((s) => {
+      const tr = h("tr", "session");
+      const idc = h("td", "id nw", s.id.length > 14 ? s.id.slice(0, 14) + "…" : s.id);
+      idc.title = s.id;
+      tr.append(idc, h("td", "id", s.visitor || "n/a"), h("td", "nw", fmtWhen(s.start)), h("td", "num", fmtDur(s.durationS)),
+        h("td", "", s.origin || "none"), h("td", "", s.referrer || "none"),
+        h("td", "num", nf(s.runs)), h("td", "num", nf(s.requests)), h("td", "num", nf(s.events)));
+      const act = h("td"), btn = h("button", "small", "Details");
+      btn.setAttribute("aria-expanded", "false");
+      act.appendChild(btn); tr.appendChild(act);
+      table.appendChild(tr);
+      let open = null;
+      btn.addEventListener("click", async () => {
+        if (open) { open.remove(); open = null; btn.textContent = "Details"; btn.setAttribute("aria-expanded", "false"); return; }
+        btn.disabled = true;
+        try {
+          const data = await api("/stats/session?id=" + encodeURIComponent(s.id));
+          open = h("tr", "detail");
+          const td = h("td"); td.colSpan = 10;
+          const wrap = h("div", "stick");   // keeps the details inside the visible width of the scrolling table
+          wrap.style.width = Math.max(240, container.clientWidth - 26) + "px";
+          wrap.appendChild(renderTimeline(data));
+          td.appendChild(wrap);
+          open.appendChild(td); tr.after(open);
+          btn.textContent = "Hide"; btn.setAttribute("aria-expanded", "true");
+        } catch (e) { if (e.kind !== "unauthorized") errEl.textContent = e.status === 404 ? "That session is no longer stored." : errorMessage(e); }
+        finally { btn.disabled = false; }
+      });
+    });
+    container.replaceChildren(table);
+  }
+
+  function renderTimeline(data) {
+    const items = [];
+    (data.events || []).forEach((e) => items.push({ t: e.time, kind: "event", e }));
+    (data.requests || []).forEach((q) => items.push({ t: q.time, kind: "request", q }));
+    items.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : a.kind === b.kind ? 0 : a.kind === "event" ? -1 : 1));
+    if (!items.length) return h("div", "empty", "No events or requests stored for this session.");
+    const ul = h("ul", "tl");
+    items.forEach((it) => {
+      const li = h("li"), body = h("div", "body");
+      li.append(h("div", "when", fmtTime(it.t)), body);
+      if (it.kind === "event") {
+        const e = it.e;
+        body.appendChild(h("div", "head", e.type === "load" ? "Page load" : "UI: " + e.name + (e.value ? " = " + e.value : "")));
+      } else {
+        const q = it.q, ok = q.outcome === "ok";
+        const head = h("div", "head", q.route + " ");
+        const oc = h("span", ok ? "" : "bad", ok ? "ok" : q.outcome);
+        head.appendChild(oc);
+        body.appendChild(head);
+        if (q.prompt != null) { body.appendChild(h("div", "prompt", q.prompt)); }
+        else if (q.runId) body.appendChild(h("div", "meta", "Prompt not available (the run log has no such line)."));
+        const set = [];
+        if (q.model) set.push("model " + q.model);
+        if (q.embedder) set.push("embedder " + q.embedder);
+        if (q.N != null) set.push("N " + q.N);
+        if (q.Tprime != null) set.push("T′ " + q.Tprime);
+        if (q.maxNewTokens != null) set.push("max tokens " + q.maxNewTokens);
+        if (set.length) body.appendChild(h("div", "meta", set.join(", ")));
+        const tm = [];
+        if (q.queueWaitS != null) tm.push("queue " + fmtSec(q.queueWaitS));
+        if (q.runS != null) tm.push("run " + fmtSec(q.runS));
+        if (q.generateS != null) tm.push("generate " + fmtSec(q.generateS));
+        if (q.embedS != null) tm.push("embed " + fmtSec(q.embedS));
+        if (q.completions != null) tm.push(nf(q.completions) + " completions");
+        if (q.tokens != null) tm.push(nf(q.tokens) + " tokens");
+        if (tm.length) body.appendChild(h("div", "meta", tm.join(", ")));
+        if (q.runId) body.appendChild(runBlock(q.runId));
+      }
+      ul.appendChild(li);
+    });
+    return ul;
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise((resolve, reject) => {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy") ? resolve() : reject(new Error("copy")); } catch (e) { reject(e); } finally { ta.remove(); }
+    });
+  }
+
+  function runBlock(runId) {
+    const box = h("div", "run"), btn = h("button", "small", "Show completions");
+    box.appendChild(btn);
+    let panel = null;
+    btn.addEventListener("click", async () => {
+      if (panel) { panel.remove(); panel = null; btn.textContent = "Show completions"; return; }
+      btn.disabled = true;
+      try {
+        const rec = await api("/stats/run?id=" + encodeURIComponent(runId));
+        panel = h("div");
+        const bar = h("div", "runbar");
+        const info = [];
+        if (rec.seed != null) info.push("seed " + rec.seed);
+        if (rec.revision) info.push("revision " + String(rec.revision).slice(0, 8));
+        if (rec.time) info.push(fmtWhen(rec.time) + " UTC");
+        bar.appendChild(h("span", "id", runId));
+        if (info.length) bar.appendChild(h("span", "", info.join(", ")));
+        const cp = h("button", "small", "Copy JSON");
+        cp.addEventListener("click", () => {
+          copyText(JSON.stringify(rec, null, 2)).then(() => { cp.textContent = "Copied"; }, () => { cp.textContent = "Copy failed"; })
+            .then(() => setTimeout(() => { cp.textContent = "Copy JSON"; }, 1500));
+        });
+        bar.appendChild(cp);
+        panel.appendChild(bar);
+        const list = h("div", "comps");
+        list.tabIndex = 0;
+        const samples = rec.samples || [];
+        if (!samples.length) list.appendChild(h("div", "comp", "The record has no completions."));
+        samples.forEach((c, i) => {
+          const d = h("div", "comp");
+          d.appendChild(h("div", "txt", c.text));
+          d.appendChild(h("div", "nums", "#" + (i + 1) + "  log p " + num(c.logp, 3) + "  log q " + num(c.logq, 3)
+            + "  " + nf(c.nTokens) + " tokens  " + (c.ended ? "ended" : "cut at the token limit")));
+          list.appendChild(d);
+        });
+        panel.appendChild(list);
+        box.appendChild(panel);
+        btn.textContent = "Hide completions";
+      } catch (e) { if (e.kind !== "unauthorized") errEl.textContent = e.status === 404 ? "That run is not in the run log." : errorMessage(e); }
+      finally { btn.disabled = false; }
+    });
+    return box;
+  }
+
+  // ---- load ----
+  let loadSeq = 0;
+  async function load() {
+    const seq = ++loadSeq;
+    errEl.textContent = ""; gateError.textContent = "";
+    let data;
+    try { data = await api("/stats?days=" + encodeURIComponent(rangeSelect.value)); }
+    catch (e) { report(e); return; }
+    if (seq !== loadSeq) return;
+    gate.style.display = "none";
+    dash.hidden = false;
+    const t = data.totals, b = data.breakdowns, daily = data.daily || [];
+    renderTiles(t, data.today);
+    const pts = (key) => daily.map((d) => ({ label: fmtDay(d.day), tipLabel: fmtDay(d.day), value: d[key] }));
+    renderChart($("chartVisitors"), $("tipVisitors"), pts("visitors"), css("--ink"), "visitors", "No days in this range yet.");
+    renderChart($("chartRuns"), $("tipRuns"), pts("runs"), css("--accent"), "runs", "No days in this range yet.");
+    renderChart($("chartErrors"), $("tipErrors"), pts("errors"), "#9a6a2a", "errors", "No days in this range yet.");
+    renderDailyTable($("dailyTable"), daily);
+    renderOrigin($("bOrigin"), b.byOrigin);
+    renderBars($("bEmbedder"), b.byEmbedder, null, "No runs in this range yet.");
+    renderBars($("bError"), b.byErrorCode, null, "No errors in this range.");
+    renderBars($("bN"), b.n, null, "No runs in this range yet.");
+    renderBars($("bT"), b.tprime, (k) => Number(k).toFixed(2).replace(/0$/, ""), "No runs in this range yet.");
+    renderBars($("bMax"), b.maxNewTokens, null, "No runs in this range yet.");
+    renderMedians($("medians"), b, t.runs > 0);
+    const hours = (b.busiestHours || []).map((x) => ({ label: String(x.hour).padStart(2, "0"), tipLabel: String(x.hour).padStart(2, "0") + ":00 UTC", value: x.requests }));
+    renderChart($("chartHours"), $("tipHours"), hours, css("--ink"), "requests", "No requests in this range yet.");
+    renderSessions(data.sessions || [], data.sessionsTruncated || 0);
+    subLine.textContent = "Last " + data.days + " UTC days since " + data.since + ", updated " + data.generated.replace("T", " ").replace("Z", " UTC");
+  }
+
+  $("gateForm").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const v = pwInput.value;
+    if (!v) return;
+    pw = v;
+    try { localStorage.setItem(PW_KEY, pw); } catch (_) {}
+    load();
+  });
+  $("refreshBtn").addEventListener("click", load);
+  rangeSelect.addEventListener("change", load);
+  $("lockBtn").addEventListener("click", () => {
+    loadSeq++;
+    try { localStorage.removeItem(PW_KEY); } catch (_) {}
+    pw = "";
+    showGate("");
+  });
+
+  if (pw) load(); else showGate("");
+})();
+</script>
+</body>
+</html>
