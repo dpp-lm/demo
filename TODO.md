@@ -47,6 +47,10 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
 - Theme profiles as stacked colour bars beside the rows (lab/matrix.html): absolute scale (length π_i, segments
   p_a u_a(i)², each colour sums to p_a), three validated muted colours clear of the accent, rest in grey with its
   share, near-degenerate eigenvalues merged (5% knob, open), colours matched to the previous eigenvectors.
+- Theme cards (lab/matrix.html): each coloured theme explained by the completions it would produce, not a name.
+  Theme 1 is the shared core (one-signed by Perron–Frobenius; L is positive in all 18 presets); later themes are
+  contrasts shown by their two ends' most representative completions (largest u_a(i)²) and shares. Hover a card
+  to pick out its rows.
 - Prototype "Building a set" (https://timvieira.github.io/dpp-lm-demo/lab/set.html, lab/set.html), kept separate from
   the main page for now: the matrix and the main page's 3-D plot, linked. The set builds in a rail of cards (×
   removes, Ctrl/⌘+Z undoes); its members are the red vectors in the plot, live; hovering a cell draws the pair of

@@ -315,6 +315,25 @@ absolute scale, split into p_a u_a(i)² per theme; summed over the rows each col
 - Seen: story 49% rest (no dominant themes); joke 27% rest, with bars short for most rows because a few completions
   carry most of the probability (absolute scale).
 
+**Theme cards: elucidating themes without naming them (lab, 25 Nov).** Tim: the attribution is interesting but
+hard to grasp unnamed, and the themes are latent, so naming is the wrong angle. What is principled:
+- Taken alone, a theme is a distribution over the completions, u_a(i)² (it sums to 1): if the sampler had chosen
+  only that theme, completion i would be drawn with that probability. So "the most representative completions" is
+  exact: the largest u_a(i)².
+- Theme 1 is the shared core. When L is entrywise positive (true in all 18 presets), Perron–Frobenius makes the
+  top eigenvector one-signed. Its most typical completions show what all the completions share.
+- Every later theme is a contrast: orthogonal to a one-signed vector, it must have both signs, so it opposes two
+  groups. The card shows each end's most representative distinct completions and its share of u_a². The sign is
+  arbitrary, so the ends are a pair (heavier end first).
+- Merged (near-degenerate) themes have no ends: inside the eigenspace the vectors are not determined. Their card
+  shows the most representative completions of the group.
+- What it shows: joke theme 2 is atom jokes against skeleton jokes; joke theme 3 is bare jokes against jokes with
+  the "Sure! Here's a joke for you" preamble (form, not content); story theme 2 is the "last letter from her
+  brother" openings against "Elara saw the sky turn…"; story theme 3 is the ghost openings against "the sky
+  turned the color of …, no one thought to ask why".
+- Hovering a card dims every row whose largest part of π belongs to another theme.
+- If a pool's L had negative entries, theme 1 need not be one-signed; the card would then say "contrast".
+
 **Open:** order inside a block by the rest of the profile (second theme, then third) instead of the signed
 loading. That replaces the one remaining heuristic with the same exact quantity, and nests the blocks.
 

@@ -33,9 +33,18 @@
   .phead .note { color: var(--muted); font-size: 12.5px; }
   .grid { display: grid; grid-template-columns: 70px 84px 1fr; gap: 2px; }
   .left, .prof { position: relative; }
-  .themes { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin: 10px 2px 0; font-size: 13px; color: var(--text-2); }
-  .themes .th { display: inline-flex; align-items: center; gap: 6px; }
-  .themes .note2 { color: var(--muted); font-size: 12px; flex-basis: 100%; }
+  .themes { margin: 12px 0 0; font-size: 13px; color: var(--text-2); }
+  .tcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+  .tcard { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: default; transition: border-color .15s; }
+  .tcard:hover { border-color: var(--text-2); }
+  .th-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--text-2); }
+  .th-head b { color: var(--text); font-weight: 600; }
+  .tcard .end { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .tcard .vs { color: var(--muted); font-size: 12px; text-align: center; margin: 6px 0 0; letter-spacing: .02em; }
+  .tcard .ex { font: 15px/1.35 var(--serif); color: var(--text); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; margin-top: 3px; padding-left: 8px; border-left: 2px solid var(--border); }
+  .th-rest { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+  .themes .note2 { color: var(--muted); font-size: 12px; margin-top: 6px; max-width: 110ch; }
+  .cw svg.dim { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .chip { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }
   .cw { position: relative; aspect-ratio: 1; width: 100%; }
   .cw canvas { width: 100%; height: 100%; image-rendering: pixelated; display: block; cursor: crosshair; }

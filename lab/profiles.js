@@ -43,6 +43,28 @@ export function themeProfiles(L, n, K, prev = [], { merge = 0.05 } = {}) {
   }
   for (const g of groups) if (!g.color) { g.color = THEME_COLORS.find((c) => !used.has(c)); used.add(g.color); }
   groups.forEach((g) => (g.label = g.eigs.length > 1 ? `themes ${g.eigs.map((a) => idx.indexOf(a) + 1).join('+')}` : `theme ${idx.indexOf(g.eigs[0]) + 1}`));
+  // What each coloured theme is, from its eigenvector(s) alone. Taken alone, a theme is a distribution over the
+  // completions: u_a(i)^2 (it sums to 1). Theme 1 of an entrywise-positive L is one-signed (Perron-Frobenius): the
+  // completions' shared core. Any eigenvector orthogonal to a one-signed one has both signs: a contrast between two
+  // ends; the sign is arbitrary, so the ends are a pair (heavier end first). In a merged (near-degenerate) group the
+  // individual vectors are not determined, so no ends: its distribution is the mean of its u_a(i)^2.
+  for (const g of groups) {
+    const byWeight = (wt) => [...wt.keys()].filter((i) => wt[i] > 0).sort((x, y) => wt[y] - wt[x]);
+    if (g.eigs.length > 1) {
+      const wt = Array.from({ length: n }, (_, i) => g.eigs.reduce((s, a) => s + vectors[a][i] ** 2, 0) / g.eigs.length);
+      g.desc = { kind: 'merged', ends: [{ items: byWeight(wt), mass: 1 }] };
+      continue;
+    }
+    const u = vectors[g.eigs[0]], tol = 1e-9 * Math.max(...u.map(Math.abs));
+    const pos = Array.from(u, (x) => (x > tol ? x * x : 0)), neg = Array.from(u, (x) => (x < -tol ? x * x : 0));
+    const mp = pos.reduce((a, b) => a + b, 0), mn = neg.reduce((a, b) => a + b, 0);
+    if (mp === 0 || mn === 0) g.desc = { kind: 'core', ends: [{ items: byWeight(mp ? pos : neg), mass: 1 }] };
+    else g.desc = { kind: 'contrast', ends: [{ items: byWeight(pos), mass: mp }, { items: byWeight(neg), mass: mn }].sort((x, y) => y.mass - x.mass) };
+  }
+  // owner[i]: the theme carrying the largest part of pi_i (as in the theme blocks).
+  const owner = new Int32Array(n);
+  for (let i = 0; i < n; i++) { let b = idx[0], bv = -1; for (const a of idx) { const v = p[a] * vectors[a][i] ** 2; if (v > bv) { bv = v; b = a; } } owner[i] = b; }
+  groups.forEach((g) => (g.members = (i) => g.eigs.includes(owner[i])));
   const part = (i, g) => g.eigs.reduce((s, a) => s + p[a] * vectors[a][i] ** 2, 0);
   const pi = new Float64Array(n);
   for (let i = 0; i < n; i++) for (const a of idx) pi[i] += p[a] * vectors[a][i] ** 2;

@@ -58,6 +58,10 @@ for (const pool of ['story_T1.0.json', 'joke_T1.5.json']) {
     for (const g of pr.groups) assert.ok(Math.abs([...Array(N).keys()].reduce((s, i) => s + pr.part(i, g), 0) - g.p) < 1e-9);
     assert.ok(Math.abs(pr.restP - (3 - pr.groups.reduce((s, g) => s + g.p, 0))) < 1e-12);
     assert.ok(pr.groups.length <= THEME_COLORS.length && pr.groups.every((g) => THEME_COLORS.includes(g.color)));
+    // L is entrywise positive here, so theme 1 is one-signed (Perron-Frobenius): the shared core; later themes are contrasts
+    // whose two ends' shares of u_a^2 sum to 1.
+    assert.equal(pr.groups[0].desc.kind, 'core');
+    for (const g of pr.groups.slice(1)) if (g.desc.kind === 'contrast') assert.ok(Math.abs(g.desc.ends[0].mass + g.desc.ends[1].mass - 1) < 1e-9 && g.desc.ends[0].mass >= g.desc.ends[1].mass);
     const L2 = load(pool, 21).L, pr2 = themeProfiles(L2, N, 3, pr.prev);
     assert.deepEqual(pr2.groups.map((g) => g.color), pr.groups.map((g) => g.color));
   });
@@ -99,4 +103,5 @@ test('theme profiles: equal eigenvalues are one theme (their eigenspace is deter
   assert.equal(pr.groups[0].eigs.length, 2);
   assert.match(pr.groups[0].label, /^themes 1\+2$/);
   assert.ok(Math.abs(pr.part(0, pr.groups[0]) - pr.part(1, pr.groups[0])) < 1e-12);   // symmetric items get equal parts
+  assert.equal(pr.groups[0].desc.kind, 'merged');   // no ends: inside the eigenspace the vectors are not determined
 });

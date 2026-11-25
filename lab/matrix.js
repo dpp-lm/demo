@@ -116,7 +116,7 @@ function makePanel(defaultOrder) {
   el.className = 'panel';
   el.innerHTML = `<div class="phead"><select class="ord">${ORDERS.map((o) => `<option value="${o.id}">${o.label}</option>`).join('')}</select><span class="note"></span></div>
     <div class="grid"><div class="left"><svg class="margin"></svg></div><div class="prof"><svg class="margin"></svg></div>
-    <div class="cw"><canvas></canvas><i class="xh r"></i><i class="xh c"></i></div></div>
+    <div class="cw"><canvas></canvas><svg class="dim"></svg><i class="xh r"></i><i class="xh c"></i></div></div>
     <div class="scale"><span class="lo"></span><span class="bar"></span><span class="hi"></span></div>`;
   $('#panels').append(el);
   const P = { el, id: defaultOrder, res: null };
@@ -230,12 +230,44 @@ function drawProfiles(P, order) {
   P.maxPi = max;
 }
 
+// One card per coloured theme: what it is (shared core, contrast or merged), its p, and the most representative
+// distinct completions (largest u_a(i)^2) at each end, with each end's share of the theme.
 function drawLegend() {
   const pr = S.prof, K = S.basis.K, maxPi = Math.max(...pr.pi);
-  $('#themes').innerHTML = pr.groups.map((g) => `<span class="th"><i class="chip" style="background:${g.color}"></i>${g.label} · p = ${g.p.toFixed(2)}</span>`).join('')
-    + `<span class="th"><i class="chip" style="background:${REST_COLOR}"></i>rest · ${(100 * pr.restP / K).toFixed(0)}% of the sample (p = ${pr.restP.toFixed(2)})</span>`
-    + `<span class="th note2">Bars beside the rows: length = π_i (full width = ${(100 * maxPi).toFixed(1)}%); each colour sums to its p over the rows, and all p sum to K = ${K}.
-       Effective number of themes K²/Σp² = ${pr.neff.toFixed(1)}; coloured: ${pr.groups.length} (the palette's limit is 3).</span>`;
+  const top = (items, k = 2) => { const seen = new Set(), out = []; for (const i of items) { const t = S.samples[i].text; if (seen.has(t)) continue; seen.add(t); out.push(i); if (out.length === k) break; } return out; };
+  // Line breaks as spaces here, so the clamped lines reach the words that differ (a joke's punchline, not its preamble).
+  const ex = (i) => `<div class="ex">${esc(S.samples[i].text.replace(/\s+/g, ' ').trim())}</div>`;
+  const kind = { core: 'shared core', contrast: 'contrast', merged: 'merged themes' };
+  const cards = pr.groups.map((g, x) => {
+    const d = g.desc, head = `<div class="th-head"><i class="chip" style="background:${g.color}"></i><b>${g.label[0].toUpperCase() + g.label.slice(1)}</b> · ${kind[d.kind]} · p = ${g.p.toFixed(2)}</div>`;
+    let body;
+    if (d.kind === 'contrast') body = `<div class="end">one end · ${(100 * d.ends[0].mass).toFixed(0)}% of the theme</div>${top(d.ends[0].items).map(ex).join('')}
+      <div class="vs">contrasted with</div><div class="end">the other end · ${(100 * d.ends[1].mass).toFixed(0)}%</div>${top(d.ends[1].items).map(ex).join('')}`;
+    else body = `<div class="end">${d.kind === 'core' ? 'what the completions share; most typical' : 'most representative (no ends: the eigenvectors are not determined)'}</div>${top(d.ends[0].items).map(ex).join('')}`;
+    return `<div class="tcard" data-g="${x}">${head}${body}</div>`;
+  }).join('');
+  $('#themes').innerHTML = `<div class="tcards">${cards}</div>
+    <div class="th-rest"><i class="chip" style="background:${REST_COLOR}"></i>rest · the other themes · ${(100 * pr.restP / K).toFixed(0)}% of the sample (p = ${pr.restP.toFixed(2)})</div>
+    <div class="note2">Taken alone, a theme is a distribution over the completions, u_a(i)²; the examples are the most likely ones at each end, and each end's share is
+      its total. The sign of an eigenvector is arbitrary, so the two ends are a pair. p is the chance that a sample covers the theme; all p sum to K = ${K}.
+      Bars beside the rows: length = π_i (full width = ${(100 * maxPi).toFixed(1)}%), split by theme; each colour sums to its p over the rows.
+      Effective number of themes K²/Σp² = ${pr.neff.toFixed(1)}; coloured: ${pr.groups.length} (the palette's limit is 3). Hover a card to pick out its rows.</div>`;
+  $('#themes').querySelectorAll('.tcard').forEach((el) => {
+    el.onmouseenter = () => markTheme(pr.groups[+el.dataset.g]);
+    el.onmouseleave = () => markTheme(null);
+  });
+}
+
+// Dim, in every panel, the rows whose largest part of π belongs to another theme.
+function markTheme(g) {
+  for (const P of S.panels) {
+    const svg = $('.dim', P.el), n = S.n;
+    if (!g || !P.res) { svg.innerHTML = ''; continue; }
+    svg.setAttribute('viewBox', `0 0 1 ${n}`); svg.setAttribute('preserveAspectRatio', 'none');
+    let s = '';
+    P.res.order.forEach((i, r) => { if (!g.members(i)) s += `<rect x="0" y="${r}" width="1" height="1"/>`; });
+    svg.innerHTML = `<g fill="${css('--surface')}" opacity="0.82">${s}</g>`;
+  }
 }
 
 function showPair(i, j) {
