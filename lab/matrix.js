@@ -2,6 +2,7 @@
 // Everything is computed from L = diag(√w) G diag(√w), the matrix the DPP uses.
 import { averageLinkageOrder, flatPivotOrder, nestedPivotOrder, themeOrder, pivotedCholesky } from './orderings.js';
 import { condition } from './condition.js';
+import { themeProfiles, REST_COLOR } from './profiles.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -22,7 +23,15 @@ const fmtT = (T) => (T === Infinity ? '∞' : T >= 100 ? T.toFixed(0) : T >= 10 
 // sel: the selected completions (conditioning); cond: L conditioned on them; basis: the kernel the rows are ordered
 // on (L, or L^A after "Re-order") and the K that goes with it; version: bumped whenever the basis changes.
 const S = { index: null, samples: null, G: null, L: null, n: 0, opts: { K: 3, T: 20, target: 'global', mode: 'map' }, panels: [], picks: [],
-  sel: [], cond: null, pi0: null, basis: null, version: 0, msg: '' };
+  sel: [], cond: null, pi0: null, basis: null, version: 0, msg: '', prof: null, profPrev: [], merge: 0.05 };
+
+// The kernel the rows are ordered on, and the theme profiles drawn beside them (colours matched to the previous ones).
+function setBasis(M, K) {
+  S.basis = { M, K }; S.version++;
+  S.prof = themeProfiles(M, S.n, K, S.profPrev, { merge: S.merge });
+  S.profPrev = S.prof.prev;
+  drawLegend();
+}
 const cache = new Map();
 
 async function loadIndex() {
@@ -45,7 +54,7 @@ async function loadPool() {
   const first = new Map(), c = samples.map((s, i) => (first.has(s.text) ? first.get(s.text) : (first.set(s.text, i), i)));
   const G = new Float64Array(n * n);
   for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) G[i * n + j] = i === j ? 1 : raw[c[i] * M + c[j]];
-  Object.assign(S, { samples, G, n, sel: [] });
+  Object.assign(S, { samples, G, n, sel: [], profPrev: [] });
   rebuild();
 }
 
@@ -62,7 +71,7 @@ function rebuild() {
   const keep = [];
   for (const i of S.sel.slice(0, o.K)) if (condition(S.L, n, [...keep, i], o.K).ok) keep.push(i);
   S.sel = keep;
-  S.basis = { M: S.L, K: o.K }; S.version++;
+  setBasis(S.L, o.K);
   recondition();
 }
 
@@ -106,7 +115,7 @@ function makePanel(defaultOrder) {
   const el = document.createElement('section');
   el.className = 'panel';
   el.innerHTML = `<div class="phead"><select class="ord">${ORDERS.map((o) => `<option value="${o.id}">${o.label}</option>`).join('')}</select><span class="note"></span></div>
-    <div class="grid"><div class="left"><svg class="margin"></svg></div>
+    <div class="grid"><div class="left"><svg class="margin"></svg></div><div class="prof"><svg class="margin"></svg></div>
     <div class="cw"><canvas></canvas><i class="xh r"></i><i class="xh c"></i></div></div>
     <div class="scale"><span class="lo"></span><span class="bar"></span><span class="hi"></span></div>`;
   $('#panels').append(el);
@@ -198,8 +207,35 @@ function drawPanel(P) {
   }
   for (const i of S.picks) ls += `<rect x="66" y="${pos[i]}" width="4" height="1" fill="${accent}"/>`;
   left.innerHTML = ls;
+  drawProfiles(P, order);
   const o = S.opts, nb = (blocks.length ? `${blocks.length} blocks · ` : '') + (S.basis.M !== S.L ? 'ordered on L^A · ' : '');
   $('.note', P.el).textContent = `${nb}${strength}T = ${fmtT(o.T)} · ${o.mode === 'map' ? 'κ' : 'κ/q'} · ${ms.toFixed(0)} ms`;
+}
+
+// Theme profiles beside the rows: bar length = pi_i (one scale for all rows; full width = the largest pi_i), split into
+// p_a u_a(i)^2 per coloured theme and a grey rest, in the legend's order. Summed over the rows, each colour gives its p_a.
+function drawProfiles(P, order) {
+  const svg = $('.prof svg', P.el), n = S.n, pr = S.prof, W = 80, gap = 0.8;
+  svg.setAttribute('viewBox', `0 0 84 ${n}`); svg.setAttribute('preserveAspectRatio', 'none');
+  let max = 0; for (let i = 0; i < n; i++) max = Math.max(max, pr.pi[i]);
+  let s = '';
+  for (let r = 0; r < n; r++) {
+    const i = order[r];
+    let x = 2;
+    const seg = (w, c) => { const px = (w / (max || 1)) * W; if (px > gap + 0.2) s += `<rect x="${x}" y="${r + 0.1}" width="${px - gap}" height="0.8" fill="${c}"/>`; x += px; };
+    for (const g of pr.groups) seg(pr.part(i, g), g.color);
+    seg(pr.restPart(i), REST_COLOR);
+  }
+  svg.innerHTML = s;
+  P.maxPi = max;
+}
+
+function drawLegend() {
+  const pr = S.prof, K = S.basis.K, maxPi = Math.max(...pr.pi);
+  $('#themes').innerHTML = pr.groups.map((g) => `<span class="th"><i class="chip" style="background:${g.color}"></i>${g.label} · p = ${g.p.toFixed(2)}</span>`).join('')
+    + `<span class="th"><i class="chip" style="background:${REST_COLOR}"></i>rest · ${(100 * pr.restP / K).toFixed(0)}% of the sample (p = ${pr.restP.toFixed(2)})</span>`
+    + `<span class="th note2">Bars beside the rows: length = π_i (full width = ${(100 * maxPi).toFixed(1)}%); each colour sums to its p over the rows, and all p sum to K = ${K}.
+       Effective number of themes K²/Σp² = ${pr.neff.toFixed(1)}; coloured: ${pr.groups.length} (the palette's limit is 3).</span>`;
 }
 
 function showPair(i, j) {
@@ -220,6 +256,10 @@ function showPair(i, j) {
     else if (S.sel.length >= S.opts.K) bits.push(`π ${(100 * S.pi0[a]).toFixed(1)}% → 0 (the selection already has K)`);
     else if (S.sel.length) bits.push(`π ${(100 * S.pi0[a]).toFixed(1)}% → ${(100 * S.cond.pi[a]).toFixed(1)}% given the selection${S.cond.addable[a] ? '' : ' (already explained: leftover 0)'}`);
     else bits.push(`π ${(100 * S.pi0[a]).toFixed(1)}%`);
+    if (S.prof && S.prof.pi[a] > 0) {
+      const pr = S.prof, pc = (x) => (100 * x / pr.pi[a]).toFixed(0);
+      bits.push(pr.groups.map((g) => `<i class="chip" style="background:${g.color}"></i>${pc(pr.part(a, g))}%`).join(' ') + ` <i class="chip" style="background:${REST_COLOR}"></i>${pc(pr.restPart(a))}%`);
+    }
     if (th) {
       const t = th.theme[a], rank = th.blocks.findIndex((b) => b[2] === t);
       if (th.pi[a] > 0) bits.push(`${(100 * th.part(a, t) / th.pi[a]).toFixed(0)}% of π via theme ${rank + 1} (p = ${th.p[t].toFixed(2)})`);
@@ -238,8 +278,9 @@ async function main() {
   makePanel('avg'); makePanel('theme');
   $('#pool').onchange = loadPool; $('#emb').onchange = loadPool;
   $('#K').onchange = (e) => { S.opts.K = Math.max(1, Math.min(12, +e.target.value || 3)); e.target.value = S.opts.K; rebuild(); };
-  $('#clear').onclick = () => { S.sel = []; if (S.basis.M !== S.L) { S.basis = { M: S.L, K: S.opts.K }; S.version++; } recondition(); };
-  $('#reorder').onclick = () => { S.basis = { M: S.cond.LA, K: S.opts.K - S.sel.length }; S.version++; recondition(); };
+  $('#clear').onclick = () => { S.sel = []; if (S.basis.M !== S.L) setBasis(S.L, S.opts.K); recondition(); };
+  $('#reorder').onclick = () => { setBasis(S.cond.LA, S.opts.K - S.sel.length); recondition(); };
+  $('#merge').onchange = (e) => { S.merge = Math.max(0, Math.min(50, +e.target.value || 0)) / 100; e.target.value = S.merge * 100; setBasis(S.basis.M, S.basis.K); S.panels.forEach(drawPanel); };
   $('#T').oninput = (e) => { S.opts.T = sliderToT(+e.target.value); $('#Tout').textContent = fmtT(S.opts.T); };
   $('#T').onchange = () => rebuild();
   $('#target').onchange = (e) => { S.opts.target = e.target.value; rebuild(); };

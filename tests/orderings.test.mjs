@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { flatPivotOrder, nestedPivotOrder, averageLinkageOrder, themeOrder, pivotedCholesky } from '../lab/orderings.js';
 import { condition } from '../lab/condition.js';
+import { themeProfiles, THEME_COLORS } from '../lab/profiles.js';
 import { greedyMAPLog, logDetSub, kdpp, mulberry32 } from '../js/dpp.js';
 
 const dir = new URL('../data/cache/', import.meta.url);
@@ -48,6 +49,19 @@ for (const pool of ['story_T1.0.json', 'joke_T1.5.json']) {
     for (let i = 0; i < N; i++) if (parent[i] >= 0) assert.ok(height[i] <= height[parent[i]] + 1e-12);
   });
 
+  test(`${pool}: theme profiles: parts sum to π_i, each colour sums to its p, rest = K − coloured p; colours stable under a small change of T`, () => {
+    const pr = themeProfiles(L, N, 3), ref = kdpp(G, N, lk, 3).pi;
+    for (let i = 0; i < N; i++) {
+      assert.ok(Math.abs(pr.pi[i] - ref[i]) < 1e-10);
+      assert.ok(Math.abs(pr.groups.reduce((s, g) => s + pr.part(i, g), 0) + pr.restPart(i) - pr.pi[i]) < 1e-12);
+    }
+    for (const g of pr.groups) assert.ok(Math.abs([...Array(N).keys()].reduce((s, i) => s + pr.part(i, g), 0) - g.p) < 1e-9);
+    assert.ok(Math.abs(pr.restP - (3 - pr.groups.reduce((s, g) => s + g.p, 0))) < 1e-12);
+    assert.ok(pr.groups.length <= THEME_COLORS.length && pr.groups.every((g) => THEME_COLORS.includes(g.color)));
+    const L2 = load(pool, 21).L, pr2 = themeProfiles(L2, N, 3, pr.prev);
+    assert.deepEqual(pr2.groups.map((g) => g.color), pr.groups.map((g) => g.color));
+  });
+
   test(`${pool}: inclusion splits exactly over the themes`, () => {
     for (const K of [2, 5]) {
       const { pi, p } = themeOrder(L, N, K), ref = kdpp(G, N, lk, K).pi;
@@ -76,4 +90,13 @@ test('conditioning: π(i | A) matches brute-force enumeration; volume-zero selec
   for (let i = 0; i < m; i++) for (let j = 0; j < m; j++) L2[i * m + j] = dot(X[src(i)], X[src(j)]);
   assert.equal(condition(L2, m, [2], K).addable[n], 0);
   assert.equal(condition(L2, m, [2, n], K).ok, false);
+});
+
+test('theme profiles: equal eigenvalues are one theme (their eigenspace is determined, the individual vectors are not)', () => {
+  const d = [3, 3, 1, 0.5, 0.2, 0.1], n = d.length, L = new Float64Array(n * n);
+  d.forEach((x, i) => (L[i * n + i] = x));
+  const pr = themeProfiles(L, n, 2);
+  assert.equal(pr.groups[0].eigs.length, 2);
+  assert.match(pr.groups[0].label, /^themes 1\+2$/);
+  assert.ok(Math.abs(pr.part(0, pr.groups[0]) - pr.part(1, pr.groups[0])) < 1e-12);   // symmetric items get equal parts
 });

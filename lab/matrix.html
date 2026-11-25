@@ -31,8 +31,12 @@
   .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; min-width: 0; }
   .phead { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
   .phead .note { color: var(--muted); font-size: 12.5px; }
-  .grid { display: grid; grid-template-columns: 70px 1fr; gap: 2px; }
-  .left { position: relative; }
+  .grid { display: grid; grid-template-columns: 70px 84px 1fr; gap: 2px; }
+  .left, .prof { position: relative; }
+  .themes { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin: 10px 2px 0; font-size: 13px; color: var(--text-2); }
+  .themes .th { display: inline-flex; align-items: center; gap: 6px; }
+  .themes .note2 { color: var(--muted); font-size: 12px; flex-basis: 100%; }
+  .chip { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }
   .cw { position: relative; aspect-ratio: 1; width: 100%; }
   .cw canvas { width: 100%; height: 100%; image-rendering: pixelated; display: block; cursor: crosshair; }
   svg.margin { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
@@ -60,6 +64,7 @@
     <label>Prompt <select id="pool"></select></label>
     <label>Embedder <select id="emb"></select></label>
     <label>K <input type="number" id="K" min="1" max="12" value="3"></label>
+    <label title="Eigenvalues this close (relative) are one theme: inside a near-degenerate eigenspace the individual eigenvectors are not determined">Merge eigenvalues within <input type="number" id="merge" min="0" max="50" step="1" value="5">%</label>
     <label>T <input type="range" id="T" min="0" max="1000" value="575" step="5" style="width:120px"><span class="tval" id="Tout">20.0</span></label>
     <label>Target <select id="target"><option value="global">Global</option><option value="gl">Global and local</option></select></label>
     <label>Weights <select id="mode"><option value="map">Most likely (κ)</option><option value="sample">Sample (κ/q)</option></select></label>
@@ -67,6 +72,7 @@
   </div>
 
   <div class="panels" id="panels"></div>
+  <div class="themes" id="themes"></div>
 
   <div class="hover" id="hover"><span class="k">Hover a cell to see the pair.</span></div>
 
