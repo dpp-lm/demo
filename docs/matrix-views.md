@@ -64,6 +64,82 @@ ordering comes from the DPP's own geometry.
   (section 3): greedy volume picks the pivots, the plot's axes are the pivots, and the matrix's blocks are
   the pivots' near-copies.
 
+**Nested version: one Cholesky factorisation read as a tree.** No thresholds.
+
+Run pivoted Cholesky to the end (until the leftover is negligible), then read the factor as a tree:
+- **Order:** the pivots, coarse to fine.
+- **Parent:** each completion's parent is the earlier pivot that explains the most of it (the largest
+  R_ts²).
+- **Height:** each node's height is its leftover length when it was taken, a continuous number, so no level
+  cut-offs are needed.
+- **Matrix order:** depth-first along the tree, so the blocks nest. The flat proposal above is this tree cut
+  below the first K pivots.
+
+**Is it meaningful for the DPP?** Its numbers are exact DPP quantities, but the tree describes greedy MAP's
+view, not the sampling distribution.
+
+- **Meaningful:**
+  - **Heights are volume factors.** Leftover² of i given earlier pivots A is det G_{A∪i} / det G_A: the
+    factor by which adding i multiplies the volume. The chain rule makes any set's volume the product of
+    these factors.
+  - **Parents are the strongest repulsion.** The share of i's leftover removed by pivot s is the squared
+    partial correlation ρ²(i, s | A). For the L-ensemble's set weights,
+
+    det L_{A∪{i,s}} · det L_A / (det L_{A∪i} · det L_{A∪s}) = 1 − ρ²(i, s | A)
+
+    exactly. So the parent is the earlier pivot that most suppresses also having i.
+  - **The first K pivots are greedy MAP** for the matrix the tree is built on. On L they are the page's
+    Most likely selection. On G they are greedy MAP with quality switched off, which for the Global target
+    at T = ∞ is the DPP itself (κ = 1, so L = G). So a G-tree is the pool's DPP picture at T = ∞, and an
+    L-tree is the picture at the current settings.
+- **Not meaningful:**
+  - **The sampling distribution.** The tree is one greedy path and says nothing about inclusion
+    probabilities or other sets. Use C (repulsion) or D (themes) for that.
+  - **Dasgupta and Long's guarantee.** It is about cluster radius (k-center), not volume. We borrow their
+    construction, not their theorem.
+  - **The screening literature.** It explains sparse Cholesky factors for spatial kernels: a reason blocks
+    might appear, not a DPP property, and unproven for high-dimensional embeddings.
+- **Stability.** Near-ties between leftovers can flip a pivot and reorder the tree. That matters for a
+  picture that should stay put.
+
+**The sampling-side alternative: theme blocks.** A K-DPP samples by first choosing K eigenvectors (exact
+probabilities λ_a·e_{K−1}/e_K), then items within them. So grouping each completion under the eigenvector it
+loads on most gives blocks grounded in how Sample works.
+- **The catch:** eigenvectors are rarely localised (completions load on several, with arbitrary signs), so
+  theme blocks are likely muddier.
+- **Working view:** the greedy tree is the structural, Most likely side, and what we use to order the
+  matrix. The themes are the distributional, Sample side, and what we use to explain Sample. Whether the
+  first pivots line up with the top eigenvectors is itself worth showing.
+- **Tim:** the greedy interpretation is probably as good as we'll get for an ordering. Agreed, with the
+  themes as the sampling-side counterpart.
+
+**Literature for the ordering and the nesting:**
+- **Pivoted Cholesky is farthest-point sampling in feature space.** The pivot is the point farthest from
+  the span of those chosen, and the factor is an implicit Gram–Schmidt (G. Shabat, 2026, arXiv 2601.03706,
+  a short note).
+- **Hierarchy from a farthest-first order.** Dasgupta and Long (2005), "Performance guarantees for
+  hierarchical clustering", JCSS 70(4): the parent is the nearest earlier point, and for every k the
+  k-clustering is within 8× the optimal radius. Our version measures distance to the span of the earlier
+  pivots, not to the nearest one; the span distance is what matches volume.
+- **Coarse-to-fine orderings and screening.**
+  - Schäfer, Sullivan and Owhadi (2021, SIAM J. Sci. Comput., arXiv 1706.02205) and Schäfer, Katzfuss and
+    Owhadi (2021, arXiv 2004.14455) use the maximin ordering before Cholesky.
+  - In that ordering, points group into levels of scale, and fine points are nearly uncorrelated given the
+    coarse ones, so the factor is nearly sparse (Chen and Sanz-Alonso, arXiv 2412.08820).
+  - Proved for spatial kernels in low dimension; to be checked for our embeddings.
+- **Randomly pivoted Cholesky** (Chen, Epperly, Tropp and Webber, arXiv 2207.06503; CPAM 2025): pivots are
+  drawn in proportion to the residual diagonal. It reports good cluster recovery in kernel spectral
+  clustering.
+
+  **Correction to the discussion:** this is not DPP sampling. Drawing in proportion to the residual
+  diagonal is exact only for a projection DPP (the second phase of the spectral sampler). For an
+  L-ensemble K-DPP the sequence probability is not ∝ det L_S, and exact sequential sampling needs the
+  conditioned K-DPP's inclusion probabilities (the e_k terms). It is a cousin of DPP sampling, not an
+  instance.
+
+**Next check:** prototype the flat and nested orders on a few presets and compare the picture with Manuel's
+average-linkage order.
+
 **Open: G or L in the matrix?**
 - G is pure similarity, fixed for a pool. L is similarity × quality, and it changes with T, the target and
   the mode.
@@ -222,6 +298,8 @@ Take the SVD Φ = U Σ Vᵀ. Then:
 3. **Whether conditioning (B) earns a place.** Is a "what if" pin control worth it, and is its cost of one
    conditioning per row acceptable?
 4. **Naming themes:** extreme completions, or something else? How many themes to show?
+5. **The tree on G or on L:** the T = ∞ picture, which is stable, or the current settings', which moves.
+   This is question 1 again, in DPP terms.
 
 ## 5. References
 
@@ -233,5 +311,16 @@ Take the SVD Φ = U Σ Vᵀ. Then:
   problem (kernel PCA).
 - C. E. Rasmussen and C. K. I. Williams (2006). Gaussian processes for machine learning.
 - A. Krause, A. Singh and C. Guestrin (2008). Near-optimal sensor placements in Gaussian processes.
+- S. Dasgupta and P. M. Long (2005). Performance guarantees for hierarchical clustering. JCSS 70(4).
+- G. Shabat (2026). The geometry of the pivot: a note on lazy pivoted Cholesky and farthest point sampling.
+  arXiv 2601.03706.
+- F. Schäfer, T. J. Sullivan and H. Owhadi (2021). Compression, inversion, and approximate PCA of dense
+  kernel matrices at near-linear computational complexity. arXiv 1706.02205.
+- F. Schäfer, M. Katzfuss and H. Owhadi (2021). Sparse Cholesky factorization by Kullback–Leibler
+  minimization. arXiv 2004.14455.
+- J. Chen and D. Sanz-Alonso. Precision and Cholesky factor estimation for Gaussian processes. arXiv
+  2412.08820.
+- Y. Chen, E. N. Epperly, J. A. Tropp and R. J. Webber (2025). Randomly pivoted Cholesky: practical
+  approximation of a kernel matrix with few entry evaluations. CPAM; arXiv 2207.06503.
 - L. Chen, G. Zhang and H. Zhou (2018). Fast greedy MAP inference for determinantal point process to
   improve recommendation diversity.
