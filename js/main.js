@@ -495,7 +495,23 @@ function parallelotope(O, V) {
 }
 
 class Plot2D {
-  constructor(el) { this.el = el; this.svg = null; }
+  constructor(el) {
+    this.el = el; this.svg = null;
+    // When the plot's box really changes size, resize in place and keep the visitor's pan and zoom: what
+    // was drawn stays where it was on screen (anchored at the top left). On phones the box is sized in vh,
+    // which does not change when the address bar shows or hides while scrolling, so scrolling never
+    // reaches here.
+    new ResizeObserver(() => this.resize()).observe(el);
+  }
+  resize() {
+    if (!this.svg) return;
+    const W = this.el.clientWidth, H = this.el.clientHeight;
+    if (!W || !H || (W === this.W && H === this.H)) return;
+    this.W = W; this.H = H;
+    this.svg.attr('viewBox', `0 0 ${W} ${H}`);
+    this.svg.select('#grid-mask rect').attr('width', W).attr('height', H);
+    if (this.bx) this.draw(false);
+  }
   reset() { this.el.innerHTML = ''; this.svg = null; this.zt = d3.zoomIdentity; this.bx = null; }
   build() {
     const el = this.el;
@@ -1131,8 +1147,11 @@ function wire() {
       }));
     }
   });
-  let rt = 0;
-  window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (!S.pool) return; plot.reset(); render(); }, 200); });
+  // Both plots follow their box's size themselves and keep the visitor's view (no rebuild on window
+  // resize: on phones that event fires whenever scrolling shows or hides the address bar, and a rebuild
+  // replayed the opening turn and discarded the view). Only a switch between the phone and the wide
+  // layout, where the panels move entirely, frames the plot afresh.
+  wide.addEventListener('change', () => { if (!S.pool) return; plot.reset(); render(); });
 }
 
 wire();
