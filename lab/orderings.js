@@ -139,11 +139,20 @@ export function averageLinkageOrder(M, n) {
  * inside a block, sorted by the signed loading u_a(i) (the theme's two ends at the block's two ends).
  * Returns { order, blocks: [start, end, a], p, part(i, a), pi, theme } (theme[i] = the block's eigenvector index).
  */
-export function themeOrder(L, n, K) {
+/**
+ * The K-DPP's themes: eigenvalues lam (scaled so the largest is 1), eigenvectors, and p[a], the probability that a sample
+ * chooses eigenvector a (p_a = lambda_a e_{K-1}(lambda without a) / e_K(lambda); sum p = K).
+ */
+export function themeSpectrum(L, n, K) {
   const { values, vectors } = eigSym(L, n);
   const vmax = Math.max(...values, 1e-300), lam = Array.from(values, (v) => Math.max(0, v / vmax));
   const eK = elemSym(lam, K)[K][n];
   const p = lam.map((la, a) => (la > 0 ? (la * elemSym(lam.filter((_, b) => b !== a), K - 1)[K - 1][n - 1]) / eK : 0));
+  return { lam, vectors, p };
+}
+
+export function themeOrder(L, n, K) {
+  const { vectors, p } = themeSpectrum(L, n, K);
   const part = (i, a) => p[a] * vectors[a][i] ** 2;
   const pi = new Float64Array(n), theme = new Int32Array(n);
   for (let i = 0; i < n; i++) {

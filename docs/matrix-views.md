@@ -297,6 +297,24 @@ directions at once, the same fact the effective dimension measures.
 each row, the share of π_i carried by its own theme, and gives the pool's mean share in the panel caption (joke
 66%, story 33%).
 
+**Theme profiles as stacked bars (lab, 25 Nov).** Beside the rows, each completion's π_i as a bar on one
+absolute scale, split into p_a u_a(i)² per theme; summed over the rows each colour gives its p_a, and all p sum to K.
+- Colours: three muted hues (slate blue #3f74b5, ochre #b8862a, teal #1f9c86) plus a neutral grey for the rest.
+  Checked with the data-viz validator on all pairs (colours follow the theme, so any two can touch), together with the
+  accent red: every check passes; the closest pair is ochre against the accent (CVD ΔE 8.0, normal vision 15.1). No
+  fourth muted hue passed with them, so at most three themes get a colour.
+- How many: the effective number of themes K²/Σ p_a², capped at three. Since Σ p = K and each p ≤ 1, it is always at
+  least K, so for K ≥ 3 it always reaches the cap; it only adapts for K < 3.
+- Merging: eigenvalues within a relative gap (5% by default, a control in the lab) are one theme. Inside a degenerate
+  eigenspace the individual eigenvectors are not determined but the space is, and with equal p the group's part of
+  π_i is too. The 5% is a knob, not a principle: open.
+- The rest: one grey segment, labelled with its share of the sample, (K − Σ coloured p)/K.
+- Stable colours: each coloured theme takes the colour of the previous theme whose eigenspace it overlaps most
+  (overlap above one half: more shared than not), else a free colour. Tested: a change of T from 20 to 21 keeps
+  every colour on its theme.
+- Seen: story 49% rest (no dominant themes); joke 27% rest, with bars short for most rows because a few completions
+  carry most of the probability (absolute scale).
+
 **Open:** order inside a block by the rest of the profile (second theme, then third) instead of the signed
 loading. That replaces the one remaining heuristic with the same exact quantity, and nests the blocks.
 
