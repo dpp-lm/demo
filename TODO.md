@@ -21,6 +21,16 @@ vector-length lock, point size for quality, unit positions, open the cone, axes 
 multi-model rail and morphing, his extra data files, in-browser models, Gemma, mpnet, owner-only
 routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T′ marker.
 
+## Next: the matrix views (in discussion)
+Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / PCA relationships, open questions).
+- A, high priority: the pool's similarity matrix, reordered so similar completions form blocks (VAT,
+  Bezdek & Hathaway 2002; Manuel's "pairs of completions" panel is the start). Details under discussion.
+  A dendrogram only if its ordering is coherent with the DPP's geometry (no arbitrary linkage rule).
+- Themes: eigenvectors of the kernel as themes over the completions (the dual view is where they live);
+  effective dimension Σ λ/(λ+1) (also explains "K too large").
+- Conditioning (Schur complement): shared by greedy MAP and sampling; value as an exploration tool TBD.
+- Pairwise repulsion: π_ij/(π_i π_j) (the marginal-kernel picture; a K-DPP needs π_ij computed directly).
+
 ## Run log and shared cache (for us, not a visitor feature)
 - Store every run: full configuration (prompt, exact weights, embedder, N, T′, max tokens), seed,
   completions with exact log p and log q, token counts, timestamp. Nothing about the visitor.
@@ -33,25 +43,48 @@ routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T�
 - Open question: should ↑ on a cached setting add fresh draws, or show the cached ones?
 
 ## Waiting on Manuel
-- CORS for https://timvieira.github.io on the server.
+- The exact own-states PR (see "The LM's own states" below).
 - The server to follow docs/BACKEND.md (scripts/conformance.mjs): refuse n > 200 with 400
   bad_request instead of capping; send G instead of emb; version and limits in /status; /embed.
-- Qwen3-Embedding-4B is now on the server (qwen3-emb-4b): decide whether to add it to the page and
-  re-embed the precomputed pools (Modal and the Space would need it too).
-- The own-state files for Qwen3 14B (P, mean, meta), so other backends compute the same vectors.
 
-## Later
-- Check the LM's own states against Qwen3-Embedding (the picks on the joke and sorting presets)
-  before relying on them.
+## The LM's own states as an embedding
+- Decided: exact own states, no random projection. The sampler sums each sequence's raw logits; the
+  server recovers the full 5120-d mean hidden state ((AᵀA)⁻¹Aᵀ l̄, A = [W | 1]), centres it, and sends G.
+  Pooling is the mean over generated steps, including the step that samples EOS (from his code).
+- PR opened on Manuel's fork (branch own-exact on timvieira/dpp-lm-demo, one commit on his main
+  e769c13). Draft, note and numpy check in docs/manuel/ on the scratch branch (own-exact.patch, own-exact-PR.md,
+  own_exact_check.py). It is not tested on a GPU.
+- Waiting on Manuel: the GPU checks in the PR (does the hook see raw logits, with no −inf masking?
+  recovery against HF hidden states), merge, then build_own_M.py and a precompute run (mu_full.npy and
+  the G files).
+- Then: refresh data/cache/*.own.G.bin from his new G files (today's come from the 256-d projection),
+  and check the own states against Qwen3-Embedding (the picks on the joke and sorting presets).
+- Modal and the Space: no own states for now (his P files are the projection we are dropping).
+
+## Later: Qwen3-Embedding-4B on Modal
+- Modal's L40S (48 GB) cannot hold Qwen3 14B (≈30 GB) plus the 4B embedder in float32 (16 GB) and the
+  generation memory. Options: an 80 GB A100 (≈25–30% more per GPU-second; exact, like the GPU server), or
+  the embedder in bfloat16 on the L40S (similarities off by ~1e-3). Until then the page lists 4B on Modal
+  and explains, with a way forward, if it is chosen.
+
+## Untested
+- Hugging Face sign-in end to end, now that the page is back at the main address.
+- Two-finger panning on a real touch screen.
 
 ## Later: pool fit and the default T (see docs/figures/pool-fit-vs-T.png)
 - Report the fit as an effective number of completions, N/ρ̂ = 1/Σ(π_i/K)² (between K and N by
   construction), e.g. "the target effectively uses 4 of these 200 completions". Keep θ̂ in nats in the
-  popover. Drop the 1-nat warning threshold; the note always shows the count and which way raises it
-  (move T toward T′). Optionally translate θ̂ into a total-variation bound,
+  popover. (The 1-nat warning threshold is already gone.) The note could show the count and which way raises it
+  (for the Global target, move T toward 1). Optionally translate θ̂ into a total-variation bound,
   TV ≤ min(√(θ/2), √(1 − e^(−θ))).
-- Default T = T′ for the Global target (the only point where pool and target match: θ̂ at its floor for
-  T′ = 1); T = ∞ is the matched point for Global and local. Today's T = 20 sits on the poor-fit plateau.
+- The default T. T and T′ are unrelated (T′ tempers each token, T the whole completion), so T = T′ is
+  not a matched point. Global matches the pool only at T = 1 with T′ = 1 (then κ = p = q); for T′ ≠ 1 it
+  never matches. Global and local matches at T = ∞ for every T′ (κ = p°_{T′} = q). Today's default,
+  Global at T = 20, sits on the poor-fit plateau. Options: Global at T = 1, or Global and local at large T.
+
+## Later: a "follow the action" camera (decide later)
+- Today the view is set once, when the points are first drawn (axes, zoom, framing), and then only the
+  visitor moves it. An optional mode could re-frame or re-fit the axes as the selection changes.
 
 ## Later: the bouquet (all completions point one way from the origin)
 - Completions of one prompt share a large common direction (cosines 0.5–0.9; on the story prompt the
@@ -78,8 +111,14 @@ routes in the page, the drawn-vs-true volume readout, paper T ticks, the T = T�
 Our fork adds a switch, "Expert tools", in the bottom bar. With it off the page behaves as upstream. With it on, a panel under the prompt and subset controls has these sections (code in `js/expert.js`, one file per tool):
 - Extra models and embeddings: the expert switch adds what the GPU server offers to the Settings selects (`js/expert.js`); there is no panel section for them.
 - Groups: color the completions by cluster, with names and a legend over the plot (`js/groups.js`).
-- Not super principled: the options listed above under "Cut (not doing)" that have no principled justification, kept here and marked as such: paper settings and paper T values, one T per picking mode, an override of the DPP weight, the vector length, point size for quality, unit positions, opening the cone, and fixed axes (`js/unprincipled.js`).
+- Not super principled: the options listed above under "Cut (not doing)" that have no principled justification, kept here and marked as such (`js/unprincipled.js`): paper settings and paper T values, one T per picking mode, an override of the DPP weight, the vector length (quality, importance or unit), point size for quality, unit positions, opening the cone, and the axes (fitted at first draw, which is upstream's choice, or principal axes).
 
 Also in the fork:
 - The similarity matrices (primal L and dual C) have a Matrices button in the default view (`js/matrix-panel.js`). With the switch on they get color, order, axes and printed-submatrix options.
-- Most likely and Sample draw the same cloud: the arrow lengths are √κ in both modes, so switching changes the selected set and not the picture.
+- Queue position: the GPU server's `/queue` is polled with a `request_id` and the status line shows the place in line (`js/expert.js`, always on).
+
+Merged from upstream, so our own versions are gone: points are drawn at length √κ in both modes (4b15c6c), "Scale points by quality" is removed (cbd3fdd, points are always scaled), the view never turns or re-zooms on mode, K or T (addd6cb), and the pool fit is a plain number without a threshold (6c6b6f8). Consequences for the expert layer:
+- Vector length has no "off" state any more: its options are follows the weight (√κ unless the weight is overridden), quality, importance and unit length. Point size shows quality no longer forces unit length; it only sets the radius.
+- Axes: upstream fits the first K axes (K ≤ 3) to the completions selected when the points are first drawn, once per pool and per 1-D/2-D/3-D choice. Principal axes use plain uncentered PCA for every K. The only difference is that basis, so the option stays, and a change re-projects and frames the plot again. Neither choice moves the cloud on a mode, K or T change.
+- Opening the cone and Axes re-project and call `plot.reset()`, because upstream sets the 3-D scale and the 2-D frame once.
+- Lab: `lab/matrix.html` is upstream's (unlinked, deployed at `/lab/matrix.html`). Our deploy must publish it beside `index.html` and put `lab/matrix.js` and `lab/orderings.js` in the hashed folder (see `.github/workflows/pages.yml`).

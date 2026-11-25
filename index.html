@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="booting">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -56,11 +56,14 @@
       <span id="subset-meta" class="note"></span>
     </div>
     <ol id="selected" class="cards" aria-label="Selected subset"></ol>
-    <div class="subset-head all-head">
-      <h2>All completions</h2>
-      <span id="all-meta" class="note"></span>
-    </div>
-    <ol id="all-cards" class="cards" aria-label="All completions"></ol>
+    <!-- All completions: collapsed by default, so the first view tells the simple story. -->
+    <details class="all-list" id="all-list">
+      <summary class="subset-head all-head">
+        <h2>All completions</h2>
+        <span id="all-meta" class="note"></span>
+      </summary>
+      <ol id="all-cards" class="cards" aria-label="All completions"></ol>
+    </details>
   </aside>
 
   <!-- Prompt and subset controls: docked at the bottom on wide screens. -->
@@ -96,17 +99,17 @@
 
     <section class="step step-2" aria-label="Subset">
       <div class="tfield">
-        <span class="tlab"><span class="fn"><label for="T-slider" title="Temperature">T</label><button type="button" class="xbtn" data-x="T" aria-label="What does T do?">?</button></span> <output id="T-out" class="val">1.00</output></span>
-        <input id="T-slider" type="range" min="0" max="1000" step="1" value="500" aria-label="Temperature T">
+        <span class="tlab"><span class="fn"><label for="T-slider" title="Temperature">T</label><button type="button" class="xbtn" data-x="T" aria-label="What does T do?">?</button></span> <output id="T-out" class="val">20.0</output></span>
+        <input id="T-slider" type="range" min="0" max="1000" step="1" value="575" aria-label="Temperature T">
         <span class="ends" aria-hidden="true"><span>quality</span><span>diversity</span></span>
       </div>
       <div class="mode-row">
         <div class="field kfield">
           <span class="lab" id="K-lab" title="Subset size">K</span>
           <div class="stepper" role="group" aria-labelledby="K-lab">
-            <button class="btn icon" id="K-minus" aria-label="Decrease K">−</button>
+            <button class="step-btn" id="K-minus" aria-label="Decrease K"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9"/></svg></button>
             <input id="K" type="number" min="1" max="20" value="3" aria-labelledby="K-lab">
-            <button class="btn icon" id="K-plus" aria-label="Increase K">+</button>
+            <button class="step-btn" id="K-plus" aria-label="Increase K"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9M8 3.5v9"/></svg></button>
           </div>
         </div>
         <span class="grow"></span>
@@ -144,7 +147,6 @@
           <summary>View</summary>
           <div class="menu">
             <label class="toggle"><input type="checkbox" id="label-toggle" checked><span>Label selected points</span></label>
-            <label class="toggle"><input type="checkbox" id="scale-toggle" checked><span>Scale points by quality<button type="button" class="xbtn" data-x="scale" aria-label="What does scaling do?">?</button></span></label>
           </div>
         </details>
       </div>

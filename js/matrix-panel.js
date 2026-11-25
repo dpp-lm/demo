@@ -206,7 +206,7 @@ export function initMatrices(c) {
     title: 'Pairs of completions',
     body: `<p>Entry $(i, j)$ of $\\mathbf L$ is how similar completions $i$ and $j$ are, $\\phi_i \\cdot \\phi_j$, scaled by $\\sqrt{w_i w_j}$. The diagonal is the weights $w$. The color scale runs from the smallest to the largest entry.</p>
       <p>Rows and columns are ordered so that similar completions sit next to each other (the leaf order of average-linkage clustering on $1 - \\cos$, fixed for the pool), so groups of similar completions are dark blocks along the diagonal. Red marks show the selected set. Its $K \\times K$ submatrix $\\mathbf L_S$ has $\\det \\mathbf L_S$ equal to the subset's score.</p>
-      <p>A completion whose weight is far below the largest fades out. When the pool fit is poor, a few rows carry most of the color.</p>`,
+      <p>A completion whose weight is far below the largest fades out. When a few weights dominate, a few rows carry most of the color.</p>`,
   };
   EXPLAIN.dual = {
     title: 'Pairs of embedding directions',

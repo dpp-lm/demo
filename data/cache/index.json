@@ -11,7 +11,8 @@
    "pool": "story_T1.0.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "story_T1.0.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "story_T1.0.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "story_T1.0.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "story_T1.0.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -24,7 +25,8 @@
    "pool": "story_T1.5.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "story_T1.5.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "story_T1.5.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "story_T1.5.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "story_T1.5.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -37,7 +39,8 @@
    "pool": "city_T1.0.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "city_T1.0.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "city_T1.0.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "city_T1.0.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "city_T1.0.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -50,7 +53,8 @@
    "pool": "city_T1.5.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "city_T1.5.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "city_T1.5.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "city_T1.5.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "city_T1.5.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -63,7 +67,8 @@
    "pool": "animal_T1.0.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "animal_T1.0.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "animal_T1.0.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "animal_T1.0.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "animal_T1.0.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -76,7 +81,8 @@
    "pool": "animal_T1.5.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "animal_T1.5.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "animal_T1.5.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "animal_T1.5.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "animal_T1.5.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -89,7 +95,8 @@
    "pool": "bike_T1.0.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "bike_T1.0.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "bike_T1.0.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "bike_T1.0.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "bike_T1.0.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -102,7 +109,8 @@
    "pool": "bike_T1.5.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "bike_T1.5.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "bike_T1.5.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "bike_T1.5.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "bike_T1.5.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -115,7 +123,8 @@
    "pool": "firstdate_T1.0.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "firstdate_T1.0.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "firstdate_T1.0.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "firstdate_T1.0.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "firstdate_T1.0.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -128,7 +137,8 @@
    "pool": "firstdate_T1.5.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "firstdate_T1.5.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "firstdate_T1.5.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "firstdate_T1.5.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "firstdate_T1.5.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -141,7 +151,8 @@
    "pool": "gift_T1.0.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "gift_T1.0.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "gift_T1.0.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "gift_T1.0.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "gift_T1.0.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -154,7 +165,8 @@
    "pool": "gift_T1.5.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "gift_T1.5.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "gift_T1.5.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "gift_T1.5.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "gift_T1.5.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -167,7 +179,8 @@
    "pool": "dinner_T1.0.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "dinner_T1.0.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "dinner_T1.0.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "dinner_T1.0.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "dinner_T1.0.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -180,7 +193,8 @@
    "pool": "dinner_T1.5.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "dinner_T1.5.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "dinner_T1.5.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "dinner_T1.5.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "dinner_T1.5.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -193,7 +207,8 @@
    "pool": "joke_T1.0.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "joke_T1.0.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "joke_T1.0.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "joke_T1.0.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "joke_T1.0.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -206,7 +221,8 @@
    "pool": "joke_T1.5.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "joke_T1.5.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "joke_T1.5.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "joke_T1.5.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "joke_T1.5.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -219,7 +235,8 @@
    "pool": "sort_T1.0.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "sort_T1.0.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "sort_T1.0.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "sort_T1.0.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "sort_T1.0.qwen3-emb-4b.G.bin"
    }
   },
   {
@@ -232,7 +249,8 @@
    "pool": "sort_T1.5.json",
    "G": {
     "Qwen/Qwen3-Embedding-0.6B": "sort_T1.5.qwen3-emb.G.bin",
-    "own:Qwen/Qwen3-14B-AWQ": "sort_T1.5.own.G.bin"
+    "own:Qwen/Qwen3-14B-AWQ": "sort_T1.5.own.G.bin",
+    "Qwen/Qwen3-Embedding-4B": "sort_T1.5.qwen3-emb-4b.G.bin"
    }
   }
  ]

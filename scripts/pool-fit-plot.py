@@ -20,7 +20,6 @@ for ax, (target, title) in zip(axes, titles):
     ax.set_xscale('log'); ax.set_yscale('log'); ax.set_ylim(0.035, 5)
     for y in (floor, ceil): ax.axhline(y, color=muted, lw=1, ls=(0, (1, 2)))
     ax.axvline(20, color=muted, lw=1, ls=(0, (4, 3)))
-    for tp in (1.0, 1.5): ax.axvline(tp, color=col[tp], lw=1, alpha=0.35)
     ax.set_xticks([0.1, 1, 10, 100, 1000, xinf]); ax.set_xticklabels(['0.1', '1', '10', '100', '1000', '∞'])
     ax.set_title(title, fontsize=11, color=ink, loc='left')
     ax.set_xlabel('T  (global temperature)', color=ink, fontsize=10)
@@ -32,9 +31,13 @@ for ax, (target, title) in zip(axes, titles):
 axes[0].text(2500, floor * 1.15, f'floor K²/(N−K+1) = {floor:.3f}: weights uniform', color=muted, fontsize=8, ha='right')
 axes[0].text(22, 0.2, 'page default\nT = 20', color=muted, fontsize=8, va='bottom')
 axes[1].text(22, 1.2, 'page default\nT = 20', color=muted, fontsize=8, va='bottom')
+axes[0].annotate('T = 1 with T′ = 1:\nκ = p = q', xy=(1, 0.046), xytext=(0.055, 0.062), color=muted, fontsize=8,
+                 va='center', arrowprops=dict(arrowstyle='-', color=muted, lw=0.8, shrinkA=2))
+axes[1].annotate('T = ∞: κ = q for every T′', xy=(xinf, 0.05), xytext=(220, 0.16), color=muted, fontsize=8,
+                 ha='center', arrowprops=dict(arrowstyle='-', color=muted, lw=0.8))
 axes[0].set_ylabel(r'pool fit $\hat\theta$ (nats)', color=ink)
 axes[1].legend([Line2D([], [], color=col[1.0], lw=1.5), Line2D([], [], color=col[1.5], lw=1.5)],
                ["pools drawn at T′ = 1.0", "pools drawn at T′ = 1.5"], frameon=False, fontsize=9, loc='center right', bbox_to_anchor=(1.0, 0.42))
-fig.suptitle(f'Pool fit vs T: 9 example prompts × 2 values of T′, N = {N}, K = {K}, Qwen3-Embedding-0.6B. Faint vertical lines mark T = T′.', fontsize=9.5, color=muted, x=0.01, ha='left')
+fig.suptitle(f'Pool fit vs T: 9 example prompts × 2 values of T′, N = {N}, K = {K}, Qwen3-Embedding-0.6B. T′ is a local (per-token) temperature, unrelated to T.', fontsize=9.5, color=muted, x=0.01, ha='left')
 fig.tight_layout(rect=(0, 0, 1, 0.95))
 fig.savefig(sys.argv[2], facecolor='white')

@@ -39,24 +39,20 @@ function render() {
   const match = matchPreset({ mode: w.mode, Tprime: tp, K: w.K, T: w.T, weight: w.target === 'global' ? fam : 'target' });
   const note = presetNote({ match, last: lastPreset, now: { mode: w.mode, T: w.T, K: w.K, tp, weight: w.target === 'global' ? fam : 'target', len: st.len, lock: true } });
   const other = w.mode === 'map' ? 'sample' : 'map', Tother = Tby?.[other] ?? w.T;
-  const scaled = document.getElementById('scale-toggle')?.checked !== false;
-  const lenDis = st.sizeQ || !scaled;
-  const lenNote = !scaled ? 'Points are drawn at unit length because Scale points by quality is off in View.' : st.sizeQ ? 'Points are drawn at unit length while point size shows quality.' : '';
-  const unitDrawn = drawnFamily(st, w.mode, scaled) === 'unit';
+  const unitDrawn = drawnFamily(st, w.mode) === 'unit';
   return `<p class="x-note">${NP_NOTE}</p>
     <div class="x-row"><span class="x-lab">Paper settings${q('np-preset', 'What do the paper settings do?')}</span>${seg('Paper settings', [{ id: 'map', f: 'preset-map', label: PRESETS.map.label }, { id: 'samp', f: 'preset-samp', label: PRESETS.samp.label }], match)}${note ? `<span class="x-note">${esc(note)}</span>` : ''}</div>
     <div class="x-row"><span class="x-lab">Paper T for ${w.mode === 'map' ? 'Most likely' : 'Sample'}${q('np-paperT', 'What are the paper T values?')}</span><div class="x-ticks">${ticks.map((t) => `<button type="button" class="x-tick" data-f="np-T-${t}" aria-pressed="${Math.abs(t - w.T) <= 1e-6 * t}">${t}</button>`).join('')}</div></div>
     ${toggle('np-shared', 'Same T for both picking modes', 'np-shared', 'What does one T for both modes do?', st.sharedT)}
     ${st.sharedT ? '' : `<p class="x-note">T is <span class="x-num">${fmtT(w.T)}</span> for ${w.mode === 'map' ? 'Most likely' : 'Sample'} and <span class="x-num">${fmtT(Tother)}</span> for ${other === 'map' ? 'Most likely' : 'Sample'}.</p>`}
     ${sel('np-weight', 'DPP weight', 'np-weight', 'What does the DPP weight override do?', [['follow', 'Follows mode and target'], ['quality', 'Quality, κ'], ['importance', 'Importance, κ / q'], ['unit', 'Unit, 1']], st.weight)}
-    ${sel('np-len', 'Vector length', 'np-len', 'What does the vector length do?', lenDis ? [['unit', 'Unit length']] : [['follow', 'Follows the weight (locked)'], ['quality', 'Quality, √κ'], ['importance', 'Importance, √(κ / q)']], lenDis ? 'unit' : st.len, lenDis)}
-    ${lenNote ? `<p class="x-note">${lenNote}</p>` : ''}
+    ${sel('np-len', 'Vector length', 'np-len', 'What does the vector length do?', [['follow', 'Follows the weight (√κ unless overridden)'], ['quality', 'Quality, √κ'], ['importance', 'Importance, √(κ / q)'], ['unit', 'Unit length']], st.len)}
     ${toggle('np-size', 'Point size shows quality', 'np-size', 'What does point size do?', st.sizeQ)}
     ${toggle('np-ghost', 'Show unit positions', 'np-ghost', 'What are the faint dots?', st.ghost, unitDrawn)}
     ${unitDrawn ? '<p class="x-note">Points are already at unit length, so there is nothing to compare.</p>' : ''}
     ${toggle('np-cone', 'Open the cone', 'np-cone', 'What does opening the cone do?', st.cone, w.dims === 1)}
     ${w.dims === 1 ? '<p class="x-note">The cone opens from 2-D on. Spectrum sets the dimensions.</p>' : ''}
-    <div class="x-row"><span class="x-lab">Axes${q('np-axes', 'What do the axes options do?')}</span>${seg('Axes', [{ id: 'fit', f: 'axes-fit', label: 'Fit to selection' }, { id: 'fixed', f: 'axes-fixed', label: 'Fixed' }], st.axes)}</div>
+    <div class="x-row"><span class="x-lab">Axes${q('np-axes', 'What do the axes options do?')}</span>${seg('Axes', [{ id: 'fit', f: 'axes-fit', label: 'Fitted at first draw' }, { id: 'fixed', f: 'axes-fixed', label: 'Principal axes' }], st.axes)}</div>
     ${w.K > 3 ? '<p class="x-note">For K above 3 both choices give the same axes.</p>' : ''}`;
 }
 
@@ -126,14 +122,14 @@ export function initUnprincipled(c) {
   EXPLAIN['np-weight'] = np('DPP weight', `<p>The weight $w(y)$ sets how much each completion counts in the kernel $L_{ij} = \\sqrt{w_i}\\,\\phi_i\\cdot\\phi_j\\,\\sqrt{w_j}$. The default page uses $\\kappa(y)$ for Most likely and $\\kappa(y)/p^{\\circ}_{T'}(y)$ for Sample, with $\\kappa$ the target quality of the Settings.</p>
     <ul><li><b>Quality</b>: $w = \\kappa$, in either mode.</li><li><b>Importance</b>: $w = \\kappa / q$, in either mode.</li><li><b>Unit</b>: $w = 1$, so $T$ has no effect on the kernel.</li></ul>
     <p>A choice other than Follows replaces the weight that picks the subset in the current mode. The similarity matrices show the weights in use. The pool fit under the plot is still computed for the default weights and still describes the target of the Settings.</p>`);
-  EXPLAIN['np-len'] = np('Vector length', `<p>How long each arrow is drawn. It changes the picture, never the selection. <b>Follows the weight</b> is locked to the DPP weight: $\\sqrt{\\kappa}$ unless the DPP weight is overridden, so the drawn box is the one the kernel scores in Most likely. <b>Quality</b> draws $\\sqrt{\\kappa(y)}$ and <b>Importance</b> draws $\\sqrt{\\kappa(y)/q(y)}$, each relative to the largest. Arrows are drawn at length 1 while Scale points by quality is off in View or point size shows quality, and the select then shows Unit length.</p>
+  EXPLAIN['np-len'] = np('Vector length', `<p>How long each arrow is drawn. It changes the picture, never the selection. <b>Follows the weight</b> is locked to the DPP weight: $\\sqrt{\\kappa}$ unless the DPP weight is overridden, so the drawn box is the one the kernel scores in Most likely. <b>Quality</b> draws $\\sqrt{\\kappa(y)}$ and <b>Importance</b> draws $\\sqrt{\\kappa(y)/q(y)}$, each relative to the largest. <b>Unit length</b> draws every arrow at length 1, showing directions only.</p>
     <p>When the drawn length is not the kernel's weight, the line under the plot says which arrows the volume belongs to.</p>`);
-  EXPLAIN['np-size'] = np('Point size shows quality', `<p>Draws every arrow at unit length and shows quality as the radius of each point: proportional to $\\sqrt{\\kappa(y)}$ relative to the likeliest completion, with a floor of 35% so every point stays visible. The drawn volume is then the volume of the unit-length arrows.</p>`);
+  EXPLAIN['np-size'] = np('Point size shows quality', `<p>Shows quality as the radius of each point: proportional to $\\sqrt{\\kappa(y)}$ relative to the likeliest completion, with a floor of 35% so every point stays visible. It does not change the arrow lengths. With Vector length set to Unit length the radius is then the only sign of quality.</p>`);
   EXPLAIN['np-ghost'] = np('Unit positions', `<p>The faint dots mark each completion's direction at unit length, where it sits with no length scaling. The solid points are the same completions at the chosen vector length. A faint dot is drawn only where it differs from its solid point.</p>`);
   EXPLAIN['np-cone'] = np('Open the cone', `<p>The completions of one prompt have embeddings pointing in nearly the same direction, so the points sit in a narrow cone around their mean direction. Opening the cone stretches every direction perpendicular to that mean by a factor $s$ and leaves the mean direction alone. $s$ is the ratio of the points' spread along the mean direction to their spread across it, between 1 and 4.</p>
     <p>The stretch is one linear map, so every volume is multiplied by $s^2$ in 3-D (by $s$ in 2-D) and ratios between volumes are unchanged. The kernel and the selection are unchanged. The box is not drawn while the cone is open.</p>`);
-  EXPLAIN['np-axes'] = np('Axes', `<p><b>Fit to selection</b> is the default page's choice for $K \\le 3$: the first $K$ axes span the selected arrows, so the drawn box is the volume the kernel scores. The cloud moves when the selection changes.</p>
-    <p><b>Fixed</b> uses plain uncentered principal axes of the pool for every $K$, so the cloud stays where it is when the selection, picking mode, $T$ or $K$ change. The box is then a view of the volume, not the volume itself.</p>`);
+  EXPLAIN['np-axes'] = np('Axes', `<p>The default page sets the axes once per pool, when the points are first drawn, and never turns them afterwards. <b>Fitted at first draw</b> is its choice for $K \\le 3$: the first $K$ axes span the arrows selected at that moment, so the box is exactly their volume (for a later selection it is the volume's shadow on these axes).</p>
+    <p><b>Principal axes</b> uses plain uncentered principal axes of the pool for every $K$. Neither choice moves the cloud when the selection, picking mode, $T$ or $K$ change. Switching between them frames the plot again.</p>`);
   // Notes beside his own controls, shown while the weight is overridden.
   const row = document.querySelector('.step-2 .mode-row');
   modeNote = document.createElement('p');

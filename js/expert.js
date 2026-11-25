@@ -195,7 +195,6 @@ export function initExpert(hooks) {
     if (d.open) c.delete(d.dataset.sec); else c.add(d.dataset.sec);
     writeClosed(c);
   }, true);
-  $('#scale-toggle').addEventListener('change', () => setTimeout(renderPanel, 0));   // the Vector length select follows View
   window.addEventListener('resize', fitPanel);
   new ResizeObserver(fitPanel).observe(document.querySelector('.dock'));
   if (read()) setOn(true, { save: false });

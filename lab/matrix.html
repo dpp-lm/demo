@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matrix orderings lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400..800;1,400..800&display=swap">
+<style>
+  :root { --bg: #f7f3ee; --surface: #fbfaf8; --text: #1f1d1a; --text-2: #4a4640; --muted: #8a847b; --border: #e2dcd3; --ink: #2a2723; --accent: #c0392b;
+    --serif: 'EB Garamond', Georgia, serif; --sans: system-ui, -apple-system, 'Segoe UI', sans-serif; --mono: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #1b1a18; --surface: #232220; --text: #ece8e1; --text-2: #c9c3b9; --muted: #8f897f; --border: #3a3733; --ink: #ece8e1; --accent: #e06a5c; } }
+  :root[data-theme="dark"] { --bg: #1b1a18; --surface: #232220; --text: #ece8e1; --text-2: #c9c3b9; --muted: #8f897f; --border: #3a3733; --ink: #ece8e1; --accent: #e06a5c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 var(--sans); }
+  main { max-width: 1240px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font: 500 28px/1.15 var(--serif); margin: 0 0 4px; }
+  .lede { color: var(--text-2); margin: 0 0 16px; max-width: 76ch; }
+  .lede a { color: inherit; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
+  .controls label { display: inline-flex; gap: 6px; align-items: center; color: var(--text-2); font-size: 13.5px; }
+  select, input[type=number] { font: inherit; font-size: 13.5px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+  input[type=number] { width: 4.2em; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg button { font: inherit; font-size: 13px; border: 0; background: transparent; color: var(--text-2); padding: 3px 9px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+  .tval { font-family: var(--mono); font-size: 13px; min-width: 3.2em; display: inline-block; }
+  .Lonly[hidden] { display: none; }
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 980px) { .panels { grid-template-columns: 1fr; } }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; min-width: 0; }
+  .phead { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .phead .note { color: var(--muted); font-size: 12.5px; }
+  .grid { display: grid; grid-template-columns: 70px 1fr; grid-template-rows: 34px auto; gap: 2px; }
+  .corner { grid-row: 1; grid-column: 1; font-size: 10.5px; color: var(--muted); line-height: 1.2; align-self: end; }
+  .top { grid-row: 1; grid-column: 2; position: relative; }
+  .left { grid-row: 2; grid-column: 1; position: relative; }
+  .cw { grid-row: 2; grid-column: 2; position: relative; aspect-ratio: 1; width: 100%; }
+  .cw canvas { width: 100%; height: 100%; image-rendering: pixelated; display: block; cursor: crosshair; }
+  svg.margin { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .xh { position: absolute; pointer-events: none; background: var(--accent); opacity: .55; display: none; }
+  .xh.r { left: 0; right: 0; height: 1px; } .xh.c { top: 0; bottom: 0; width: 1px; }
+  .scale { display: flex; align-items: center; gap: 8px; font: 11.5px var(--mono); color: var(--muted); margin-top: 8px; }
+  .scale .bar { flex: 1; height: 8px; border-radius: 4px; border: 1px solid var(--border); }
+  .hover { margin-top: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; min-height: 92px; }
+  .hover .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 700px) { .hover .pair { grid-template-columns: 1fr; } }
+  .hover .t { font: 16px/1.4 var(--serif); white-space: pre-wrap; }
+  .hover .k { color: var(--muted); font-size: 12px; margin-bottom: 2px; }
+  .hover .v { font: 12.5px var(--mono); color: var(--text-2); margin-top: 6px; }
+  .legend { color: var(--muted); font-size: 12.5px; margin-top: 12px; max-width: 90ch; }
+  .legend b { color: var(--text-2); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Matrix orderings lab</h1>
+  <p class="lede">The pool's similarity matrix, rows reordered so similar completions form blocks. Compare orderings side by side.
+    Notes: <a href="https://github.com/timvieira/dpp-lm-demo/blob/main/docs/matrix-views.md">docs/matrix-views.md</a>, section 2A.</p>
+
+  <div class="controls">
+    <label>Prompt <select id="pool"></select></label>
+    <label>Embedder <select id="emb"></select></label>
+    <label>Rows <span class="seg" id="rows"><button data-v="all" aria-pressed="true">all</button><button data-v="distinct">distinct</button></span></label>
+    <label>Show <span class="seg" id="show"><button data-v="G" aria-pressed="true">G</button><button data-v="L">L</button></span></label>
+    <label>Order on <span class="seg" id="on"><button data-v="G" aria-pressed="true">G</button><button data-v="L">L</button></span></label>
+    <label>K <input type="number" id="K" min="1" max="12" value="3"></label>
+    <span class="Lonly" id="Lctl" hidden>
+      <label>T <input type="range" id="T" min="0" max="1000" value="575" step="5" style="width:120px"><span class="tval" id="Tout">20.0</span></label>
+      <label>Target <select id="target"><option value="global">Global</option><option value="gl">Global and local</option></select></label>
+      <label>Weights <select id="mode"><option value="map">Most likely (κ)</option><option value="sample">Sample (κ/q)</option></select></label>
+    </span>
+  </div>
+
+  <div class="panels" id="panels"></div>
+
+  <div class="hover" id="hover"><span class="k">Hover a cell to see the pair.</span></div>
+
+  <p class="legend">
+    <b>Pool order</b>: as drawn. <b>Average linkage</b>: Manuel's order (UPGMA on 1 − cos). <b>Pivots, flat</b>: the first K pivots of pivoted Cholesky
+    (greedy volume), each followed by the completions it explains the most of. <b>Pivots, nested</b>: the whole factorisation as a tree; parent = the earlier
+    pivot that explains the most of a completion; height = its leftover length when taken (a volume factor). <b>Themes</b>: each completion joins the
+    eigenvector carrying the largest share of its length. Red ticks: the greedy (Most likely) picks for the current weights. Top strip: height
+    (leftover length when taken) for the pivot orders. <b>Show</b> picks the matrix drawn; <b>Order on</b> picks the matrix the order is computed from.
+    L = diag(√w) G diag(√w); G is L for the Global target at T = ∞.
+  </p>
+</main>
+<script type="module" src="matrix.js"></script>
+</body>
+</html>

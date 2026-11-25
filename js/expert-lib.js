@@ -250,7 +250,7 @@ export function treeOf(G, N) {
 /** The note under the section title and at the end of each option's "?" text. */
 export const NP_NOTE = 'Options the default page leaves out because they have no principled justification. The paper does not use them.';
 
-/** Defaults of the section. `weight` and `len` are 'follow' or a family; `axes` is 'fit' (his default) or 'fixed'. */
+/** Defaults of the section. `weight` and `len` are 'follow' or a family; `axes` is 'fit' (his default: fitted once to the first selection) or 'fixed' (principal axes). */
 export const NP_DEFAULTS = { sharedT: true, weight: 'follow', len: 'follow', sizeQ: false, ghost: false, cone: false, axes: 'fit' };
 export const WEIGHT_FAMILIES = ['quality', 'importance', 'unit'];
 export const FAMILY_NAME = { quality: 'Quality', importance: 'Importance', unit: 'Unit' };
@@ -262,13 +262,11 @@ export const npIsDefault = (st) => Object.keys(NP_DEFAULTS).every((k) => st[k] =
 export const kernelFamily = (xo, mode) => (xo && WEIGHT_FAMILIES.includes(xo.weight) ? xo.weight : mode === 'map' ? 'quality' : 'importance');
 
 /**
- * The family the arrow lengths are drawn from. "Scale points by quality" off (`scaled` false) and Point size showing quality
- * draw unit length; a Vector length choice wins next; 'follow' follows the weight override, and without one is √κ.
+ * The family the arrow lengths are drawn from. A Vector length choice wins; 'follow' follows the weight override,
+ * and without one is √κ, the default page's length in both modes.
  */
-export function drawnFamily(xo, mode, scaled = true) {
-  if (!scaled) return 'unit';
+export function drawnFamily(xo, mode) {
   if (!xo) return 'quality';
-  if (xo.sizeQ) return 'unit';
   if (WEIGHT_FAMILIES.includes(xo.len)) return xo.len;
   return WEIGHT_FAMILIES.includes(xo.weight) ? xo.weight : 'quality';
 }

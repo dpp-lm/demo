@@ -9,7 +9,7 @@ export const EXPLAIN = {
         <li><b>Small $T$</b> exaggerates differences in likelihood, so the most likely completions win (quality).</li>
         <li><b>Large $T$</b> flattens them; at the right end, $T = \\infty$, they count equally and only how different the completions are matters (diversity).</li>
       </ul>
-      <p>One $T$ serves both <b>Most likely</b> and <b>Sample</b>. Sample is only reliable near $T = T'$; the <b>pool fit</b> under the plot says when it is not.</p>`,
+      <p>One $T$ serves both <b>Most likely</b> and <b>Sample</b>. Sample is reliable only when the completions represent the target well; the <b>pool fit</b> under the plot says how well. $T$ is unrelated to the sampling temperature $T'$ ($T'$ tempers each token as it is drawn, $T$ the probability of the whole completion), so matching them means nothing. With the default target the fit is good only near $T = 1$, and only for completions drawn at $T' = 1$.</p>`,
   },
   subset: {
     title: 'How the subset is chosen',
@@ -23,7 +23,7 @@ export const EXPLAIN = {
     title: 'Spanned volume',
     body: `<p>The grey box is spanned by the selected arrows, each drawn at length $\\sqrt{\\kappa(y)}$ in both modes. With <b>Most likely</b> its squared volume is $\\det \\mathbf L_S$, the subset's score: long arrows (likely completions) pointing in different directions (different meanings) make a big box; near-duplicates flatten it.</p>
       <p>With <b>Sample</b> the sets are scored with the arrows lengthened by $1/\\sqrt{p^{\\circ}_{T'}(y)}$, to undo how the completions were drawn. The box still shows the $\\sqrt{\\kappa(y)}$ arrows, so its volume is not the quantity Sample draws from.</p>
-      <p>For $K \\le 3$ the plot's first axes are chosen to contain the selected arrows, so the box drawn is exactly the volume of those arrows, not a projection of it.</p>`,
+      <p>For $K \\le 3$ the plot's first axes are chosen once, to contain the arrows selected when the points were first drawn, so for that set the box is exactly the volume of those arrows. For a later set it is the volume's shadow on the same axes.</p>`,
   },
   logp: {
     title: 'log P(S)',
@@ -88,14 +88,10 @@ export const EXPLAIN = {
     title: 'Sampling temperature T′',
     body: `<p>Controls how the completions are generated: every next-token distribution is raised to the power $1/T'$ and renormalized. $T' = 1$ samples the model as it is. Higher $T'$ gives more varied but less coherent text, which is why diversity comes from choosing the subset afterwards instead.</p>`,
   },
-  scale: {
-    title: 'Scale points by quality',
-    body: `<p>When on, each point sits at length $\\sqrt{\\kappa(y)}$ along its embedding direction (relative to the longest). These are the arrows <b>Most likely</b> scores. <b>Sample</b> scores them reweighted by $1/p^{\\circ}_{T'}(y)$, but the drawing stays the same, so switching between the two changes which points are selected and not their lengths. Changing $T$ grows or shrinks the arrows. When off, every completion is drawn at unit length, showing directions only.</p>`,
-  },
   pca: {
     title: 'Spectrum',
     body: `<p>The completions' embeddings have hundreds of dimensions. The bars show how much of their spread lies along each of the first principal axes (uncentred, so arrows start at the origin, where volume is measured from). A pool whose spread sits in very few axes has little room for diverse subsets.</p>
-      <p>For $K \\le 3$ the plot's axes are fitted to the selected completions instead; otherwise it shows the first principal axes. Fitted axes follow the selection, so the cloud turns when the selected set changes, for example when you switch between Most likely and Sample.</p>`,
+      <p>For $K \\le 3$ the plot's axes are fitted to the selected completions instead; otherwise it shows the first principal axes.</p>`,
   },
 };
 

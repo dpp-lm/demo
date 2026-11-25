@@ -242,7 +242,7 @@ test('treeOf caches the seriation per Gram matrix', async () => {
 // ---------- "Not super principled" ----------
 import { NP_NOTE, NP_DEFAULTS, npIsDefault, kernelFamily, drawnFamily, weightScale, lengthsFrom, pointRadii, volumeSuffix, modeT, presetNote, maxShift } from '../js/expert-lib.js';
 
-test('kernelFamily and drawnFamily: defaults are the paper weights and √κ; an override moves both; size and unit win for the drawing', () => {
+test('kernelFamily and drawnFamily: defaults are the paper weights and √κ; an override moves both; a Vector length choice wins for the drawing; point size does not change it', () => {
   assert.equal(kernelFamily(null, 'map'), 'quality');
   assert.equal(kernelFamily(null, 'sample'), 'importance');
   assert.equal(kernelFamily({ ...NP_DEFAULTS }, 'sample'), 'importance');
@@ -251,10 +251,8 @@ test('kernelFamily and drawnFamily: defaults are the paper weights and √κ; an
   assert.equal(drawnFamily({ ...NP_DEFAULTS }, 'sample'), 'quality');
   assert.equal(drawnFamily({ ...NP_DEFAULTS, weight: 'importance' }, 'map'), 'importance');
   assert.equal(drawnFamily({ ...NP_DEFAULTS, weight: 'importance', len: 'unit' }, 'map'), 'unit');
-  assert.equal(drawnFamily({ ...NP_DEFAULTS, len: 'importance', sizeQ: true }, 'map'), 'unit');
-  assert.equal(drawnFamily({ ...NP_DEFAULTS }, 'map', false), 'unit');
-  assert.equal(drawnFamily(null, 'map', false), 'unit');   // the default page too: View's "Scale points by quality" off draws unit length
-  assert.equal(drawnFamily({ ...NP_DEFAULTS, len: 'importance' }, 'map', false), 'unit');
+  assert.equal(drawnFamily({ ...NP_DEFAULTS, len: 'importance', sizeQ: true }, 'map'), 'importance');
+  assert.equal(drawnFamily({ ...NP_DEFAULTS, sizeQ: true }, 'sample'), 'quality');
 });
 
 test('weightScale, lengthsFrom and pointRadii', () => {

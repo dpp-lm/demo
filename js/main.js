@@ -29,7 +29,7 @@ const S = {
   proj: null,        // { coords: [N][3], frac: number[] }
   dims: 3,
   mode: 'map',
-  T: 20,             // one temperature for both modes
+  T: NaN,            // one temperature for both modes; its starting value is the T slider's, in the HTML
   target: 'global',  // target quality: 'global' κ = p^{1/T}; 'gl' κ = p^{1/T}·p°_{T′}
   K: 3,
   pinned: -1,
@@ -139,15 +139,18 @@ const DEMO_SERVER = new URLSearchParams(location.search).get('server') === 'loca
   ? `${location.origin}/dpp_api` : 'https://zueri-monstro.rufous-hamlet.ts.net/dpp_api';
 const MODAL_URL = 'https://timvieira--dpp-lm-sampler-web.modal.run';
 const SPACE_URL = 'https://xtimv-dpp-lm-sampler.hf.space';
+const QEMB4 = { id: 'qwen3-emb-4b', repo: 'Qwen/Qwen3-Embedding-4B', label: 'Qwen3-Embedding-4B' };
 const QEMB = { id: 'qwen3-emb', repo: 'Qwen/Qwen3-Embedding-0.6B', label: 'Qwen3-Embedding-0.6B' };
 const OWN = { id: 'own', repo: 'own:Qwen/Qwen3-14B-AWQ', label: 'Qwen3 14B’s own states' };
 const BACKENDS = [
   { id: 'server', where: 'GPU server', the: 'the GPU server', label: 'Qwen3 14B, 4-bit (AWQ) · GPU server', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
-    url: DEMO_SERVER, auth: false, embedders: [QEMB, OWN], up: null },
+    url: DEMO_SERVER, auth: false, embedders: [QEMB4, QEMB, OWN], up: null },
   { id: 'modal', where: 'Modal', the: 'Modal', label: 'Qwen3 14B, 4-bit (AWQ) · Modal', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
-    url: MODAL_URL, auth: true, embedders: [QEMB], up: null },
+    url: MODAL_URL, auth: true, embedders: [QEMB4, QEMB], up: null,
+    // Listed so the settings look the same everywhere, but not runnable yet (TODO: Modal and the 4B embedder).
+    unavailable: { 'qwen3-emb-4b': 'Modal’s GPU (48 GB) cannot hold Qwen3 14B and Qwen3-Embedding-4B together yet.' } },
   { id: 'space', where: 'Hugging Face Space', the: 'the Hugging Face Space', label: 'Qwen3 14B, 4-bit (AWQ) · HF Space', short: 'Qwen3 14B 4-bit', repo: 'Qwen/Qwen3-14B-AWQ',
-    url: SPACE_URL, auth: true, embedders: [QEMB], up: null },
+    url: SPACE_URL, auth: true, embedders: [QEMB4], up: null },
 ];
 const cap = (t) => t[0].toUpperCase() + t.slice(1);
 const isServer = (B) => B.id === 'server' || B.id.startsWith('server:');   // expert: the GPU server's extra models have ids server:<key>
@@ -276,22 +279,38 @@ function recompute({ newDraw = true } = {}) {
   const piW = S.mode === 'sample' && ov === 'follow' ? dist.pi : kdpp(G, N, lw, K).pi;   // expert: ov
   let s2 = 0; for (const p of piW) s2 += (p / K) ** 2;
   S.fit = (K * K * N * s2) / (N - K + 1);
-  // Drawn length of each point: √κ relative to the largest, in both modes (the mode changes which points are
-  // selected, not where the points are drawn). Most likely scores exactly these arrows; Sample scores them
-  // reweighted by 1/p°_{T′}.
+  // Drawn length of each point: √κ (its quality under the target) relative to the largest, in both
+  // modes. The importance weights Sample uses only correct for how the pool was drawn; they are not a
+  // property of the completion, so the points do not move when the mode changes.
   // expert: Vector length and Point size choose another family (default: √κ).
   const xo = xopt();
   S.c = lengthsFrom(xo ? drawnFamily(xo, S.mode) : 'quality', lk, lw);
   S.rs = xo?.sizeQ ? pointRadii(lk) : null;
-  S.proj = project();
+  // The axes are set once per pool (and per 1-D/2-D/3-D choice), when the points are first drawn, and
+  // then left alone: the selection, the mode, T and K never turn them.
+  // expert: changing Axes or Open the cone projects again and frames the plot afresh.
+  const fx = xo?.axes === 'fixed';
+  if (!S.proj || S.proj.pool !== S.pool) reproject();
+  else if (S.proj.fixed !== fx) { reproject(); plot.reset(); }
+  else if (S.proj.cone !== coneOpen()) { applyCone(S.proj); plot.reset(); }
   render();
 }
 
-// Axes. For K ≤ 3 (and K ≤ the drawn dimensions) the first K axes span the selected vectors, so the
-// drawn parallelepiped is exactly the volume being scored; the remaining axes are the main directions
-// of what is left. Otherwise plain uncentred PCA. Computed from G alone. Successive views are aligned
-// by a rotation (Kabsch) so the plot turns smoothly instead of jumping.
 const coneOpen = () => !!xopt()?.cone && S.dims > 1;   // expert: "Open the cone" has an effect from 2-D on
+function reproject() { S.proj = project(); applyCone(S.proj); }
+// expert: Open the cone changes only what is drawn; the axes stay the ones computed in project().
+function applyCone(pr) {
+  const cone = coneOpen() ? openCone(pr.coords.map((c) => Array.from(c).slice(0, S.dims))) : null;
+  pr.shown = cone ? cone.coords.map((c) => [c[0], c[1] ?? 0, c[2] ?? 0]) : null;
+  pr.coneS = cone?.s ?? null;
+  pr.cone = coneOpen();
+}
+
+// Axes, computed once when the points are first drawn. For K ≤ 3 (and K ≤ the drawn dimensions) the
+// first K axes span the completions selected at that moment, so the drawn parallelepiped is exactly the
+// volume being scored for that selection (for later selections it is the volume's shadow on these
+// axes); the remaining axes are the main directions of what is left. Otherwise plain uncentred PCA.
+// Computed from G alone.
 function project() {
   const N = S.logp.length, G = S.G, sel = S.sel, k = sel.length;
   const vals = S.eig.values, vecs = S.eig.vectors;
@@ -333,10 +352,7 @@ function project() {
   // expert: fixed axes are never rotated, so the cloud does not move at all.
   const prev = S.proj?.pool === S.pool && !fixedAxes ? S.proj.coords : null;
   if (prev) coords = kabsch(coords, prev, S.dims);
-  // expert: Open the cone changes only what is drawn; the next view still aligns to the unopened coordinates.
-  const cone = coneOpen() ? openCone(coords.map((c) => Array.from(c).slice(0, S.dims))) : null;
-  const shown = cone ? cone.coords.map((c) => [c[0], c[1] ?? 0, c[2] ?? 0]) : null;
-  return { coords, frac, fitted, pool: S.pool, shown, coneS: cone?.s ?? null };
+  return { coords, frac, fitted, k, pool: S.pool, fixed: fixedAxes };
 }
 function kabsch(P, Q, d) {
   // Rotation R (d×d, det +1) minimising Σ‖R p_i − q_i‖² over the first d coordinates.
@@ -364,7 +380,7 @@ function kabsch(P, Q, d) {
 function render() {
   const distinct = new Set(S.pool.samples.map((x) => x.text)).size;
   const N = S.pool.samples.length;
-  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? `drag to rotate · ${matchMedia('(pointer: coarse)').matches ? 'two fingers to move' : 'Shift-drag to move'} · tap a point to read it` : 'tap a point to read it'}`;
+  $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate · ' : ''}${matchMedia('(pointer: coarse)').matches ? 'two fingers to move' : 'Shift-drag to move'} · tap a point to read it`;
   $('#subset-meta').textContent = `K = ${S.sel.length} · ${S.mode === 'map' ? 'most likely (greedy)' : 'sampled'} at T = ${fmtT(S.T)} · target ${TARGETS[S.target].short}`;
   $('#T-out').textContent = fmtT(S.T);
   plot.update();
@@ -385,37 +401,29 @@ function renderSpectrum() {
   el.innerHTML = `<p class="sp-head"><span class="fn">Spectrum<button type="button" class="xbtn" data-x="pca" aria-label="About the spectrum">?</button></span></p>` +
     f.map((v, k) => `<div class="bar"><span>${k + 1}</span><span class="fill" style="width:${(100 * v) / max}%"></span><span class="pv">${(100 * v).toFixed(1)}%</span></div>`).join('') +
     `<p class="sp-dims"><span class="lab">Drawn in</span><span class="pick" role="group" aria-label="Dimensions">${[1, 2, 3].map((d) => `<button type="button" class="pick-btn" data-dims="${d}" aria-pressed="${S.dims === d}">${d}-D</button>`).join('')}</span></p>` +
-    `<p class="sp-note">${S.proj.fitted ? 'Axes 1–' + S.sel.length + ' of the plot span the selected completions; the rest show the main remaining directions.' : 'The plot shows the first principal axes.'}</p>`;
+    `<p class="sp-note">${S.proj.fitted ? 'Axes 1–' + S.proj.k + ' of the plot span the completions selected when it was drawn; the rest show the main remaining directions.' : 'The plot shows the first principal axes.'}</p>`;
   el.querySelectorAll('[data-dims]').forEach((b) => (b.onclick = () => setDims(+b.dataset.dims)));
 }
-function setDims(k) { S.dims = k; S.proj = null; plot.reset(); S.proj = project(); render(); }
+function setDims(k) { S.dims = k; S.proj = null; plot.reset(); reproject(); render(); }
 
 function renderReadout() {
   const N = S.logp.length, K = S.K;
   const ok = S.sel.length === K;
   const stat = (k, v, x, cls = '') => `<span class="stat ${cls}"><span class="fn">${k}<button type="button" class="xbtn" data-x="${x}" aria-label="What is ${k}?">?</button></span> <span class="v">${v}</span></span>`;
-  const poor = S.fit > 1;
   $('#readout').innerHTML =
     stat('log P(S)', ok ? fmt(S.logP) : '—', 'logp') +
     stat('quality', ok ? fmt(quality(S.logp, S.sel)) : '—', 'quality') +
     stat('diversity', ok ? fmt(diversity(S.G, N, S.sel)) : '—', 'diversity') +
-    stat('pool fit', ok ? `${fmt(S.fit)} nats` : '— why?', 'fit', ok && poor ? 'warn' : '');
+    stat('pool fit', ok ? `${fmt(S.fit)} nats` : '— why?', 'fit');   // a plain number: no cut-off for 'poor'
   $('#readout').title = ok ? '' : `No subset of size ${K}: the pool spans fewer than ${K} independent directions.`;
   const note = $('#fit-note');
   if (!ok) {
     note.hidden = false;
     note.textContent = `No subset of ${K} completions has positive volume in this pool: lower K, or sample more varied completions (raise T′).`;
-  } else if (poor) {
-    note.hidden = false;
-    const tp = S.view ? readConfig().Tprime : 1;
-    note.innerHTML = S.mode === 'sample'
-      ? `<b>The pool is a poor match for the target at this T</b> (pool fit ${fmt(S.fit, 1)} nats): Sample may be far from the distribution it aims at. Move T toward T′ = ${tp}, or sample the pool at a T′ closer to T.`
-      : `<b>The pool is a poor match for the target at this T</b> (pool fit ${fmt(S.fit, 1)} nats): the target favours completions the pool rarely contains, so the best set over all strings may not be in it. Move T toward T′ = ${tp}, or sample at a T′ closer to T.`;
   } else note.hidden = true;
   // The Details button carries a dot when the note inside has something to say.
   for (const b of [$('#details-btn'), $('#details-toggle')]) b.classList.toggle('warnflag', !note.hidden);
-  // In the bar (wide screens) the note is a popover, opened by "why?" after the readouts.
-  // In the bar (wide screens) the note is a popover: the pool-fit value opens it.
+  // The note (only when no K-subset exists, an exact condition) opens from the pool-fit "— why?".
   const fitStat = $('#readout').querySelector('.stat:last-child');
   if (!note.hidden) { fitStat.classList.add('warn', 'can-open'); fitStat.querySelector('.v').id = 'fit-why'; fitStat.querySelector('.v').title = 'Why?'; }
   else note.classList.remove('show');
@@ -430,7 +438,7 @@ function renderVolHint() {
     return;
   }
   // expert: what the drawn volume belongs to when the drawn length is not the kernel's weight (default: Sample draws the √κ arrows)
-  const xo = xopt(), suffix = volumeSuffix(kernelFamily(xo, S.mode), drawnFamily(xo, S.mode, $('#scale-toggle').checked));   // unit-length arrows when View's scaling is off
+  const xo = xopt(), suffix = volumeSuffix(kernelFamily(xo, S.mode), drawnFamily(xo, S.mode));
   el.innerHTML = S.proj.fitted
     ? `<svg class="sw-vol" width="18" height="12" viewBox="0 0 18 12" aria-hidden="true"><path d="M1 11L5 1H17L13 11Z"/></svg><span class="fn">spanned volume<button type="button" class="xbtn" data-x="volume" aria-label="What is the spanned volume?">?</button></span>${suffix}`
     : `<span class="muted">${xo?.axes === 'fixed' ? 'on fixed axes the box is a projection' : `volume needs ${S.sel.length}-D`}</span>`;
@@ -439,8 +447,10 @@ function renderVolHint() {
 // A completion that hit the max-token limit, rather than ending with the end-of-text token: said in words.
 const cutLabel = (s) => (s.ended ? '' : `<span class="cutoff" title="Stopped at the max-token limit (${s.nTokens} tokens), before the model ended it">cut off at ${s.nTokens} tokens</span>`);
 function renderCards() {
-  const order = S.sel.slice().sort((a, b) => S.logp[b] - S.logp[a]);
-  const incl = inclusionOfText();
+  // Most likely to be included first, like All completions; log p breaks ties (and orders them when
+  // inclusion is undefined because no K-subset exists).
+  const incl = inclusionOfText(), by = (i) => (Number.isFinite(incl(i)) ? incl(i) : 0);
+  const order = S.sel.slice().sort((a, b) => (by(b) - by(a)) || (S.logp[b] - S.logp[a]));
   $('#selected').innerHTML = order.map((i) => {
     const s = S.pool.samples[i];
     return `<li class="card${s.ended ? '' : ' cut'}" data-i="${i}">
@@ -462,6 +472,8 @@ function renderAllCards() {
   clearTimeout(allTimer);
   allTimer = setTimeout(() => {
     if (!S.pool) return;
+    const distinct = new Set(S.pool.samples.map((x) => x.text)).size;
+    if (!$('#all-list').open) { $('#all-meta').textContent = `${S.pool.samples.length} completions, ${distinct} distinct`; $('#all-cards').innerHTML = ''; return; }   // built only when opened
     const incl = inclusionOfText(), sel = new Set(S.sel.map((i) => S.pool.samples[i].text));
     const groups = new Map();
     S.pool.samples.forEach((s, i) => { const g = groups.get(s.text); if (g) g.n++; else groups.set(s.text, { i, n: 1 }); });
@@ -519,13 +531,37 @@ function parallelotope(O, V) {
 }
 
 class Plot2D {
-  constructor(el) { this.el = el; this.svg = null; }
-  reset() { this.el.innerHTML = ''; this.svg = null; }
+  constructor(el) {
+    this.el = el; this.svg = null;
+    // When the plot's box really changes size, resize in place and keep the visitor's pan and zoom: what
+    // was drawn stays where it was on screen (anchored at the top left). On phones the box is sized in vh,
+    // which does not change when the address bar shows or hides while scrolling, so scrolling never
+    // reaches here.
+    new ResizeObserver(() => this.resize()).observe(el);
+  }
+  resize() {
+    if (!this.svg) return;
+    const W = this.el.clientWidth, H = this.el.clientHeight;
+    if (!W || !H || (W === this.W && H === this.H)) return;
+    this.W = W; this.H = H;
+    this.svg.attr('viewBox', `0 0 ${W} ${H}`);
+    this.svg.select('#grid-mask rect').attr('width', W).attr('height', H);
+    if (this.bx) this.draw(false);
+  }
+  reset() { this.el.innerHTML = ''; this.svg = null; this.zt = d3.zoomIdentity; this.bx = null; }
   build() {
     const el = this.el;
     this.W = el.clientWidth || 600;
     this.H = el.clientHeight || 450;
     const svg = d3.select(el).append('svg').attr('viewBox', `0 0 ${this.W} ${this.H}`);
+    // The background grid (2-D): the 3-D view's floor seen flat. Cells of 1/8, fading out with distance
+    // from the origin (gone by 6 units) through a radial mask.
+    const defs = svg.append('defs');
+    this.fade = defs.append('radialGradient').attr('id', 'grid-fade').attr('gradientUnits', 'userSpaceOnUse');
+    this.fade.append('stop').attr('offset', 0).attr('stop-color', '#fff').attr('stop-opacity', 1);
+    this.fade.append('stop').attr('offset', 1).attr('stop-color', '#fff').attr('stop-opacity', 0);
+    defs.append('mask').attr('id', 'grid-mask').append('rect').attr('width', this.W).attr('height', this.H).attr('fill', 'url(#grid-fade)');
+    this.gGrid = svg.append('g').attr('mask', 'url(#grid-mask)');
     this.gOrigin = svg.append('g');
     this.gOrigin.append('path').attr('stroke', css('--muted')).attr('stroke-width', 1);
     this.gGhost = svg.append('g');   // expert: unit positions
@@ -534,6 +570,15 @@ class Plot2D {
     this.gDot = svg.append('g');
     this.svg = svg;
     this.jit = S.logp.map((_, i) => ((i * 0.6180339887) % 1) - 0.5);
+    // Pan and zoom, with the same gestures as the 3-D view: the wheel or a pinch zooms; Shift-drag,
+    // right-drag or two fingers move; double-click resets. (A plain drag rotates in 3-D; here it does nothing.)
+    this.zt = d3.zoomIdentity;
+    this.zoom = d3.zoom().scaleExtent([0.2, 50])
+      .filter((e) => e.type === 'wheel' || (e.type === 'mousedown' && (e.shiftKey || e.button === 2)) || (e.type === 'touchstart' && e.touches.length >= 2))
+      .on('zoom', (e) => { this.zt = e.transform; if (this.bx) this.draw(false); });
+    svg.call(this.zoom).on('dblclick.zoom', null)
+      .on('dblclick', () => svg.call(this.zoom.transform, d3.zoomIdentity))
+      .on('contextmenu', (e) => e.preventDefault());
     const nearest = (ev, r) => {
       const [px, py] = d3.pointer(ev);
       let best = -1, bd = r * r;
@@ -564,47 +609,70 @@ class Plot2D {
       x0 = cx - w / s / 2; x1 = cx + w / s / 2;
       y0 = cy - h / s / 2; y1 = cy + h / s / 2;
     }
-    this.x = d3.scaleLinear().domain([x0, x1]).range([r.L, r.R]);
-    this.y = d3.scaleLinear().domain([y0, y1]).range([r.B, r.T]);
+    this.bx = d3.scaleLinear().domain([x0, x1]).range([r.L, r.R]);
+    this.by = d3.scaleLinear().domain([y0, y1]).range([r.B, r.T]);
   }
   update() {
     if (!this.svg) this.build();
     const N = S.logp.length, dims = S.dims, H = this.H;
-    const scaled = $('#scale-toggle').checked;
     const sel = new Set(S.sel);
     const idx = d3.range(N);
-    const posD = idx.map((i) => (dims === 1 ? [this.dataXY(i, scaled ? S.c[i] : 1)[0], this.dataXY(i, 1)[1]] : this.dataXY(i, scaled ? S.c[i] : 1)));
+    const posD = idx.map((i) => (dims === 1 ? [this.dataXY(i, S.c[i])[0], this.dataXY(i, 1)[1]] : this.dataXY(i, S.c[i])));
     const vol = dims === 2 && S.sel.length === 2 && S.proj.fitted && !coneOpen();   // expert: no box while the cone is open
     const volD = vol ? parallelotope([0, 0], S.sel.map((i) => posD[i])) : { faces: [], corners: [] };
-    const ghostD = xopt()?.ghost && scaled ? idx.map((i) => this.dataXY(i, 1)) : [];   // expert: unit positions
-    this.fit([...posD, ...ghostD, ...volD.corners.map((c) => c.p)]);
+    const ghostD = xopt()?.ghost ? idx.map((i) => this.dataXY(i, 1)) : [];   // expert: unit positions
+    if (!this.bx) this.fit([...posD, ...ghostD, ...volD.corners.map((c) => c.p)]);   // framed once, when first drawn
+    Object.assign(this, { posD, volD, ghostD, sel });
+    this.draw(true);
+  }
+  // Draw with the current pan and zoom: animated after a data change, at once while panning or zooming.
+  draw(animate) {
+    const { posD, volD, ghostD, sel } = this, dims = S.dims, H = this.H, N = posD.length, idx = d3.range(N);
+    this.x = this.zt.rescaleX(this.bx); this.y = this.zt.rescaleY(this.by);
     const px = (q) => [this.x(q[0]), this.y(q[1])];
     this.pos = posD.map(px);
     const ox = this.x(0), oy = this.y(0);
-    const t = this.svg.transition().duration(450).ease(d3.easeCubicOut);
-    this.gOrigin.select('path').attr('stroke-dasharray', dims === 1 ? '3 3' : null).transition(t)
+    this.drawGrid(dims === 2, ox, oy);
+    const t = animate ? this.svg.transition().duration(450).ease(d3.easeCubicOut) : null;
+    const go = (selection) => (t ? selection.transition(t) : selection);
+    go(this.gOrigin.select('path').attr('stroke-dasharray', dims === 1 ? '3 3' : null))
       .attr('d', dims === 1 ? `M${ox},16V${H - 16}` : `M${ox - 6},${oy}H${ox + 6}M${ox},${oy - 6}V${oy + 6}`);
     const y0 = (i) => (dims === 1 ? this.pos[i][1] : oy);
     this.gArrow.selectAll('line').data(S.sel.length <= 3 ? S.sel : [], (i) => i).join(
       (enter) => enter.append('line').attr('x1', ox).attr('y1', y0).attr('x2', ox).attr('y2', y0),
-    ).attr('stroke', css('--accent')).attr('stroke-width', 2)
-      .transition(t).attr('x1', ox).attr('y1', y0)
+    ).attr('stroke', css('--accent')).attr('stroke-width', 2);
+    go(this.gArrow.selectAll('line')).attr('x1', ox).attr('y1', y0)
       .attr('x2', (i) => this.pos[i][0]).attr('y2', (i) => this.pos[i][1]);
     const face = (f) => 'M' + f.map((q) => px(q).join(',')).join('L') + 'Z';
-    this.gPara.selectAll('path').data(volD.faces).join('path')
+    go(this.gPara.selectAll('path').data(volD.faces).join('path')
       .attr('fill', css('--text')).attr('fill-opacity', 0.04)
-      .attr('stroke', css('--text-2')).attr('stroke-opacity', 0.7).attr('stroke-width', 1).attr('stroke-linejoin', 'round')
-      .transition(t).attr('d', face);
+      .attr('stroke', css('--text-2')).attr('stroke-opacity', 0.7).attr('stroke-width', 1).attr('stroke-linejoin', 'round'))
+      .attr('d', face);
     const gp = ghostD.map(px), gi = idx.filter((i) => ghostD.length && Math.hypot(gp[i][0] - this.pos[i][0], gp[i][1] - this.pos[i][1]) > 2);   // expert: only where it differs from the point
-    this.gGhost.selectAll('circle').data(gi, (i) => i).join('circle').attr('r', 1.6).attr('fill', css('--ghost')).attr('opacity', 0.8)
-      .transition(t).attr('cx', (i) => gp[i][0]).attr('cy', (i) => gp[i][1]);
+    go(this.gGhost.selectAll('circle').data(gi, (i) => i).join('circle').attr('r', 1.6).attr('fill', css('--ghost')).attr('opacity', 0.8))
+      .attr('cx', (i) => gp[i][0]).attr('cy', (i) => gp[i][1]);
     const xc = pointColors();   // expert: group colors, selected points larger with an outline
-    this.gDot.selectAll('circle').data(idx).join('circle')
+    go(this.gDot.selectAll('circle').data(idx).join('circle')
       .attr('fill', (i) => (xc ? (sel.has(i) ? xc.selColor(i) : xc.color(i)) : sel.has(i) ? css('--accent') : css('--ink')))
       .attr('stroke', (i) => (xc && sel.has(i) ? css('--text') : css('--surface'))).attr('stroke-width', (i) => (xc && sel.has(i) ? 1.4 : 0.75))
       .attr('r', (i) => (xc && sel.has(i) ? 3.2 : 1.6) * (S.rs ? S.rs[i] : 1))   // expert: S.rs, point size shows quality
-      .sort((a, b) => sel.has(a) - sel.has(b))
-      .transition(t).attr('cx', (i) => this.pos[i][0]).attr('cy', (i) => this.pos[i][1]);
+      .sort((a, b) => sel.has(a) - sel.has(b)))
+      .attr('cx', (i) => this.pos[i][0]).attr('cy', (i) => this.pos[i][1]);
+    if (!animate) renderLabels(false);   // at once while panning or zooming, never trailing
+  }
+  drawGrid(on, ox, oy) {
+    if (!on) { this.gGrid.selectAll('line').remove(); return; }
+    const R = 6, unit = Math.abs(this.x(1) - this.x(0));   // pixels per unit length
+    this.fade.attr('cx', ox).attr('cy', oy).attr('r', R * unit);
+    let step = 1 / 8;
+    while (step * unit < 6) step *= 2;   // never denser than one line per 6 px
+    const lines = [], xa = Math.max(-R, this.x.invert(0)), xb = Math.min(R, this.x.invert(this.W));
+    const ya = Math.max(-R, this.y.invert(this.H)), yb = Math.min(R, this.y.invert(0));
+    for (let v = Math.ceil(xa / step) * step; v <= xb; v += step) lines.push([this.x(v), this.y(-R), this.x(v), this.y(R)]);
+    for (let v = Math.ceil(ya / step) * step; v <= yb; v += step) lines.push([this.x(-R), this.y(v), this.x(R), this.y(v)]);
+    this.gGrid.selectAll('line').data(lines).join('line')
+      .attr('x1', (d) => d[0]).attr('y1', (d) => d[1]).attr('x2', (d) => d[2]).attr('y2', (d) => d[3])
+      .attr('stroke', css('--text-2')).attr('stroke-opacity', 0.13).attr('stroke-width', 1);   // as soft as the 3-D floor
   }
   highlight(i, i2 = -1) {   // expert: i2, a second point (the pair under the cursor in a similarity matrix)
     if (!this.svg) return;
@@ -633,10 +701,12 @@ const plot = {
           onHover: (i, x, y) => { showTip(i, x, y); S.hover = i < 0 ? S.pinned : i; this.highlightCards(S.hover); },
           onTap: (i) => inspect(i),
           safeRect: openArea,
+          // Labels follow the points in the same frame the scene is drawn, so they never trail it.
+          onFrame: () => { if ($('#labels').childElementCount) placeLabels(); },
         });
       }
       this.p3.update({
-        coords: S.proj.shown ?? S.proj.coords, c: S.c, sel: S.sel, scaled: $('#scale-toggle').checked, fitted: S.proj.fitted,
+        coords: S.proj.shown ?? S.proj.coords, c: S.c, sel: S.sel, fitted: S.proj.fitted,
         rs: S.rs, ghost: !!xopt()?.ghost, volume: !coneOpen(), ghostColor: css('--ghost'),   // expert:
         ...colorHooks(), accent: css('--accent'), text: css('--text-2'), muted: css('--muted'), bg: css('--surface'),
       });
@@ -656,7 +726,7 @@ const plot = {
 // ---------------------------------------------------------------- labels
 const MAX_LABELS = 6;
 function labelText(s) { const w = s.text.replace(/\s+/g, ' ').trim().split(' '); return w.length > 5 ? w.slice(0, 5).join(' ') + '…' : w.join(' '); }
-function renderLabels() {
+function renderLabels(animate = true) {
   const layer = $('#labels');
   const show = $('#label-toggle').checked && S.sel.length && S.sel.length <= MAX_LABELS;
   if (!show) { layer.innerHTML = ''; return; }
@@ -673,7 +743,7 @@ function renderLabels() {
     el.onmouseleave = () => plot.highlight(-1);
     layer.appendChild(el);
   }
-  layer.classList.toggle('anim', S.dims !== 3);
+  layer.classList.toggle('anim', animate && S.dims !== 3);
   placeLabels();
 }
 function placeLabels() {
@@ -708,10 +778,6 @@ function openArea() {
   const mat = panelBottom();   // expert: the similarity-matrices panel, when open, takes the bottom of the open area
   return { L: left + 20 - p.left, T: 20 - p.top, R: $('.rail').getBoundingClientRect().left - 20 - p.left, B: Math.min($('#details').getBoundingClientRect().top, mat ?? Infinity) - 20 - p.top };
 }
-(function follow3D() {
-  if (S.dims === 3 && $('#labels').childElementCount) placeLabels();
-  requestAnimationFrame(follow3D);
-})();
 
 // ---------------------------------------------------------------- inspector
 function inspect(i) {
@@ -862,6 +928,16 @@ async function runLive({ k = drawK } = {}) {
       sticky: cfgKey(cfg),
     });
     pendingSignIn = { ...cfg, k };
+    return;
+  }
+  if (B.unavailable?.[cfg.embedderId]) {
+    // An embedder this backend lists but cannot run yet: say why, and offer the two ways forward.
+    stageMsg('error', {
+      title: `${embedderOf(B).label} isn’t available on ${B.the} yet.`,
+      detail: escapeHtml(B.unavailable[cfg.embedderId]),
+      actions: '<button type="button" class="btn" data-act="use-small-emb">Use Qwen3-Embedding-0.6B on Modal</button>' + useServerBtn() + (S.pool ? ' <button type="button" class="btn" data-act="dismiss">Cancel</button>' : ''),
+      sticky: cfgKey(cfg),
+    });
     return;
   }
   const start = (k - 1) * cfg.N, end = k * cfg.N;
@@ -1055,7 +1131,7 @@ function wire() {
     onSettings();
   });
 
-  $('#T-slider').value = tToSlider(S.T);
+  S.T = sliderToT(+$('#T-slider').value);   // the HTML is the one source of the starting T
   let raf = 0;
   $('#T-slider').addEventListener('input', (e) => {
     S.T = sliderToT(+e.target.value);
@@ -1068,7 +1144,6 @@ function wire() {
   $('#K').onchange = () => setK($('#K').value);
   $('#K-minus').onclick = () => setK(S.K - 1);
   $('#K-plus').onclick = () => setK(S.K + 1);
-  $('#scale-toggle').onchange = () => { plot.update(); renderLabels(); renderVolHint(); };   // expert: the hint follows the toggle
   $('#label-toggle').onchange = () => renderLabels();
   // Pop-up panels close on an outside click or Escape.
   const pops = ['#viewmenu', '#specmenu', '#adv', '#exmenu'];
@@ -1082,9 +1157,11 @@ function wire() {
   $('#details-btn').onclick = () => setDrawer(!$('#details').classList.contains('open'));
   $('#details-toggle').onclick = () => { if (!wide.matches) setDrawer(!$('#details').classList.contains('open')); };
   $('#details-close').onclick = () => setDrawer(false);
+  $('#all-list').addEventListener('toggle', () => renderAllCards());
   $('#readout').addEventListener('click', (e) => {
     const v = e.target.closest('#fit-why');
-    if (!v || !wide.matches) return;
+    if (!v) return;
+    if (!wide.matches) { $('#fit-note').classList.toggle('show'); return; }   // phones: shown in the bar, under the readouts
     // Open just above the value that was clicked, kept on screen.
     const note = $('#fit-note'), bar = $('#details').getBoundingClientRect(), r = v.getBoundingClientRect();
     note.classList.toggle('show');
@@ -1118,6 +1195,7 @@ function wire() {
     if (act === 'retry') runLive({ k: drawK });
     if (act === 'dismiss') { stageMsg(null); if (!S.pool) emptyMsg(readConfig()); }
     if (act === 'settings') { stageMsg(S.pool ? null : 'empty', S.pool ? {} : { title: 'Pick another model, then press ↑.' }); $('#adv').open = true; $('#model').focus(); }
+    if (act === 'use-small-emb') { stageMsg(null); $('#embedder').value = 'qwen3-emb'; onSettings(); runLive({ k: 1 }); }
     if (act === 'use-server') { stageMsg(null); $('#model').value = 'server'; onSettings(); if (!S.pool) emptyMsg(readConfig()); }
     if (act === 'signin') {
       // The settings on screen now (a panel may have been up while they changed).
@@ -1149,8 +1227,11 @@ function wire() {
       },
     },
   });
-  let rt = 0;
-  window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (!S.pool) return; plot.reset(); render(); }, 200); });
+  // Both plots follow their box's size themselves and keep the visitor's view (no rebuild on window
+  // resize: on phones that event fires whenever scrolling shows or hides the address bar, and a rebuild
+  // replayed the opening turn and discarded the view). Only a switch between the phone and the wide
+  // layout, where the panels move entirely, frames the plot afresh.
+  wide.addEventListener('change', () => { if (!S.pool) return; plot.reset(); render(); });
 }
 
 wire();
@@ -1167,6 +1248,10 @@ finishSignIn().then((r) => {
   if (c) { setStatus(`Signed in to Hugging Face as ${r.auth.user}.`); runLive({ k: c.k ?? 1 }); }
   else stageMsg('empty', { title: `Signed in to Hugging Face as ${escapeHtml(r.auth.user)}.`, detail: 'Your settings could not be kept through the sign-in. Press ↑ to run.', actions: '<button type="button" class="btn" data-act="dismiss">OK</button>', sticky: '*' });
 }).catch((e) => setStatus('Sign-in failed: ' + (e.message || e)));
+// The page stays hidden (html.booting) until its first complete render, so no half-built state shows:
+// then it appears in one step. Never longer than 6 s, whatever happens.
+const reveal = () => document.documentElement.classList.remove('booting');
+setTimeout(reveal, 6000);
 loadData().then(configChanged).catch((e) => {
   stageMsg('error', { title: 'The examples could not be loaded.', detail: escapeHtml(e.message || '') + ' You can still type a prompt and press ↑.', actions: '<button type="button" class="btn" data-act="reload" onclick="location.reload()">Try again</button>', sticky: '*' });
-});
+}).then(() => Promise.race([document.fonts?.ready, new Promise((r) => setTimeout(r, 1500))])).then(() => requestAnimationFrame(reveal));
