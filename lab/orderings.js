@@ -1,7 +1,7 @@
 // Row orders for a kernel matrix M (n x n, row-major Float64Array, positive semidefinite).
 // See docs/matrix-views.md, section 2A. Every function returns { order, ... } with order a permutation
 // of 0..n-1 (order[r] = the item drawn in row r).
-import { eigSym } from '../js/dpp.js';
+import { eigSym, elemSym } from '../js/dpp.js';
 
 /**
  * Pivoted Cholesky to the end: at each step take the item with the largest leftover diagonal (its squared
@@ -124,26 +124,36 @@ export function averageLinkageOrder(M, n) {
 }
 
 /**
- * Theme blocks: eigenvectors of M (themes). Item i's squared length splits over themes as
- * M_ii = sum_a lambda_a u_a(i)^2; it joins the theme with the largest share. Blocks in eigenvalue order; inside
- * a block, sorted by the signed loading u_a(i), so the theme's two ends sit at the two ends of the block.
+ * Theme blocks, from the K-DPP's own spectral form (Kulesza & Taskar). With L = sum_a lambda_a u_a u_a^T, a K-DPP
+ * sample first chooses K eigenvectors ("themes"): theme a is chosen with probability
+ *   p_a = lambda_a e_{K-1}(lambda without a) / e_K(lambda),   sum_a p_a = K,
+ * and given the chosen set J, item i is in the sample with probability sum_{a in J} u_a(i)^2. So every inclusion
+ * probability splits exactly over the themes:
+ *   pi_i = sum_a p_a u_a(i)^2.
+ * Item i joins the theme with the largest part p_a u_a(i)^2 of its inclusion probability. Blocks in order of p_a;
+ * inside a block, sorted by the signed loading u_a(i) (the theme's two ends at the block's two ends).
+ * Returns { order, blocks: [start, end, a], p, part(i, a), pi, theme } (theme[i] = the block's eigenvector index).
  */
-export function themeOrder(M, n) {
-  const { values, vectors } = eigSym(M, n);
-  const idx = Array.from(values.keys()).sort((a, b) => values[b] - values[a]).filter((a) => values[a] > 1e-9 * Math.max(...values));
-  const members = new Map(idx.map((a) => [a, []]));
+export function themeOrder(L, n, K) {
+  const { values, vectors } = eigSym(L, n);
+  const vmax = Math.max(...values, 1e-300), lam = Array.from(values, (v) => Math.max(0, v / vmax));
+  const eK = elemSym(lam, K)[K][n];
+  const p = lam.map((la, a) => (la > 0 ? (la * elemSym(lam.filter((_, b) => b !== a), K - 1)[K - 1][n - 1]) / eK : 0));
+  const part = (i, a) => p[a] * vectors[a][i] ** 2;
+  const pi = new Float64Array(n), theme = new Int32Array(n);
   for (let i = 0; i < n; i++) {
-    let b = idx[0], bv = -1;
-    for (const a of idx) { const v = values[a] * vectors[a][i] ** 2; if (v > bv) { bv = v; b = a; } }
-    members.get(b).push(i);
+    let b = 0, bv = -1;
+    for (let a = 0; a < n; a++) { const v = part(i, a); pi[i] += v; if (v > bv) { bv = v; b = a; } }
+    theme[i] = b;
   }
+  const byP = [...Array(n).keys()].sort((a, b) => p[b] - p[a]);
   const order = [], blocks = [];
-  for (const a of idx) {
-    const m = members.get(a);
+  for (const a of byP) {
+    const m = [...Array(n).keys()].filter((i) => theme[i] === a);
     if (!m.length) continue;
     const start = order.length;
     order.push(...m.sort((x, y) => vectors[a][y] - vectors[a][x]));
     blocks.push([start, order.length, a]);
   }
-  return { order, blocks, values: idx.map((a) => values[a]) };
+  return { order, blocks, p, part, pi, theme };
 }

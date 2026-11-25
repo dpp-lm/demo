@@ -220,6 +220,60 @@ So B and C are the same computation. Hovering a row could show that row's repuls
   corresponding kernel ridge regression or GP.
 - It explains "K too large for this pool" from the spectrum, without a threshold (backlog item).
 
+### Themes, formalised: inclusion splits exactly over the eigenvectors
+
+This is the K-DPP's spectral form (Kulesza & Taskar 2011, 2012). Write the kernel L = Σ_a λ_a u_a u_aᵀ.
+
+1. **Sampling is a mixture.** A K-DPP is a mixture of projection DPPs: it first chooses K eigenvectors J, with
+   probability Π_{a∈J} λ_a / e_K(λ), then draws K items from the projection DPP with kernel Σ_{a∈J} u_a u_aᵀ.
+2. **Theme a is chosen with probability**
+
+   p_a = λ_a · e_{K−1}(λ without a) / e_K(λ),
+
+   and Σ_a p_a = K. Because a large λ_a only drives p_a toward 1, a dominant eigenvalue cannot swamp the
+   others. That is why the bouquet direction no longer takes over: the first theme rule used λ_a u_a(i)²,
+   which it did swamp.
+3. **Given J, item i is included with probability Σ_{a∈J} u_a(i)²,** the diagonal of the projection kernel.
+4. **Therefore every inclusion probability splits exactly over the themes:**
+
+   π_i = Σ_a p_a · u_a(i)².
+
+   Checked numerically against the page's inclusion probabilities, across presets, T, Most likely and Sample
+   weights, and K = 2 and 5: equal to 2.5e-13, with Σ p_a = K to 1e-6.
+
+**The block rule.** Completion i joins the theme carrying the largest part, p_a u_a(i)², of its inclusion
+probability. So a block is "the completions that get most of their chance of being sampled through this
+theme".
+- This uses only L's eigendecomposition, which the sampler already uses.
+- p_a is the probability that a Sample covers the theme.
+- The hover shows π_i and the share carried by its theme.
+
+**What is rigorous and what is not:**
+- **Rigorous:** the decomposition π_i = Σ_a p_a u_a(i)², and p_a as the probability that theme a is chosen.
+- **An attribution, not an event:** "i is included via theme a". Within a chosen J, the projection DPP mixes the
+  chosen eigenvectors, so an individual draw does not single out one theme for an item. p_a u_a(i)² is theme
+  a's contribution to π_i, not the probability of an event "i is drawn for a".
+- **Why the blocks look good, and when they would be exact:**
+  - If L is block-diagonal, its eigenvectors can be chosen supported on single blocks, so themes = blocks
+    exactly.
+  - With some overlap between blocks, matrix perturbation theory (Davis–Kahan) says the eigenvectors stay near
+    the block ones when the eigenvalue gaps are large compared with the overlap.
+  - This is the reasoning behind spectral clustering (Ng, Jordan & Weiss 2001; von Luxburg 2007), although
+    that literature mostly uses normalised affinities or Laplacians rather than the raw kernel.
+- **Open:** the order inside a block. Sorting by the signed loading u_a(i) puts the theme's two ends at the
+  block's ends, a heuristic (spectral seriation along one eigenvector). Its guarantees (Atkins, Boman &
+  Hendrickson 1998) are for the Laplacian's Fiedler vector, not for raw kernel eigenvectors.
+
+**Status in the lab:** themes now use this rule on L. They give clean blocks on the joke preset; on the story
+preset the first theme (p ≈ 0.9) is a large, noisier block.
+
+**Tim:**
+- Principles first. If the eigenvectors can do what clustering does, use them: the algorithm already uses
+  them, so they have real explanatory power and rigorous interpretations.
+- Always use L, the matrix the algorithm uses. **Decided.** G is the special case of the Global target at
+  T = ∞. Average linkage cannot see L at all: the cosine of L is G, so quality cancels. That counts against it
+  on these principles.
+
 ### The dual view: push on it, don't drop it
 
 **Tim:** the dual view does not need to struggle, so we push on it.
@@ -288,7 +342,7 @@ Take the SVD Φ = U Σ Vᵀ. Then:
 
 ## 4. Open questions
 
-1. **G or L as the basis for each view.** G answers "what's in the pool" and is stable for a pool. L answers
+1. **G or L as the basis for each view.** Decided: L (Tim). The notes below are kept for the record. G answers "what's in the pool" and is stable for a pool. L answers
    "what this DPP, at this T, with this target and mode, cares about", and it moves.
    - The matrix (A): lean G, with quality in the margin (above).
    - Themes (D) and the dual: the axes from G, re-weighted by L. Sample's theme probabilities must use L.
@@ -322,5 +376,9 @@ Take the SVD Φ = U Σ Vᵀ. Then:
   2412.08820.
 - Y. Chen, E. N. Epperly, J. A. Tropp and R. J. Webber (2025). Randomly pivoted Cholesky: practical
   approximation of a kernel matrix with few entry evaluations. CPAM; arXiv 2207.06503.
+- A. Y. Ng, M. I. Jordan and Y. Weiss (2001). On spectral clustering: analysis and an algorithm.
+- U. von Luxburg (2007). A tutorial on spectral clustering.
+- J. E. Atkins, E. G. Boman and B. Hendrickson (1998). A spectral algorithm for seriation and the consecutive
+  ones problem.
 - L. Chen, G. Zhang and H. Zhou (2018). Fast greedy MAP inference for determinantal point process to
   improve recommendation diversity.

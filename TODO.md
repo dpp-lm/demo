@@ -42,23 +42,40 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
 - One-line notice near the prompt: "Prompts and completions are saved and may be used for research."
 - Open question: should ↑ on a cached setting add fresh draws, or show the cached ones?
 
+## From Manuel's update (25 Nov): decide what to take
+- His server, beyond contract v1:
+  - a queue wait over 600 s returns 503 `busy`, and a restarting engine returns 503 `starting`, so BACKEND.md's
+    error table should gain both;
+  - `emb` is sent only with `"emb": true`;
+  - a run log (nothing about the visitor; `logsRuns` in /status);
+  - a private usage store (no prompt text or addresses; our visitors are counted per day by a salted hash
+    that is never stored);
+  - an opt-in shared draw cache: send an integer `offset` and `/sample` returns stream positions
+    [offset, offset + n), sampling only the shortfall (server/API.md, "Draw cache").
+- **Urgent:** his server now logs runs, including runs from our page, but our page does not show the
+  one-line notice ("Prompts and completions are saved and may be used for research."). His page does.
+- Our page does not send `offset` yet. Decide whether "Draw new ones" should read the stream (this answers the
+  run-log item's open question).
+- His page features, not taken (Tim is not sure he wants them yet):
+  - "Sample again" as a refresh icon on the Sample button;
+  - "Color by inclusion probability" in the View menu.
+
 ## Waiting on Manuel
-- The exact own-states PR (see "The LM's own states" below).
-- The server to follow docs/BACKEND.md (scripts/conformance.mjs): refuse n > 200 with 400
-  bad_request instead of capping; send G instead of emb; version and limits in /status; /embed.
+- (Done, 25 Nov: Manuel merged the own-states PR and moved his server to contract v1. Checked here:
+  /status says version 1 with limits 200 / 256, and n = 201 and max_new_tokens = 300 get 400 bad_request.)
 
 ## The LM's own states as an embedding
 - Decided: exact own states, no random projection. The sampler sums each sequence's raw logits; the
   server recovers the full 5120-d mean hidden state ((AᵀA)⁻¹Aᵀ l̄, A = [W | 1]), centres it, and sends G.
   Pooling is the mean over generated steps, including the step that samples EOS (from his code).
 - PR opened on Manuel's fork (branch own-exact on timvieira/dpp-lm-demo, one commit on his main
-  e769c13). Draft, note and numpy check in docs/manuel/ on the scratch branch (own-exact.patch, own-exact-PR.md,
+  e769c13). Draft, note and numpy check in docs/manuel/ (own-exact.patch, own-exact-PR.md,
   own_exact_check.py). It is not tested on a GPU.
-- Waiting on Manuel: the GPU checks in the PR (does the hook see raw logits, with no −inf masking?
-  recovery against HF hidden states), merge, then build_own_M.py and a precompute run (mu_full.npy and
-  the G files).
-- Then: refresh data/cache/*.own.G.bin from his new G files (today's come from the 256-d projection),
-  and check the own states against Qwen3-Embedding (the picks on the joke and sorting presets).
+- Done on Manuel's side (25 Nov): merged and live. M built, cond(A) = 300; the hook sees raw logits (no
+  −inf, not divided by T′); recovery error 1.7e-4 per step (vLLM's logits are float16), max |ΔG| 7.7e-6
+  against vLLM's own final-norm states. His fix: /embed_own refuses more than 400 texts.
+- Next: take his new data/cache/*.own.G.bin (18 files, exact; max |ΔG| 0.165 against our 256-d ones), and
+  check the own states against Qwen3-Embedding (the picks on the joke and sorting presets).
 - Modal and the Space: no own states for now (his P files are the projection we are dropping).
 
 ## Later: Qwen3-Embedding-4B on Modal
