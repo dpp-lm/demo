@@ -75,8 +75,9 @@ Full notes: docs/matrix-views.md (the views, the kernel / eigendecomposition / P
 - Done on Manuel's side (25 Nov): merged and live. M built, cond(A) = 300; the hook sees raw logits (no
   −inf, not divided by T′); recovery error 1.7e-4 per step (vLLM's logits are float16), max |ΔG| 7.7e-6
   against vLLM's own final-norm states. His fix: /embed_own refuses more than 400 texts.
-- Next: take his new data/cache/*.own.G.bin (18 files, exact; max |ΔG| 0.165 against our 256-d ones), and
-  check the own states against Qwen3-Embedding (the picks on the joke and sorting presets).
+- Done (25 Nov): data/cache/*.own.G.bin replaced by his exact files (18; pools identical to ours; symmetric,
+  diagonal 1; max |ΔG| 0.165 against the 256-d ones; correlation with Qwen3-Embedding-4B up on 15 of 18).
+- Next: check the own states against Qwen3-Embedding (the picks on the joke and sorting presets).
 - Modal and the Space: no own states for now (his P files are the projection we are dropping).
 
 ## Later: Qwen3-Embedding-4B on Modal
