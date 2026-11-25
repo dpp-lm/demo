@@ -384,6 +384,13 @@ function render() {
   const N = S.pool.samples.length;
   $('#stage-note').textContent = `${N} completions${distinct < N ? ` (${distinct} distinct)` : ''} · ${S.dims === 3 ? 'drag to rotate · ' : ''}${matchMedia('(pointer: coarse)').matches ? 'two fingers to move' : 'Shift-drag to move'} · tap a point to read it`;
   $('#subset-meta').textContent = `K = ${S.sel.length} · ${S.mode === 'map' ? 'most likely (greedy)' : 'sampled'} at T = ${fmtT(S.T)} · target ${TARGETS[S.target].short}`;
+  if (S.mode === 'sample') {   // expert: say that pressing Sample again draws another subset
+    const again = document.createElement('button');
+    again.type = 'button'; again.className = 'link'; again.textContent = 'Sample again';
+    again.title = 'Draw another subset from the same completions (the Sample button does the same)';
+    again.onclick = () => setMode('sample');
+    $('#subset-meta').append(' · ', again);
+  }
   $('#T-out').textContent = fmtT(S.T);
   plot.update();
   renderSpectrum();
@@ -1077,6 +1084,7 @@ function setMode(m, { recompute: go = true } = {}) {
   if (S.T !== T0) { $('#T-slider').value = tToSlider(S.T); $('#T-out').textContent = fmtT(S.T); }
   S.mode = m;
   document.querySelectorAll('.step-2 .pick-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
+  document.querySelectorAll('.step-2 .pick-btn[data-mode="sample"]').forEach((b) => (b.title = m === 'sample' ? 'Press again for another draw' : ''));   // expert:
   if (go) recompute({ newDraw: true });
 }
 function setK(v) {
