@@ -1,7 +1,7 @@
 // The shared draw cache of the GPU server (pure parts; main.js calls them from sampleDraws).
 // Active only for our GPU server (id server or server:<key>) and only while its GET /status says `drawCache: true`.
-// Then a request for draws carries `offset`, the position in the buffer it asks for (draw k is completions (k−1)N+1 … kN,
-// so a buffer position is a position in the server's stream), and the answer is those stream positions. Without the field
+// Then a request for draws carries `offset`, the number of draws the page's buffer already took from the server's stream
+// (precomputed draws at the start of a buffer are not in the stream), and the answer is those stream positions. Without the field
 // the server samples with the request's seed, as before, and never stores the draws.
 
 /** True when the status body offers the draw cache and the backend is the GPU server. */

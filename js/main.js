@@ -973,7 +973,10 @@ async function runLive({ k = drawK } = {}) {
     // Sample what is missing, at most LIMITS.maxN per request, appended in order.
     for (let left = need; left > 0;) {
       const n = Math.min(left, LIMITS.maxN);
-      const r = await sampleDraws(B, cfg, n, opts, buf.samples.length);   // expert: the position in the buffer is the position in the server's stream
+      // expert: the server's stream position is the number of draws this buffer took from the stream
+      // (a precomputed buffer starts with draws that are not in the stream, so it is not the buffer length).
+      const r = await sampleDraws(B, cfg, n, opts, buf.streamN ?? 0);
+      if (B.drawCache) buf.streamN = (buf.streamN ?? 0) + n;
       buf.batches.push({ start: buf.samples.length, n, G: { [cfg.embedder]: r.G } });
       buf.samples.push(...r.samples);
       if (r.timing?.generate_s != null) { timing.generate_s += r.timing.generate_s; timing.embed_s += r.timing.embed_s ?? 0; timing.reported = true; }
